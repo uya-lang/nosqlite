@@ -1,0 +1,117 @@
+// test_mem_arena.uya - std.mem.arena：IAllocator 与 bump 语义
+
+use std.testing;
+
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.mem.arena.arena_reset;
+
+test "arena_ialocator_alloc_dealloc_noop" {
+    var buf: [byte: 256] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &buf[0], 256);
+    const ar: &Arena = &a;
+    const p: &byte = try ar.alloc(24 as usize);
+    const u: &u8 = p as &u8;
+    u[0] = 11 as u8;
+    try assert_eq_i32(u[0] as i32, 11);
+    ar.dealloc(p);
+}
+
+test "arena_ialocator_alloc_zero_errors" {
+    var buf: [byte: 64] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &buf[0], 64);
+    const ar: &Arena = &a;
+    var saw: bool = false;
+    _ = ar.alloc(0 as usize) catch {
+        saw = true;
+        null as &byte;
+    };
+    try assert_true(saw);
+}
+
+test "arena_ialocator_realloc_null_like_alloc" {
+    var buf: [byte: 128] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &buf[0], 128);
+    const ar: &Arena = &a;
+    const p: &byte = try ar.realloc(null, 8 as usize);
+    const u: &u8 = p as &u8;
+    u[0] = 3 as u8;
+    try assert_eq_i32(u[0] as i32, 3);
+    ar.dealloc(p);
+}
+
+test "arena_ialocator_realloc_last_grow_inplace" {
+    var buf: [byte: 256] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &buf[0], 256);
+    const ar: &Arena = &a;
+    const p: &byte = try ar.alloc(8 as usize);
+    const u: &u8 = p as &u8;
+    u[0] = 7 as u8;
+    const q: &byte = try ar.realloc(p, 40 as usize);
+    const v: &u8 = q as &u8;
+    try assert_eq_i32(v[0] as i32, 7);
+    ar.dealloc(q);
+}
+
+test "arena_ialocator_realloc_last_shrink_inplace" {
+    var buf: [byte: 256] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &buf[0], 256);
+    const ar: &Arena = &a;
+    const p: &byte = try ar.alloc(32 as usize);
+    const u: &u8 = p as &u8;
+    u[0] = 99 as u8;
+    const q: &byte = try ar.realloc(p, 4 as usize);
+    const v: &u8 = q as &u8;
+    try assert_eq_i32(v[0] as i32, 99);
+    ar.dealloc(q);
+}
+
+test "arena_ialocator_realloc_non_last_invalid" {
+    var buf: [byte: 256] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &buf[0], 256);
+    const ar: &Arena = &a;
+    const p1: &byte = try ar.alloc(8 as usize);
+    _ = try ar.alloc(8 as usize);
+    var saw: bool = false;
+    _ = ar.realloc(p1, 16 as usize) catch {
+        saw = true;
+        null as &byte;
+    };
+    try assert_true(saw);
+    ar.dealloc(p1);
+}
+
+test "arena_ialocator_realloc_zero_errors" {
+    var buf: [byte: 64] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &buf[0], 64);
+    const ar: &Arena = &a;
+    const p: &byte = try ar.alloc(4 as usize);
+    var saw: bool = false;
+    _ = ar.realloc(p, 0 as usize) catch {
+        saw = true;
+        null as &byte;
+    };
+    try assert_true(saw);
+}
+
+test "arena_reset_clears_last_for_realloc" {
+    var buf: [byte: 128] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &buf[0], 128);
+    const ar: &Arena = &a;
+    const p: &byte = try ar.alloc(8 as usize);
+    arena_reset(&a);
+    var saw: bool = false;
+    _ = ar.realloc(p, 16 as usize) catch {
+        saw = true;
+        null as &byte;
+    };
+    try assert_true(saw);
+}

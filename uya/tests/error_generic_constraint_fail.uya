@@ -1,0 +1,27 @@
+// 测试约束检查失败：结构体类型不满足 Ord 约束
+// 预期编译失败
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+// 泛型函数：带 Ord 约束
+fn max<T: Ord>(a: T, b: T) T {
+    if a > b {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+fn main() i32 {
+    const p1: Point = Point{ x: 1, y: 2 };
+    const p2: Point = Point{ x: 3, y: 4 };
+    
+    // 这应该编译失败：Point 没有实现 Ord 接口
+    const result: Point = max<Point>(p1, p2);
+    
+    return 0;
+}
+

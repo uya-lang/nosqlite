@@ -1,0 +1,37 @@
+// std.protobuf Phase 1：encode_demo_user_to roundtrip
+use std.runtime.entry;
+use std.protobuf.demo.DemoUser;
+use std.protobuf.demo.PbStrView;
+use std.protobuf.decode.decode_demo_user;
+use std.protobuf.encode.encode_demo_user_to;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 256] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 256);
+
+    var nm: [byte: 4] = [ 120, 121, 122, 0 ];
+    const du: DemoUser = DemoUser{
+        id: -7 as i64,
+        name: PbStrView{ ptr: &nm[0], len: 3 },
+        active: false,
+    };
+    var out: [byte: 64] = [];
+    const n: usize = encode_demo_user_to(&du, &out[0], 64) catch { return 1; };
+    if n == 0 {
+        return 2;
+    }
+    const u2: DemoUser = decode_demo_user(&a, &out[0], n) catch { return 3; };
+    if u2.id != -7 as i64 {
+        return 4;
+    }
+    if u2.name.len != 3 || u2.name.ptr[0] != 120 || u2.name.ptr[1] != 121 || u2.name.ptr[2] != 122 {
+        return 5;
+    }
+    if u2.active {
+        return 6;
+    }
+    return 0;
+}

@@ -1,0 +1,28 @@
+// 测试 extern union：声明、作为类型、创建、传参/返回值
+use std.runtime.entry;
+// 返回 0 表示通过
+
+extern union CValue {
+    i: i32,
+    f: f64,
+}
+
+extern fn take_c_value(v: union CValue) void;
+extern fn make_c_value_i(x: i32) union CValue;
+extern fn make_c_value_f(x: f64) union CValue;
+
+export fn main() i32 {
+    const vi: union CValue = CValue.i(42);
+    take_c_value(vi);
+
+    const vf: union CValue = CValue.f(3.14);
+    take_c_value(vf);
+
+    const from_c_i: union CValue = make_c_value_i(100);
+    take_c_value(from_c_i);
+
+    const from_c_f: union CValue = make_c_value_f(2.5);
+    take_c_value(from_c_f);
+
+    return 0;
+}

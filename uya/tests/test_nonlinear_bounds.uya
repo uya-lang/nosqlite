@@ -1,0 +1,66 @@
+// test_nonlinear_bounds.uya - 非线性表达式边界检查测试
+use std.runtime.entry;
+//
+// 功能：验证非线性表达式（乘法、移位等）的边界检查
+//
+// 预期：编译成功，运行输出 OK
+
+export fn main() i32 {
+    test_mul_const();
+    test_shift_left();
+    test_mul_div();
+    print_ok();
+    return 0;
+}
+
+// 测试：乘以常量
+fn test_mul_const() void {
+    var arr: [i32: 20] = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    var i: i32 = 3;
+    
+    // 已知 i == 3，arr[i * 2] 应该访问 arr[6]
+    // 约束系统需要理解：i * 2 == 6 < 20
+    if i == 3 {
+        arr[i * 2] = 42;  // i * 2 == 6 < 20, 安全
+    }
+}
+
+// 测试：左移运算（等价于乘以 2^n）
+fn test_shift_left() void {
+    var arr: [i32: 100] = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    var i: i32 = 5;
+    
+    // 已知 i == 5，arr[i << 1] 应该访问 arr[10]
+    // 约束系统需要理解：i << 1 == 10 < 100
+    if i == 5 {
+        arr[i << 1] = 42;  // i << 1 == 10 < 100, 安全
+    }
+}
+
+// 测试：乘除组合
+fn test_mul_div() void {
+    var arr: [i32: 10] = [0,0,0,0,0,0,0,0,0,0];
+    var i: i32 = 15;
+    
+    // 已知 i == 15，arr[i / 2] 应该访问 arr[7]
+    // 约束系统需要理解：i / 2 == 7 < 10
+    if i == 15 {
+        arr[i / 2] = 42;  // i / 2 == 7 < 10, 安全
+    }
+}
+
+// 输出 OK
+fn print_ok() void {
+    const msg: [byte: 4] = [79, 75, 10, 0];  // "OK\n"
+    var i: i32 = 0;
+    while i < 3 {
+        write_byte(msg[i]);
+        i = i + 1;
+    }
+}
+
+// 写入单个字节到 stdout
+fn write_byte(b: byte) void {
+    const res: !i64 = @syscall(1, 1, &b as i64, 1);  // SYS_write, stdout, &b, 1
+    res catch { };
+}

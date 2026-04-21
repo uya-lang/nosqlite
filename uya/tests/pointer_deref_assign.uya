@@ -1,0 +1,59 @@
+// 指针解引用赋值测试程序
+use std.runtime.entry;
+// 测试指针解引用赋值功能：*p = value
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 指针类型函数参数和通过指针修改值
+fn set_value(p: &i32, value: i32) void {
+    *p = value;
+}
+
+// 指针类型函数参数和读取值
+fn get_value(p: &i32) i32 {
+    return *p;
+}
+
+fn test_pointer_deref_read() !void {
+    var x: i32 = 42;
+    var p: &i32 = &x;
+    
+    const value: i32 = *p;
+    try assert_eq_i32(value, 42);
+}
+
+fn test_pointer_func_modify() !void {
+    var x: i32 = 42;
+    var p: &i32 = &x;
+    
+    set_value(p, 100);
+    try assert_eq_i32(x, 100);
+}
+
+fn test_pointer_func_read() !void {
+    var x: i32 = 100;
+    var p: &i32 = &x;
+    
+    const read_value: i32 = get_value(p);
+    try assert_eq_i32(read_value, 100);
+}
+
+fn test_pointer_direct_assign() !void {
+    var x: i32 = 42;
+    var p: &i32 = &x;
+    
+    *p = 200;
+    try assert_eq_i32(x, 200);
+}
+
+export fn main() i32 {
+    test_suite_begin("Pointer Deref Assign Tests");
+    run_test("pointer deref read", test_pointer_deref_read);
+    run_test("pointer func modify", test_pointer_func_modify);
+    run_test("pointer func read", test_pointer_func_read);
+    run_test("pointer direct assign", test_pointer_direct_assign);
+    return test_suite_end();
+}

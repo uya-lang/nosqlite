@@ -1,0 +1,37 @@
+// 专门测试指针类型转换功能
+use std.runtime.entry;
+// 验证 &T as *T 的转换
+
+struct Data {
+    value: i32,
+}
+
+// 声明外部函数用于测试
+extern fn process_data(data: *Data) i32;
+extern fn print_int(n: i32) i32;
+
+export fn main() i32 {
+    // 创建结构体实例
+    var d: Data = Data{ value: 42 };
+    
+    // 获取普通指针
+    var normal_ptr: &Data = &d;
+    
+    // 测试 &T as *T 转换
+    var ffi_ptr: *Data = normal_ptr as *Data;
+    
+    // 调用外部函数，传入转换后的 FFI 指针
+    const result: i32 = process_data(ffi_ptr);
+    
+    // 测试直接转换（在函数调用中转换）
+    var another_d: Data = Data{ value: 100 };
+    const direct_result: i32 = process_data(&another_d as *Data);
+    
+    // 测试一些基本操作
+    const total: i32 = result + direct_result + print_int(200);
+
+    if total != 206 {
+        return 1;
+    }
+    return 0;  // 程序成功执行
+}

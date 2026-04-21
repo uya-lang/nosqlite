@@ -1,0 +1,9 @@
+// defer 块中不能使用 break 语句
+// 预期：编译失败
+fn main() i32 {
+    while true {
+        defer { break; }
+        break;
+    }
+    return 0;
+}

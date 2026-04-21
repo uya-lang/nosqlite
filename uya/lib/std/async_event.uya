@@ -1,0 +1,237 @@
+// lib/std/async_event.uya - 异步事件循环抽象与 Linux epoll 实现
+//
+// 模块路径：use std.async_event
+// 设计见 docs/std_async_design.md 阶段 3（std.async.event）。
+//
+// 版本：2.0 - 显式状态机 + generation 防止 fd 复用混淆
+
+use std.async;
+use libc.errno;
+use libc.syscall;
+
+error EventLoopSlotsFull;
+
+/// 事件关注类型：可读、可写、可读可写
+export union EventKind {
+    Readable: void,
+    Writable: void,
+    ReadWrite: void,
+}
+
+/// Slot 状态常量
+const SLOT_STATE_EMPTY: i32 = 0;        // 空闲槽位
+const SLOT_STATE_REGISTERED: i32 = 1;   // 已注册到 epoll，可接收事件
+
+/// 将 EventKind 转为 epoll 事件掩码（仅 Linux 实现使用）
+fn event_kind_to_epoll(k: EventKind) i32 {
+    match k {
+        .Readable(_) => { return EPOLLIN as i32; },
+        .Writable(_) => { return EPOLLOUT as i32; },
+        .ReadWrite(_) => { return (EPOLLIN | EPOLLOUT) as i32; },
+    };
+    return 0 as i32;
+}
+
+fn epoll_interest_or_default(fd: i32, interest: EventKind) EpollEvent {
+    return EpollEvent{
+        events: event_kind_to_epoll(interest) as u32,
+        _pad: 0,
+        data: fd as u64,
+    };
+}
+
+/// 事件循环统一接口：注册 fd、注销、轮询
+export interface EventLoop {
+    fn register(self: &Self, fd: i32, interest: EventKind, waker: &Waker) !i32;
+    fn deregister(self: &Self, fd: i32) !i32;
+    fn poll(self: &Self, timeout_ms: i32) !i32;
+}
+
+/// Linux epoll 事件循环实现（默认1024容量）
+/// 
+/// 线程安全：此实现非线程安全，所有操作应在单线程执行。
+/// fd 生命周期：register -> (mod) -> deregister，deregister 后 fd 保留在 epoll 中但事件掩码为 0。
+/// fd 复用：通过 generation 字段防止 fd 复用混淆。
+export struct LinuxEpoll : EventLoop {
+    epfd: i32,                          // epoll 实例文件描述符
+    slot_states: [i32: 1024] = [],      // SLOT_STATE_EMPTY / SLOT_STATE_REGISTERED
+    slot_fds: [i32: 1024] = [],         // 关联的文件描述符
+    slot_wakers: [usize: 1024] = [],    // Waker 指针（0 表示无）
+    slot_generations: [u32: 1024] = [], // 代际计数，防止 fd 复用混淆
+    next_generation: u32,               // 全局代际计数器
+
+    /// 查找指定 fd 的 slot（线性扫描，O(n)，但容量仅 1024）
+    fn find_slot(self: &Self, fd: i32) i32 {
+        var i: i32 = 0;
+        while i < 1024 {
+            if self.slot_states[i] == SLOT_STATE_REGISTERED && self.slot_fds[i] == fd {
+                return i;
+            }
+            i = i + 1;
+        }
+        return 0 - 1;
+    }
+
+    /// 分配空闲 slot
+    fn alloc_slot(self: &Self) i32 {
+        var i: i32 = 0;
+        while i < 1024 {
+            if self.slot_states[i] == SLOT_STATE_EMPTY {
+                return i;
+            }
+            i = i + 1;
+        }
+        return 0 - 1;
+    }
+
+    /// 初始化 slot 为注册状态
+    fn init_slot(self: &Self, slot_idx: i32, fd: i32, waker: &Waker) void {
+        const idx: usize = (slot_idx as! usize).value;
+        const gen: u32 = self.next_generation;
+        self.next_generation = self.next_generation + 1;
+        self.slot_states[idx] = SLOT_STATE_REGISTERED;
+        self.slot_fds[idx] = fd;
+        self.slot_wakers[idx] = (waker as &void) as usize;
+        self.slot_generations[idx] = gen;
+    }
+
+    /// 清空 slot
+    fn clear_slot(self: &Self, slot_idx: i32) void {
+        if slot_idx < 0 || slot_idx >= 1024 {
+            return;
+        }
+        const idx: usize = (slot_idx as! usize).value;
+        self.slot_states[idx] = SLOT_STATE_EMPTY;
+        self.slot_fds[idx] = 0;
+        self.slot_wakers[idx] = 0 as usize;
+        self.slot_generations[idx] = 0;
+    }
+
+    /// 注册 fd 到 epoll
+    /// 
+    /// 行为：
+    /// - 若 fd 已注册：修改关注事件（EPOLL_CTL_MOD）
+    /// - 若 fd 未注册：新增到 epoll（EPOLL_CTL_ADD）
+    /// - 容错：处理 EEXIST（已存在）、ENOENT（不存在）等边界情况
+    fn register(self: &Self, fd: i32, interest: EventKind, waker: &Waker) !i32 {
+        var ev: EpollEvent = epoll_interest_or_default(fd, interest);
+        var slot: i32 = self.find_slot(fd);
+        if slot >= 0 {
+            const mod_result: !i32 = sys_epoll_ctl(self.epfd, EPOLL_CTL_MOD, fd, &ev);
+            if mod_result.error_id != 0 {
+                const eid: i32 = mod_result.error_id as i32;
+                if eid == ENOENT || eid == EBADF {
+                    self.clear_slot(slot);
+                    slot = 0 - 1;
+                } else {
+                    return mod_result as! i32;
+                }
+            } else {
+                self.slot_wakers[slot] = (waker as &void) as usize;
+                return 0;
+            }
+        }
+
+        slot = self.alloc_slot();
+        if slot < 0 {
+            return error.EventLoopSlotsFull;
+        }
+        const add_result: !i32 = sys_epoll_ctl(self.epfd, EPOLL_CTL_ADD, fd, &ev);
+        if add_result.error_id != 0 {
+            const eid: i32 = add_result.error_id as i32;
+            if eid == EEXIST {
+                const mod_result: !i32 = sys_epoll_ctl(self.epfd, EPOLL_CTL_MOD, fd, &ev);
+                if mod_result.error_id != 0 {
+                    const mod_eid: i32 = mod_result.error_id as i32;
+                    if mod_eid == ENOENT || mod_eid == EBADF {
+                        const add_retry: !i32 = sys_epoll_ctl(self.epfd, EPOLL_CTL_ADD, fd, &ev);
+                        if add_retry.error_id != 0 {
+                            return add_retry as! i32;
+                        }
+                    } else {
+                        return mod_result as! i32;
+                    }
+                }
+                self.init_slot(slot, fd, waker);
+                return 0;
+            }
+            return add_result as! i32;
+        }
+        self.init_slot(slot, fd, waker);
+        return 0;
+    }
+
+    /// 从 epoll 注销 fd
+    ///
+    /// 行为：
+    /// - 使用 EPOLL_CTL_MOD 将事件掩码设为 0（fd 保留在 epoll 中）
+    /// - 清理内部 slot 状态
+    /// - 容错：ENOENT/EBADF 视为已注销，不报错
+    fn deregister(self: &Self, fd: i32) !i32 {
+        const del_result: !i32 = sys_epoll_ctl_del(self.epfd, fd);
+        if del_result.error_id != 0 {
+            const eid: i32 = del_result.error_id as i32;
+            if eid != ENOENT && eid != EBADF {
+                return del_result as! i32;
+            }
+        }
+        // 清理 slot
+        const slot: i32 = self.find_slot(fd);
+        if slot >= 0 {
+            self.clear_slot(slot);
+        }
+        return 0;
+    }
+
+    /// 轮询 epoll 事件并唤醒对应的 waker
+    fn poll(self: &Self, timeout_ms: i32) !i32 {
+        var events: [EpollEvent: 1024] = [];
+        const wait_result: !i32 = sys_epoll_wait(self.epfd, &events[0], 1024, timeout_ms);
+        const n: i32 = wait_result catch |err| {
+            return wait_result as! i32;
+        };
+        var i: i32 = 0;
+        while i >= 0 && i < n && i < 1024 {
+            const fd: i32 = events[i].data as i32;
+            const slot_idx: i32 = self.find_slot(fd);
+            if slot_idx >= 0 && self.slot_wakers[slot_idx] != 0 as usize {
+                const waker: &Waker = (self.slot_wakers[slot_idx] as &void) as &Waker;
+                waker.wake();
+            }
+            i = i + 1;
+        }
+        return n;
+    }
+}
+
+/// 创建 Linux epoll 实例（flags 传 0 或 EPOLL_CLOEXEC，默认容量 1024）
+export fn linux_epoll_create(flags: i32) !LinuxEpoll {
+    const fd: i32 = try sys_epoll_create1(flags);
+    return LinuxEpoll{
+        epfd: fd,
+        next_generation: 1,
+    };
+}
+
+// ============================================================================
+// 测试与调试辅助函数
+// ============================================================================
+
+/// 获取当前已注册的 fd 数量（用于调试/测试）
+export fn linux_epoll_registered_count(ep: &LinuxEpoll) i32 {
+    var count: i32 = 0;
+    var i: i32 = 0;
+    while i < 1024 {
+        if ep.slot_states[i] == SLOT_STATE_REGISTERED {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    return count;
+}
+
+/// 检查指定 fd 是否已注册（用于调试/测试）
+export fn linux_epoll_is_registered(ep: &LinuxEpoll, fd: i32) bool {
+    const slot: i32 = ep.find_slot(fd);
+    return slot >= 0;
+}

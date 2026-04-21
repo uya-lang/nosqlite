@@ -1,0 +1,6 @@
+extern fn test_extern_fn(ptr: *i32) i32;
+use std.runtime.entry;
+
+export fn main() i32 {
+    return 0;
+}

@@ -1,0 +1,18 @@
+// error_asm_too_many_outputs.uya - @asm 输出数量超限错误测试
+// 期望编译错误：@asm 指令最多 8 个输出
+
+fn main() i32 {
+    var a1: i32 = 0;
+    var a2: i32 = 0;
+    var a3: i32 = 0;
+    var a4: i32 = 0;
+    var a5: i32 = 0;
+    var a6: i32 = 0;
+    var a7: i32 = 0;
+    var a8: i32 = 0;
+    var a9: i32 = 0;
+    @asm {
+        "test" (-> a1, a2, a3, a4, a5, a6, a7, a8, a9);
+    }
+    return 0;
+}

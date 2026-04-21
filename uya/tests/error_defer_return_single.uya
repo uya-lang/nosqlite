@@ -1,0 +1,6 @@
+// defer 单句形式中不能使用 return
+// 预期：编译失败
+fn main() i32 {
+    defer return 0;
+    return 1;
+}

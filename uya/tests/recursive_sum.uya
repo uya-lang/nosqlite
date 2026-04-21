@@ -1,0 +1,41 @@
+// 递归函数测试 - 累加
+use std.runtime.entry;
+// 测试递归累加函数
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn sum_recursive(n: i32) i32 {
+    if n <= 0 {
+        return 0;
+    } else {
+        return n + sum_recursive(n - 1);
+    }
+}
+
+fn test_sum_zero() !void {
+    try assert_eq_i32(sum_recursive(0), 0);
+}
+
+fn test_sum_one() !void {
+    try assert_eq_i32(sum_recursive(1), 1);
+}
+
+fn test_sum_ten() !void {
+    try assert_eq_i32(sum_recursive(10), 55);
+}
+
+fn test_sum_twenty() !void {
+    try assert_eq_i32(sum_recursive(20), 210);
+}
+
+export fn main() i32 {
+    test_suite_begin("Recursive Sum Tests");
+    run_test("sum zero", test_sum_zero);
+    run_test("sum one", test_sum_one);
+    run_test("sum ten", test_sum_ten);
+    run_test("sum twenty", test_sum_twenty);
+    return test_suite_end();
+}

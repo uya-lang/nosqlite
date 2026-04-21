@@ -1,0 +1,85 @@
+// test_mem_heap.uya - std.mem.heap（HeapAllocator / mmap IAllocator）
+
+use std.testing;
+
+use std.mem.heap.HeapAllocator;
+use std.mem.heap.get_heap_allocator;
+
+test "heap_get_allocator_non_null" {
+    const a: &HeapAllocator = get_heap_allocator();
+    try assert_true(a != null);
+}
+
+test "heap_alloc_write_dealloc" {
+    var ha: HeapAllocator = HeapAllocator{};
+    const a: &HeapAllocator = &ha;
+    const p: &byte = try a.alloc(32 as usize);
+    const b: &u8 = p as &u8;
+    b[0] = 0xAB as u8;
+    b[1] = 0xCD as u8;
+    try assert_eq_i32(b[0] as i32, 0xAB as i32);
+    try assert_eq_i32(b[1] as i32, 0xCD as i32);
+    a.dealloc(p);
+}
+
+test "heap_alloc_zero_is_error" {
+    var ha: HeapAllocator = HeapAllocator{};
+    const a: &HeapAllocator = &ha;
+    var saw: bool = false;
+    _ = a.alloc(0 as usize) catch {
+        saw = true;
+        null as &byte;
+    };
+    try assert_true(saw);
+}
+
+test "heap_dealloc_null_safe" {
+    var ha: HeapAllocator = HeapAllocator{};
+    const a: &HeapAllocator = &ha;
+    a.dealloc(null);
+}
+
+test "heap_realloc_grows_and_preserves" {
+    var ha: HeapAllocator = HeapAllocator{};
+    const a: &HeapAllocator = &ha;
+    const p: &byte = try a.alloc(8 as usize);
+    const u: &u8 = p as &u8;
+    u[0] = 7 as u8;
+    u[7] = 9 as u8;
+    const q: &byte = try a.realloc(p, 64 as usize);
+    const v: &u8 = q as &u8;
+    try assert_eq_i32(v[0] as i32, 7);
+    try assert_eq_i32(v[7] as i32, 9);
+    a.dealloc(q);
+}
+
+test "heap_realloc_null_like_alloc" {
+    var ha: HeapAllocator = HeapAllocator{};
+    const a: &HeapAllocator = &ha;
+    const p: &byte = try a.realloc(null, 16 as usize);
+    const u: &u8 = p as &u8;
+    u[0] = 1 as u8;
+    try assert_eq_i32(u[0] as i32, 1);
+    a.dealloc(p);
+}
+
+test "heap_realloc_zero_deallocs_and_errors" {
+    var ha: HeapAllocator = HeapAllocator{};
+    const a: &HeapAllocator = &ha;
+    const p: &byte = try a.alloc(4 as usize);
+    var saw: bool = false;
+    _ = a.realloc(p, 0 as usize) catch {
+        saw = true;
+        null as &byte;
+    };
+    try assert_true(saw);
+}
+
+test "heap_realloc_same_block_when_shrink" {
+    var ha: HeapAllocator = HeapAllocator{};
+    const a: &HeapAllocator = &ha;
+    const p: &byte = try a.alloc(64 as usize);
+    const q: &byte = try a.realloc(p, 8 as usize);
+    try assert_true((q as &void) == (p as &void));
+    a.dealloc(q);
+}

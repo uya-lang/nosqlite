@@ -1,0 +1,39 @@
+// 算术运算测试
+// 测试所有算术运算符（+ - * / %）
+
+use std.testing.assert_eq_i32;
+
+test "test_addition" {
+    const a: i32 = 10;
+    const b: i32 = 5;
+    var sum: i32 = a + b;
+    try assert_eq_i32(sum, 15);
+}
+
+test "test_subtraction" {
+    const a: i32 = 10;
+    const b: i32 = 5;
+    var diff: i32 = a - b;
+    try assert_eq_i32(diff, 5);
+}
+
+test "test_multiplication" {
+    const a: i32 = 10;
+    const b: i32 = 5;
+    var prod: i32 = a * b;
+    try assert_eq_i32(prod, 50);
+}
+
+test "test_division" {
+    const a: i32 = 10;
+    const b: i32 = 5;
+    var quot: i32 = a / b;
+    try assert_eq_i32(quot, 2);
+}
+
+test "test_modulo" {
+    const a: i32 = 10;
+    const b: i32 = 5;
+    var mod: i32 = a % b;
+    try assert_eq_i32(mod, 0);
+}

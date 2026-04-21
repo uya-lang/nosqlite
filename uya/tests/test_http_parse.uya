@@ -1,0 +1,571 @@
+// test_http_parse.uya - HTTP 解析测试
+
+use std.http.types;
+use std.http.parse.http_parse_request;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_u64;
+
+fn slice_eq(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+test "parse_get_simple" {
+    var raw: [byte: 256] = [];
+    var r: usize = 0;
+    const line: &[byte] = &"GET /hello HTTP/1.1\r\nHost: x\r\n\r\n"[0: 32];
+    var i: usize = 0;
+    while i < line.len {
+        raw[r] = line.ptr[i];
+        r = r + 1;
+        i = i + 1;
+    }
+    const buf: &[byte] = raw[0: r];
+    const pr: ParseResult = try http_parse_request(buf);
+    try assert_eq_i32(pr.request.method as i32, Method.GET as i32);
+    try assert_eq_i32(pr.request.path_len, 6);
+    try assert_eq_u64(pr.consumed as u64, buf.len as u64);
+    if !pr.request.http11 {
+        try assert_eq_i32(0, 1);
+    }
+    if !request_wants_persistent_connection(&pr.request) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "parse_post_body" {
+    var raw: [byte: 512] = [];
+    const head: &[byte] = &"POST /api HTTP/1.1\r\nContent-Length: 4\r\n\r\n"[0: 41];
+    const body: &[byte] = &"abcd"[0: 4];
+    var r: usize = 0;
+    var i: usize = 0;
+    while i < head.len {
+        raw[r] = head.ptr[i];
+        r = r + 1;
+        i = i + 1;
+    }
+    i = 0;
+    while i < body.len {
+        raw[r] = body.ptr[i];
+        r = r + 1;
+        i = i + 1;
+    }
+    const buf: &[byte] = raw[0: r];
+    const pr: ParseResult = try http_parse_request(buf);
+    try assert_eq_i32(pr.request.method as i32, Method.POST as i32);
+    try assert_eq_u64(pr.request.body.len as u64, 4 as u64);
+    try assert_eq_i32(pr.request.body.ptr[0] as i32, 97);
+}
+
+test "parse_query" {
+    var raw: [byte: 256] = [];
+    const line: &[byte] = &"GET /p?a=1&b=two HTTP/1.1\r\n\r\n"[0: 29];
+    var r: usize = 0;
+    var i: usize = 0;
+    while i < line.len {
+        raw[r] = line.ptr[i];
+        r = r + 1;
+        i = i + 1;
+    }
+    const buf: &[byte] = raw[0: r];
+    const pr: ParseResult = try http_parse_request(buf);
+    try assert_eq_i32(pr.request.query_count, 2);
+}
+
+test "parse_post_body_incomplete" {
+    var raw: [byte: 256] = [];
+    const head: &[byte] = &"POST /api HTTP/1.1\r\nContent-Length: 4\r\n\r\n"[0: 41];
+    var r: usize = 0;
+    var i: usize = 0;
+    while i < head.len {
+        raw[r] = head.ptr[i];
+        r = r + 1;
+        i = i + 1;
+    }
+    const buf: &[byte] = raw[0: r];
+    const p: !ParseResult = http_parse_request(buf);
+    match p {
+        error.IncompleteRequest => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_consumed_keepalive" {
+    var raw: [byte: 256] = [];
+    const r1: &[byte] = &"GET /a HTTP/1.1\r\n\r\n"[0: 19];
+    const r2: &[byte] = &"GET /b HTTP/1.1\r\n\r\n"[0: 19];
+    var r: usize = 0;
+    var i: usize = 0;
+    while i < r1.len {
+        raw[r] = r1.ptr[i];
+        r = r + 1;
+        i = i + 1;
+    }
+    i = 0;
+    while i < r2.len {
+        raw[r] = r2.ptr[i];
+        r = r + 1;
+        i = i + 1;
+    }
+    const buf: &[byte] = raw[0: r];
+    const pr1: ParseResult = try http_parse_request(buf);
+    try assert_eq_u64(pr1.consumed as u64, 19 as u64);
+    var raw2: [byte: 256] = [];
+    var j: usize = 0;
+    while j + pr1.consumed < r {
+        raw2[j] = raw[pr1.consumed + j];
+        j = j + 1;
+    }
+    const rest: &[byte] = raw2[0: j];
+    const pr2: ParseResult = try http_parse_request(rest);
+    try assert_eq_i32(pr2.request.path_len, 2);
+}
+
+test "parse_then_request_get_header" {
+    var raw: [byte: 256] = [];
+    var r: usize = 0;
+    const line: &[byte] = &"GET /z HTTP/1.1\r\nX-Test: hi\r\n\r\n"[0: 33];
+    var i: usize = 0;
+    while i < line.len {
+        raw[r] = line.ptr[i];
+        r = r + 1;
+        i = i + 1;
+    }
+    const buf: &[byte] = raw[0: r];
+    const pr: ParseResult = try http_parse_request(buf);
+    const hv: &[byte] = try request_get_header(&pr.request, &"x-test"[0: 6]);
+    if hv.len != 2 || hv.ptr[0] != 'h' as byte || hv.ptr[1] != 'i' as byte {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "parse_uri_path_too_long" {
+    var raw: [byte: 640] = [];
+    var r: usize = 0;
+    const pref: &[byte] = &"GET "[0: 4];
+    var pi: usize = 0;
+    while pi < pref.len {
+        raw[r] = pref.ptr[pi];
+        r = r + 1;
+        pi = pi + 1;
+    }
+    raw[r] = '/' as byte;
+    r = r + 1;
+    var j: usize = 0;
+    while j < 256 {
+        raw[r] = 'a' as byte;
+        r = r + 1;
+        j = j + 1;
+    }
+    const suf: &[byte] = &" HTTP/1.1\r\n\r\n"[0: 14];
+    var si: usize = 0;
+    while si < suf.len {
+        raw[r] = suf.ptr[si];
+        r = r + 1;
+        si = si + 1;
+    }
+    const buf: &[byte] = raw[0: r];
+    const p: !ParseResult = http_parse_request(buf);
+    match p {
+        error.URITooLong => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_unknown_method_invalid_request" {
+    var raw: [byte: 64] = [];
+    const line: &[byte] = &"QUACK /x HTTP/1.1\r\n\r\n"[0: 21];
+    var i: usize = 0;
+    while i < line.len {
+        raw[i] = line.ptr[i];
+        i = i + 1;
+    }
+    const buf: &[byte] = raw[0: line.len];
+    const p: !ParseResult = http_parse_request(buf);
+    match p {
+        error.InvalidRequest => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_content_length_payload_too_large" {
+    var raw: [byte: 128] = [];
+    const line: &[byte] = &"GET /x HTTP/1.1\r\nContent-Length: 70000\r\n\r\n"[0: 42];
+    var i: usize = 0;
+    while i < line.len {
+        raw[i] = line.ptr[i];
+        i = i + 1;
+    }
+    const buf: &[byte] = raw[0: line.len];
+    const p: !ParseResult = http_parse_request(buf);
+    match p {
+        error.PayloadTooLarge => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_header_line_overall_too_long" {
+    var raw: [byte: 600] = [];
+    var r: usize = 0;
+    const fl: &[byte] = &"GET /x HTTP/1.1\r\n"[0: 17];
+    var fi: usize = 0;
+    while fi < fl.len {
+        raw[r] = fl.ptr[fi];
+        r = r + 1;
+        fi = fi + 1;
+    }
+    var j: usize = 0;
+    while j < 515 {
+        raw[r] = 'y' as byte;
+        r = r + 1;
+        j = j + 1;
+    }
+    raw[r] = 13 as byte;
+    r = r + 1;
+    raw[r] = 10 as byte;
+    r = r + 1;
+    raw[r] = 13 as byte;
+    r = r + 1;
+    raw[r] = 10 as byte;
+    r = r + 1;
+    const buf: &[byte] = raw[0: r];
+    const p: !ParseResult = http_parse_request(buf);
+    match p {
+        error.HeaderTooLarge => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_header_name_too_long" {
+    var raw: [byte: 320] = [];
+    var r: usize = 0;
+    const fl: &[byte] = &"GET /x HTTP/1.1\r\n"[0: 17];
+    var fi: usize = 0;
+    while fi < fl.len {
+        raw[r] = fl.ptr[fi];
+        r = r + 1;
+        fi = fi + 1;
+    }
+    var j: usize = 0;
+    while j < 257 {
+        raw[r] = 'n' as byte;
+        r = r + 1;
+        j = j + 1;
+    }
+    const mid: &[byte] = &": v\r\n\r\n"[0: 6];
+    var mi: usize = 0;
+    while mi < mid.len {
+        raw[r] = mid.ptr[mi];
+        r = r + 1;
+        mi = mi + 1;
+    }
+    const buf: &[byte] = raw[0: r];
+    const p: !ParseResult = http_parse_request(buf);
+    match p {
+        error.HeaderTooLarge => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_header_value_too_long" {
+    var raw: [byte: 320] = [];
+    var r: usize = 0;
+    const fl: &[byte] = &"GET /x HTTP/1.1\r\nX:"[0: 19];
+    var fi: usize = 0;
+    while fi < fl.len {
+        raw[r] = fl.ptr[fi];
+        r = r + 1;
+        fi = fi + 1;
+    }
+    var j: usize = 0;
+    while j < 257 {
+        raw[r] = 'v' as byte;
+        r = r + 1;
+        j = j + 1;
+    }
+    raw[r] = 13 as byte;
+    r = r + 1;
+    raw[r] = 10 as byte;
+    r = r + 1;
+    raw[r] = 13 as byte;
+    r = r + 1;
+    raw[r] = 10 as byte;
+    r = r + 1;
+    const buf: &[byte] = raw[0: r];
+    const p: !ParseResult = http_parse_request(buf);
+    match p {
+        error.HeaderTooLarge => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_too_many_headers" {
+    var raw: [byte: 1400] = [];
+    var r: usize = 0;
+    const fl: &[byte] = &"GET /x HTTP/1.1\r\n"[0: 17];
+    var fi: usize = 0;
+    while fi < fl.len {
+        raw[r] = fl.ptr[fi];
+        r = r + 1;
+        fi = fi + 1;
+    }
+    var h: i32 = 0;
+    const hl: &[byte] = &"X:1\r\n"[0: 5];
+    while h < 257 {
+        var hi: usize = 0;
+        while hi < hl.len {
+            raw[r] = hl.ptr[hi];
+            r = r + 1;
+            hi = hi + 1;
+        }
+        h = h + 1;
+    }
+    raw[r] = 13 as byte;
+    r = r + 1;
+    raw[r] = 10 as byte;
+    r = r + 1;
+    const buf: &[byte] = raw[0: r];
+    const p: !ParseResult = http_parse_request(buf);
+    match p {
+        error.HeaderTooLarge => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_query_missing_equals" {
+    var raw: [byte: 32] = [];
+    const line: &[byte] = &"GET /x?bad HTTP/1.1\r\n\r\n"[0: 23];
+    var i: usize = 0;
+    while i < line.len {
+        raw[i] = line.ptr[i];
+        i = i + 1;
+    }
+    const buf: &[byte] = raw[0: line.len];
+    const p: !ParseResult = http_parse_request(buf);
+    match p {
+        error.InvalidRequest => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_query_key_too_long" {
+    var raw: [byte: 320] = [];
+    var r: usize = 0;
+    const pref: &[byte] = &"GET /x?"[0: 7];
+    var pi: usize = 0;
+    while pi < pref.len {
+        raw[r] = pref.ptr[pi];
+        r = r + 1;
+        pi = pi + 1;
+    }
+    var j: usize = 0;
+    while j < 257 {
+        raw[r] = 'k' as byte;
+        r = r + 1;
+        j = j + 1;
+    }
+    const suf: &[byte] = &"=y HTTP/1.1\r\n\r\n"[0: 15];
+    var si: usize = 0;
+    while si < suf.len {
+        raw[r] = suf.ptr[si];
+        r = r + 1;
+        si = si + 1;
+    }
+    const buf: &[byte] = raw[0: r];
+    const p: !ParseResult = http_parse_request(buf);
+    match p {
+        error.ValueTooLong => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_query_value_too_long" {
+    var raw: [byte: 320] = [];
+    var r: usize = 0;
+    const pref: &[byte] = &"GET /x?a="[0: 9];
+    var pi: usize = 0;
+    while pi < pref.len {
+        raw[r] = pref.ptr[pi];
+        r = r + 1;
+        pi = pi + 1;
+    }
+    var j: usize = 0;
+    while j < 257 {
+        raw[r] = 'v' as byte;
+        r = r + 1;
+        j = j + 1;
+    }
+    const suf: &[byte] = &" HTTP/1.1\r\n\r\n"[0: 13];
+    var si: usize = 0;
+    while si < suf.len {
+        raw[r] = suf.ptr[si];
+        r = r + 1;
+        si = si + 1;
+    }
+    const buf: &[byte] = raw[0: r];
+    const p: !ParseResult = http_parse_request(buf);
+    match p {
+        error.ValueTooLong => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_query_too_many_params" {
+    var raw: [byte: 96] = [];
+    const line: &[byte] = &"GET /x?a=0&b=1&c=2&d=3&e=4&f=5&g=6&h=7&i=8&j=9&k=a&l=b&m=c&n=d&o=e&p=f&q=g HTTP/1.1\r\n\r\n"[0: 87];
+    var i: usize = 0;
+    while i < line.len {
+        raw[i] = line.ptr[i];
+        i = i + 1;
+    }
+    const buf: &[byte] = raw[0: line.len];
+    const p: !ParseResult = http_parse_request(buf);
+    match p {
+        error.TooManyParams => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_query_sixteen_params_ok" {
+    var raw: [byte: 96] = [];
+    const line: &[byte] = &"GET /x?a=0&b=1&c=2&d=3&e=4&f=5&g=6&h=7&i=8&j=9&k=a&l=b&m=c&n=d&o=e&p=f HTTP/1.1\r\n\r\n"[0: 83];
+    var i: usize = 0;
+    while i < line.len {
+        raw[i] = line.ptr[i];
+        i = i + 1;
+    }
+    const buf: &[byte] = raw[0: line.len];
+    const pr: ParseResult = try http_parse_request(buf);
+    try assert_eq_i32(pr.request.query_count, 16);
+}
+
+test "parse_http10_default_no_persistent" {
+    const line: &[byte] = &"GET / HTTP/1.0\r\nHost: x\r\n\r\n"[0: 27];
+    var raw: [byte: 64] = [];
+    var i: usize = 0;
+    while i < line.len {
+        raw[i] = line.ptr[i];
+        i = i + 1;
+    }
+    const pr: ParseResult = try http_parse_request(raw[0: line.len]);
+    if pr.request.http11 {
+        try assert_eq_i32(0, 1);
+    }
+    if request_wants_persistent_connection(&pr.request) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "parse_http10_keep_alive_persistent" {
+    const line: &[byte] = &"GET / HTTP/1.0\r\nHost: x\r\nConnection: keep-alive\r\n\r\n"[0: 51];
+    var raw: [byte: 80] = [];
+    var i: usize = 0;
+    while i < line.len {
+        raw[i] = line.ptr[i];
+        i = i + 1;
+    }
+    const pr: ParseResult = try http_parse_request(raw[0: line.len]);
+    if !request_wants_persistent_connection(&pr.request) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "parse_http11_connection_close_not_persistent" {
+    const line: &[byte] = &"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"[0: 46];
+    var raw: [byte: 64] = [];
+    var i: usize = 0;
+    while i < line.len {
+        raw[i] = line.ptr[i];
+        i = i + 1;
+    }
+    const pr: ParseResult = try http_parse_request(raw[0: line.len]);
+    if request_wants_persistent_connection(&pr.request) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "http10_session_followup_no_connection_header_stays_persistent" {
+    const line1: &[byte] = &"GET / HTTP/1.0\r\nHost: x\r\nConnection: keep-alive\r\n\r\n"[0: 51];
+    const line2: &[byte] = &"GET / HTTP/1.0\r\nHost: x\r\n\r\n"[0: 27];
+    var raw1: [byte: 64] = [];
+    var raw2: [byte: 40] = [];
+    var i: usize = 0;
+    while i < line1.len {
+        raw1[i] = line1.ptr[i];
+        i = i + 1;
+    }
+    i = 0;
+    while i < line2.len {
+        raw2[i] = line2.ptr[i];
+        i = i + 1;
+    }
+    const pr1: ParseResult = try http_parse_request(raw1[0: line1.len]);
+    if !request_wants_persistent_with_session(&pr1.request, false) {
+        try assert_eq_i32(0, 1);
+    }
+    const pr2: ParseResult = try http_parse_request(raw2[0: line2.len]);
+    if !request_wants_persistent_with_session(&pr2.request, true) {
+        try assert_eq_i32(0, 1);
+    }
+    if request_wants_persistent_with_session(&pr2.request, false) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "http10_session_followup_other_connection_token_stays_persistent" {
+    const line1: &[byte] = &"GET / HTTP/1.0\r\nHost: x\r\nConnection: keep-alive\r\n\r\n"[0: 51];
+    const line2: &[byte] = &"GET / HTTP/1.0\r\nHost: x\r\nConnection: TE\r\n\r\n"[0: 43];
+    var raw1: [byte: 64] = [];
+    var raw2: [byte: 64] = [];
+    var i: usize = 0;
+    while i < line1.len {
+        raw1[i] = line1.ptr[i];
+        i = i + 1;
+    }
+    i = 0;
+    while i < line2.len {
+        raw2[i] = line2.ptr[i];
+        i = i + 1;
+    }
+    const pr1: ParseResult = try http_parse_request(raw1[0: line1.len]);
+    if !request_wants_persistent_with_session(&pr1.request, false) {
+        try assert_eq_i32(0, 1);
+    }
+    const pr2: ParseResult = try http_parse_request(raw2[0: line2.len]);
+    if !request_wants_persistent_with_session(&pr2.request, true) {
+        try assert_eq_i32(0, 1);
+    }
+}

@@ -1,0 +1,51 @@
+// test_std_io_file.uya - std.io.File（osal-backed Reader / Writer）
+
+use std.testing;
+
+use std.io.File;
+use std.io.file;
+use std.io.file_close;
+use std.io.file_open;
+use std.io.file_read;
+use std.io.file_write;
+use libc.unlink;
+
+const TEST_PATH: *const byte = "/tmp/uya_std_io_file_trait.txt" as *const byte;
+const TEST_DATA: *const byte = "HiStdIo" as *const byte;
+const TEST_LEN: usize = 7;
+
+test "std_io_file_open_close_dev_null" {
+    const path: *const byte = "/dev/null" as *const byte;
+    var f: File = try file_open(path, 0, 0);
+    errdefer {
+        _ = file_close(&f) catch {};
+    }
+    try file_close(&f);
+}
+
+test "std_io_file_write_read_roundtrip" {
+    _ = unlink(TEST_PATH);
+    {
+        var wf: File = try file_open(TEST_PATH, 65, 0o644);
+        errdefer {
+            _ = file_close(&wf) catch {};
+            _ = unlink(TEST_PATH);
+        }
+        const n: usize = try file_write(&wf, TEST_DATA, TEST_LEN);
+        try assert_eq_i32(n as i32, TEST_LEN as i32);
+        try file_close(&wf);
+    }
+
+    var rf: File = try file_open(TEST_PATH, 0, 0);
+    errdefer {
+        _ = file_close(&rf) catch {};
+        _ = unlink(TEST_PATH);
+    }
+    var buf: [byte: 32] = [];
+    const r: isize = file_read(&rf, &buf[0], 32);
+    try assert_eq_i32(r as i32, TEST_LEN as i32);
+    try assert_eq_i32(buf[0] as i32, 72);
+    try assert_eq_i32(buf[1] as i32, 105);
+    try file_close(&rf);
+    _ = unlink(TEST_PATH);
+}

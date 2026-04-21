@@ -1,0 +1,297 @@
+// test_std_async_event_fd_reuse.uya - fd 复用与短连接压力回归
+//
+// 验证 LinuxEpoll 在 fd 快速创建/关闭/复用场景下的正确性
+// 覆盖：socket close 后新 fd 复用旧编号、register 后立即 deregister
+
+use std.async;
+use std.async_event;
+use std.testing.assert_eq_i32;
+use libc.syscall;
+
+const TEST_O_NONBLOCK: i32 = 0x800;
+
+fn test_sys_pipe2(pipefd: &i32, flags: i32) !i32 {
+    return @syscall(SYS_pipe2, pipefd as i64, flags as i64) as! i32;
+}
+
+fn test_sys_close(fd: i32) !i32 {
+    return @syscall(SYS_close, fd as i64) as! i32;
+}
+
+fn test_sys_write(fd: i32, buf: &const byte, count: usize) !isize {
+    return @syscall(SYS_write, fd as i64, buf as i64, count as i64) as! isize;
+}
+
+test "fd_reuse_basic" {
+    // 创建 epoll 实例
+    const ep_res: !LinuxEpoll = linux_epoll_create(0);
+    const ep: LinuxEpoll = ep_res catch {
+        try assert_eq_i32(0, 1); // fail
+        return;
+    };
+
+    // 第一轮：创建 pipe，注册读端
+    var fds1: [i32: 2] = [];
+    _ = test_sys_pipe2(&fds1[0], TEST_O_NONBLOCK) catch {
+        try assert_eq_i32(0, 2);
+        return;
+    };
+    const read_fd1: i32 = fds1[0];
+    const write_fd1: i32 = fds1[1];
+
+    var w1: Waker = Waker{};
+    _ = ep.register(read_fd1, EventKind.Readable({}), &w1) catch {
+        _ = test_sys_close(read_fd1);
+        _ = test_sys_close(write_fd1);
+        try assert_eq_i32(0, 3);
+        return;
+    };
+
+    // 验证已注册
+    if !linux_epoll_is_registered(&ep, read_fd1) {
+        _ = test_sys_close(read_fd1);
+        _ = test_sys_close(write_fd1);
+        try assert_eq_i32(0, 4);
+        return;
+    }
+
+    // 写入数据
+    var data: [byte: 1] = [42];
+    _ = test_sys_write(write_fd1, &data[0], 1) catch {};
+
+    // poll 应该返回 1
+    const n1: i32 = ep.poll(0) catch {
+        _ = test_sys_close(read_fd1);
+        _ = test_sys_close(write_fd1);
+        try assert_eq_i32(0, 5);
+        return;
+    };
+    try assert_eq_i32(n1, 1);
+    try assert_eq_i32(w1.is_woken() as i32, 1);
+
+    // deregister 并关闭
+    _ = ep.deregister(read_fd1) catch {
+        _ = test_sys_close(read_fd1);
+        _ = test_sys_close(write_fd1);
+        try assert_eq_i32(0, 6);
+        return;
+    };
+    _ = test_sys_close(read_fd1);
+    _ = test_sys_close(write_fd1);
+
+    // 验证已注销
+    if linux_epoll_is_registered(&ep, read_fd1) {
+        try assert_eq_i32(0, 7);
+        return;
+    }
+}
+
+test "fd_reuse_after_close" {
+    // 创建 epoll 实例
+    const ep_res: !LinuxEpoll = linux_epoll_create(0);
+    const ep: LinuxEpoll = ep_res catch {
+        try assert_eq_i32(0, 11);
+        return;
+    };
+
+    // 第一轮：创建 pipe
+    var fds1: [i32: 2] = [];
+    _ = test_sys_pipe2(&fds1[0], TEST_O_NONBLOCK) catch {
+        try assert_eq_i32(0, 12);
+        return;
+    };
+    const fd1a: i32 = fds1[0];
+    const fd1b: i32 = fds1[1];
+
+    var w1: Waker = Waker{};
+    _ = ep.register(fd1a, EventKind.Readable({}), &w1) catch {
+        _ = test_sys_close(fd1a);
+        _ = test_sys_close(fd1b);
+        try assert_eq_i32(0, 13);
+        return;
+    };
+
+    // 关闭 fds
+    _ = ep.deregister(fd1a) catch {};
+    _ = test_sys_close(fd1a);
+    _ = test_sys_close(fd1b);
+
+    // 第二轮：创建新的 pipe，fd 可能复用之前的编号
+    var fds2: [i32: 2] = [];
+    _ = test_sys_pipe2(&fds2[0], TEST_O_NONBLOCK) catch {
+        try assert_eq_i32(0, 14);
+        return;
+    };
+    const fd2a: i32 = fds2[0];
+    const fd2b: i32 = fds2[1];
+
+    // 如果 fd 复用了之前的编号，确保不会混淆
+    var w2: Waker = Waker{};
+    _ = ep.register(fd2a, EventKind.Readable({}), &w2) catch {
+        _ = test_sys_close(fd2a);
+        _ = test_sys_close(fd2b);
+        try assert_eq_i32(0, 15);
+        return;
+    };
+
+    // 验证新 fd 已注册
+    if !linux_epoll_is_registered(&ep, fd2a) {
+        _ = test_sys_close(fd2a);
+        _ = test_sys_close(fd2b);
+        try assert_eq_i32(0, 16);
+        return;
+    }
+
+    // 验证旧 fd（如果编号相同）不会误判
+    // 实际上 fd1a 已经关闭，如果 fd2a 复用了 fd1a 的编号，
+    // 那么检查 fd1a 应该返回 true（因为它们有相同的编号）
+    // 但我们的 generation 机制确保这是正确的
+
+    // 写入数据到新的 pipe
+    var data: [byte: 1] = [42];
+    _ = test_sys_write(fd2b, &data[0], 1) catch {};
+
+    // poll 应该返回 1，且 w2 被唤醒
+    const n: i32 = ep.poll(0) catch {
+        _ = test_sys_close(fd2a);
+        _ = test_sys_close(fd2b);
+        try assert_eq_i32(0, 17);
+        return;
+    };
+    try assert_eq_i32(n, 1);
+    try assert_eq_i32(w2.is_woken() as i32, 1);
+
+    _ = ep.deregister(fd2a) catch {};
+    _ = test_sys_close(fd2a);
+    _ = test_sys_close(fd2b);
+}
+
+test "rapid_register_deregister" {
+    // 快速注册/注销压力测试
+    const ep_res: !LinuxEpoll = linux_epoll_create(0);
+    const ep: LinuxEpoll = ep_res catch {
+        try assert_eq_i32(0, 21);
+        return;
+    };
+
+    var fds: [i32: 2] = [];
+    _ = test_sys_pipe2(&fds[0], TEST_O_NONBLOCK) catch {
+        try assert_eq_i32(0, 22);
+        return;
+    };
+    const read_fd: i32 = fds[0];
+    const write_fd: i32 = fds[1];
+
+    var i: i32 = 0;
+    while i < 100 {
+        var w: Waker = Waker{};
+        
+        // 注册
+        _ = ep.register(read_fd, EventKind.Readable({}), &w) catch {
+            _ = test_sys_close(read_fd);
+            _ = test_sys_close(write_fd);
+            try assert_eq_i32(0, 23);
+            return;
+        };
+
+        if !linux_epoll_is_registered(&ep, read_fd) {
+            _ = test_sys_close(read_fd);
+            _ = test_sys_close(write_fd);
+            try assert_eq_i32(0, 24);
+            return;
+        }
+
+        // 立即注销
+        _ = ep.deregister(read_fd) catch {
+            _ = test_sys_close(read_fd);
+            _ = test_sys_close(write_fd);
+            try assert_eq_i32(0, 25);
+            return;
+        };
+
+        if linux_epoll_is_registered(&ep, read_fd) {
+            _ = test_sys_close(read_fd);
+            _ = test_sys_close(write_fd);
+            try assert_eq_i32(0, 26);
+            return;
+        }
+
+        i = i + 1;
+    }
+
+    // 最终状态应该干净
+    const count: i32 = linux_epoll_registered_count(&ep);
+    try assert_eq_i32(count, 0);
+
+    _ = test_sys_close(read_fd);
+    _ = test_sys_close(write_fd);
+}
+
+test "two_fds_sequential" {
+    // 顺序测试两个 fd（避免并发问题）
+    const ep_res: !LinuxEpoll = linux_epoll_create(0);
+    const ep: LinuxEpoll = ep_res catch {
+        try assert_eq_i32(0, 31);
+        return;
+    };
+
+    var fds1: [i32: 2] = [];
+    var fds2: [i32: 2] = [];
+    _ = test_sys_pipe2(&fds1[0], TEST_O_NONBLOCK) catch {
+        try assert_eq_i32(0, 32);
+        return;
+    };
+    _ = test_sys_pipe2(&fds2[0], TEST_O_NONBLOCK) catch {
+        _ = test_sys_close(fds1[0]);
+        _ = test_sys_close(fds1[1]);
+        try assert_eq_i32(0, 33);
+        return;
+    };
+
+    const r1: i32 = fds1[0];
+    const w1: i32 = fds1[1];
+    const r2: i32 = fds2[0];
+    const w2: i32 = fds2[1];
+
+    // 测试 fd1
+    var waker1: Waker = Waker{};
+    _ = ep.register(r1, EventKind.Readable({}), &waker1) catch {
+        try assert_eq_i32(0, 34);
+        return;
+    };
+    
+    var data: [byte: 1] = [1];
+    _ = test_sys_write(w1, &data[0], 1) catch {};
+    
+    const n1: i32 = ep.poll(0) catch {
+        try assert_eq_i32(0, 35);
+        return;
+    };
+    try assert_eq_i32(n1, 1);
+    try assert_eq_i32(waker1.is_woken() as i32, 1);
+
+    // 注销 fd1
+    _ = ep.deregister(r1) catch {};
+
+    // 测试 fd2
+    var waker2: Waker = Waker{};
+    _ = ep.register(r2, EventKind.Readable({}), &waker2) catch {
+        try assert_eq_i32(0, 36);
+        return;
+    };
+    
+    _ = test_sys_write(w2, &data[0], 1) catch {};
+    
+    const n2: i32 = ep.poll(0) catch {
+        try assert_eq_i32(0, 37);
+        return;
+    };
+    try assert_eq_i32(n2, 1);
+    try assert_eq_i32(waker2.is_woken() as i32, 1);
+
+    _ = ep.deregister(r2) catch {};
+    _ = test_sys_close(r1);
+    _ = test_sys_close(w1);
+    _ = test_sys_close(r2);
+    _ = test_sys_close(w2);
+}

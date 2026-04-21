@@ -1,0 +1,39 @@
+// SIMD：@mask 的 | / ^；整数向量的 >>
+type Vec4i32 = @vector(i32, 4);
+type Mask4 = @mask(4);
+
+export fn main() i32 {
+    const a: Vec4i32 = @vector.splat(3);
+    const b: Vec4i32 = @vector.splat(2);
+    const eq: Mask4 = a == b;
+    const ne: Mask4 = a != b;
+    const xor_all_true: Mask4 = eq ^ ne;
+    if @vector.all(xor_all_true) == false {
+        return 1;
+    }
+
+    const t: Mask4 = a == a;
+    const f: Mask4 = eq;
+    const tor: Mask4 = t | f;
+    if @vector.all(tor) == false {
+        return 2;
+    }
+
+    const eight: Vec4i32 = @vector.splat(8);
+    const onev: Vec4i32 = @vector.splat(1);
+    const four: Vec4i32 = eight >> onev;
+    const ok_shift: Mask4 = four == @vector.splat(4);
+    if @vector.all(ok_shift) == false {
+        return 3;
+    }
+
+    const two: Vec4i32 = @vector.splat(2);
+    const twov: Vec4i32 = @vector.splat(2);
+    const eight2: Vec4i32 = two << twov;
+    const ok_lshift: Mask4 = eight2 == @vector.splat(8);
+    if @vector.all(ok_lshift) == false {
+        return 4;
+    }
+
+    return 0;
+}

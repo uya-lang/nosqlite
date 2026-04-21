@@ -1,0 +1,29 @@
+// tests/programs/test_optimizer_detection.uya
+// 测试优化器能正确识别优化机会
+
+use std.testing.assert_eq_i32;
+
+test "const_expr_detection" {
+    // 简单常量表达式
+    const a: i32 = 10 + 20;
+    try assert_eq_i32(a, 30);
+    
+    const b: i32 = 5 * 4;
+    try assert_eq_i32(b, 20);
+}
+
+test "const_range_loop" {
+    var sum: i32 = 0;
+    for 0..3 |i| {
+        sum = sum + i;
+    }
+    // 0 + 1 + 2 = 3
+    try assert_eq_i32(sum, 3);
+}
+
+test "nested_const_expr" {
+    const x: i32 = 5;
+    const y: i32 = x * 2;
+    const z: i32 = y + 3;
+    try assert_eq_i32(z, 13);
+}

@@ -1,0 +1,140 @@
+// 触发 emit_simd_* 运行时助手：`verify_simd_c99_neon.sh` 交叉编译 NEON 片段；亦纳入 `run_programs_parallel` 默认套件
+type Vec4i32 = @vector(i32, 4);
+type Vec4i16 = @vector(i16, 4);
+type Vec4u32 = @vector(u32, 4);
+type Vec4u16 = @vector(u16, 4);
+type Vec4f32 = @vector(f32, 4);
+type Vec2i32 = @vector(i32, 2);
+type Vec2u32 = @vector(u32, 2);
+type Vec2f32 = @vector(f32, 2);
+type Vec2f64 = @vector(f64, 2);
+type Mask4 = @mask(4);
+type Mask2 = @mask(2);
+
+export fn main() i32 {
+    const a: Vec4i32 = @vector.splat(1);
+    const b: Vec4i32 = @vector.splat(2);
+    const c: Vec4i32 = a + b;
+    const m: Mask4 = c == @vector.splat(3);
+    if @vector.all(m) == false {
+        return 1;
+    }
+    const u: Vec4u32 = @vector.splat(1 as u32);
+    const mu: Mask4 = u < @vector.splat(2 as u32);
+    if @vector.all(mu) == false {
+        return 2;
+    }
+    const ten: Vec4i32 = @vector.splat(10);
+    const two_i: Vec4i32 = @vector.splat(2);
+    const qi: Vec4i32 = ten / two_i;
+    if @vector.all(qi == @vector.splat(5)) == false {
+        return 4;
+    }
+    const u3: Vec4u32 = @vector.splat(3 as u32);
+    const u4: Vec4u32 = @vector.splat(4 as u32);
+    const pm: Vec4u32 = u3 * u4;
+    const qru: Vec4u32 = pm / @vector.splat(2 as u32);
+    if @vector.all(qru == @vector.splat(6 as u32)) == false {
+        return 5;
+    }
+    const rmi: Vec4i32 = @vector.splat(17) % @vector.splat(5);
+    if @vector.all(rmi == @vector.splat(2)) == false {
+        return 6;
+    }
+    const rmu: Vec4u32 = @vector.splat(17 as u32) % @vector.splat(5 as u32);
+    if @vector.all(rmu == @vector.splat(2 as u32)) == false {
+        return 7;
+    }
+    const shl_i: Vec4i32 = @vector.splat(2) << @vector.splat(2);
+    if @vector.all(shl_i == @vector.splat(8)) == false {
+        return 8;
+    }
+    const shr_i: Vec4i32 = @vector.splat(8) >> @vector.splat(1);
+    if @vector.all(shr_i == @vector.splat(4)) == false {
+        return 9;
+    }
+    const shl_u: Vec4u32 = @vector.splat(2 as u32) << @vector.splat(2 as u32);
+    if @vector.all(shl_u == @vector.splat(8 as u32)) == false {
+        return 10;
+    }
+    const shr_u: Vec4u32 = @vector.splat(8 as u32) >> @vector.splat(1 as u32);
+    if @vector.all(shr_u == @vector.splat(4 as u32)) == false {
+        return 11;
+    }
+    const i16a: Vec4i16 = @vector.splat(10);
+    const i16b: Vec4i16 = @vector.splat(3);
+    const i16s: Vec4i16 = i16a - i16b;
+    if @vector.all(i16s == @vector.splat(7)) == false {
+        return 12;
+    }
+    const i16m: Vec4i16 = i16b * @vector.splat(4);
+    if @vector.all(i16m == @vector.splat(12)) == false {
+        return 13;
+    }
+    const x: Vec4f32 = @vector.splat(1.0f32);
+    const y: Vec4f32 = @vector.splat(2.0f32);
+    const mf: Mask4 = x < y;
+    if @vector.all(mf) == false {
+        return 3;
+    }
+    const u16a: Vec4u16 = @vector.splat(5 as u16);
+    const u16b: Vec4u16 = @vector.splat(2 as u16);
+    if @vector.all((u16a + u16b) == @vector.splat(7 as u16)) == false {
+        return 14;
+    }
+    if @vector.all(u16a > @vector.splat(1 as u16)) == false {
+        return 15;
+    }
+    const f2a: Vec2f64 = @vector.splat(2.0);
+    const f2b: Vec2f64 = @vector.splat(0.5);
+    const f2s: Vec2f64 = f2a + f2b;
+    const f2m: Mask2 = f2s == @vector.splat(2.5);
+    if @vector.all(f2m) == false {
+        return 16;
+    }
+    const v2i: Vec2i32 = @vector.splat(2) + @vector.splat(3);
+    if @vector.all(v2i == @vector.splat(5)) == false {
+        return 17;
+    }
+    const v2u: Vec2u32 = @vector.splat(7 as u32) % @vector.splat(3 as u32);
+    if @vector.all(v2u == @vector.splat(1 as u32)) == false {
+        return 18;
+    }
+    const v2f: Vec2f32 = @vector.splat(1.5f32) * @vector.splat(2.0f32);
+    if @vector.all(v2f == @vector.splat(3.0f32)) == false {
+        return 19;
+    }
+    const m2: Mask2 = v2i == @vector.splat(5);
+    const z2i: Vec2i32 = @vector.splat(0);
+    const sel2_i: Vec2i32 = @vector.select(m2, v2i, z2i);
+    if @vector.all(sel2_i == v2i) == false {
+        return 23;
+    }
+    const m2u: Mask2 = v2u < @vector.splat(2 as u32);
+    const z2u: Vec2u32 = @vector.splat(0 as u32);
+    const sel2_u: Vec2u32 = @vector.select(m2u, v2u, z2u);
+    if @vector.all(sel2_u == v2u) == false {
+        return 24;
+    }
+    const m2f: Mask2 = v2f < @vector.splat(4.0f32);
+    const z2f: Vec2f32 = @vector.splat(0.0f32);
+    const sel2_f: Vec2f32 = @vector.select(m2f, v2f, z2f);
+    if @vector.all(sel2_f == v2f) == false {
+        return 25;
+    }
+    // @vector.select x4：触发 uya_simd_*_select_{i32,u32,f32}x4（SSE / NEON / 标量三档）
+    const sel_i: Vec4i32 = @vector.select(m, a, b);
+    if @vector.all(sel_i == a) == false {
+        return 20;
+    }
+    const u_alt: Vec4u32 = @vector.splat(99 as u32);
+    const sel_u: Vec4u32 = @vector.select(mu, u, u_alt);
+    if @vector.all(sel_u == u) == false {
+        return 21;
+    }
+    const sel_f: Vec4f32 = @vector.select(mf, x, y);
+    if @vector.all(sel_f == x) == false {
+        return 22;
+    }
+    return 0;
+}

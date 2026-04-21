@@ -1,0 +1,24 @@
+// 测试 pattern 参数类型
+use std.runtime.entry;
+// 规范 25.2：pattern 参数类型用于接收模式
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+mc with_pattern_param(p: pattern) expr {
+    @mc_code(@mc_ast(0));
+}
+
+fn test_pattern_param() !void {
+    // 调用带 pattern 参数的宏
+    const x: i32 = with_pattern_param(_);
+    try assert_eq_i32(x, 0);
+}
+
+export fn main() i32 {
+    test_suite_begin("Macro Param Pattern Tests");
+    run_test("pattern param", test_pattern_param);
+    return test_suite_end();
+}

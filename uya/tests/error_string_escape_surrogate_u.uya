@@ -1,0 +1,6 @@
+// 预期编译失败：\uD800 为代理码点，字符串中拒绝
+
+fn main() i32 {
+    const s: *byte = "\uD800";
+    return 0;
+}

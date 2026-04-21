@@ -1,0 +1,11 @@
+// 预期编译失败：drop 必须为 fn drop(self: T) void（按值 self，返回 void）
+// 此处使用 self: &Self（引用），应报错
+
+struct S {
+  fn drop(self: &Self) void {
+  }
+}
+
+fn main() i32 {
+  return 0;
+}

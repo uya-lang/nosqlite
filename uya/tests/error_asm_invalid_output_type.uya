@@ -1,0 +1,10 @@
+// error_asm_invalid_output_type.uya - @asm 无效输出类型错误测试
+// 期望编译错误：@asm 输出必须是整数类型
+
+fn main() i32 {
+    var f: f64 = 0.0;
+    @asm {
+        "mov %0, 3.14" (-> f);
+    }
+    return 0;
+}

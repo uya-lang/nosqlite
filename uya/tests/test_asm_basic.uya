@@ -1,0 +1,63 @@
+// test_asm_basic.uya - @asm 内联汇编基础测试
+// 使用简单、安全的汇编指令
+
+// 测试简单的汇编指令
+test "asm simple" {
+    var x: i32 = 0;
+    @asm {
+        "nop" ();
+    }
+}
+
+// 测试无输入输出
+test "asm no operands" {
+    @asm {
+        "nop" ();
+    }
+}
+
+// 测试无输入，只有输出
+test "asm output only" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    }
+}
+
+// 测试无输出，只有输入
+test "asm input only" {
+    var x: i32 = 42;
+    @asm {
+        "nop" (x);
+    }
+}
+
+// 测试多个输入
+test "asm multiple inputs" {
+    var a: i32 = 1;
+    var b: i32 = 2;
+    var c: i32 = 3;
+    var result: i32 = 0;
+    @asm {
+        "nop" (a, b, c, -> result);
+    }
+}
+
+// 测试多个输出
+test "asm multiple outputs" {
+    var a: i32 = 0;
+    var b: i32 = 0;
+    @asm {
+        "nop" (-> a, b);
+    }
+}
+
+// 测试多条指令
+test "asm multiple instructions" {
+    var x: i32 = 0;
+    var y: i32 = 10;
+    @asm {
+        "nop" (y, -> x);
+        "nop" (x, -> x);
+    }
+}

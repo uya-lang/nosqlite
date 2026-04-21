@@ -1,0 +1,28 @@
+// 测试非泛型结构体的泛型方法单态化
+use std.runtime.entry;
+// 验证泛型方法在非泛型结构体中能正确生成
+
+// 非泛型结构体
+struct Container {
+    value: i32,
+}
+
+// 使用方法块定义泛型方法
+Container {
+    // 泛型方法：返回转换后的值
+    fn get_as<T>(self: &Self) T {
+        return self.value as T;
+    }
+}
+
+export fn main() i32 {
+    var c: Container = Container{ value: 42 };
+    
+    // 泛型方法调用
+    const v: i32 = c.get_as<i32>();
+    
+    if v == 42 {
+        return 0;
+    }
+    return 1;
+}

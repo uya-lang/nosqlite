@@ -1,0 +1,19 @@
+// SIMD：两侧 @vector.splat 的二元式在 codegen 中从变量期望类型或对侧推断向量类型
+type Vec4i32 = @vector(i32, 4);
+type Mask4 = @mask(4);
+
+export fn main() i32 {
+    const sum_ctx: Vec4i32 = @vector.splat(1) + @vector.splat(2);
+    const ok_add: Mask4 = sum_ctx == @vector.splat(3);
+    if @vector.all(ok_add) == false {
+        return 1;
+    }
+
+    const wrap_ctx: Vec4i32 = @vector.splat(2147483647) +% @vector.splat(1);
+    const ok_wrap: Mask4 = wrap_ctx == @vector.splat((-2147483647 - 1));
+    if @vector.all(ok_wrap) == false {
+        return 2;
+    }
+
+    return 0;
+}

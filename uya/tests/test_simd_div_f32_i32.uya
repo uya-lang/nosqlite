@@ -1,0 +1,30 @@
+// SIMD：向量除法（整数与 f32），标量回退路径逐 lane 一致
+type Vec4i32 = @vector(i32, 4);
+type Vec4f32 = @vector(f32, 4);
+type Mask4 = @mask(4);
+
+export fn main() i32 {
+    const num: Vec4i32 = @vector.splat(12);
+    const den: Vec4i32 = @vector.splat(3);
+    const q: Vec4i32 = num / den;
+    const ok: Mask4 = q == @vector.splat(4);
+    if @vector.all(ok) == false {
+        return 1;
+    }
+    const neg: Vec4i32 = @vector.splat(-7);
+    const two: Vec4i32 = @vector.splat(2);
+    const qt: Vec4i32 = neg / two;
+    if @vector.all(qt == @vector.splat(-3)) == false {
+        return 3;
+    }
+
+    const fn1: Vec4f32 = @vector.splat(1.5f32);
+    const fn2: Vec4f32 = @vector.splat(0.5f32);
+    const fq: Vec4f32 = fn1 / fn2;
+    const fok: Mask4 = fq == @vector.splat(3.0f32);
+    if @vector.all(fok) == false {
+        return 2;
+    }
+
+    return 0;
+}

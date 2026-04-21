@@ -1,0 +1,32 @@
+// 测试 drop/RAII：全局函数内局部变量离开作用域时调用 drop（规范 §12）
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+var drop_count: i32 = 0;
+
+struct S {
+  id: i32,
+  fn drop(self: S) void {
+    drop_count = drop_count + 1;
+  }
+}
+
+fn foo() void {
+  const s: S = S{ id: 42 };
+}
+
+fn test_drop_in_function() !void {
+  drop_count = 0;
+  foo();
+  try expect(drop_count == 1);
+}
+
+export fn main() i32 {
+  test_suite_begin("Drop In Function Tests");
+  run_test("drop in function", test_drop_in_function);
+  return test_suite_end();
+}

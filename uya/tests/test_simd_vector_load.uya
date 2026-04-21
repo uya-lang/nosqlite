@@ -1,0 +1,20 @@
+// @vector.load：从 &T 加载 @vector(T,N)，C99 为 __uya_memcpy 装入向量结构体
+type V4u = @vector(u32, 4);
+
+export fn main() i32 {
+    var buf: [u32: 4] = [];
+    buf[0] = 11u32;
+    buf[1] = 22u32;
+    buf[2] = 33u32;
+    buf[3] = 44u32;
+    const v: V4u = @vector.load(&buf[0]);
+    const m_eq: @mask(4) = v == @vector.splat(11u32);
+    if @vector.all(m_eq) != false {
+        return 1;
+    }
+    const m_ge: @mask(4) = v >= @vector.splat(11u32);
+    if @vector.all(m_ge) == false {
+        return 2;
+    }
+    return 0;
+}

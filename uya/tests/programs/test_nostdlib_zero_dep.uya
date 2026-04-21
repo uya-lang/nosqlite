@@ -1,0 +1,5 @@
+// 用户程序 nostdlib 零依赖（无 std）：仅 export main，链接 -nostdlib -static
+// 验收：tests/verify_nostdlib_user.sh
+export fn main() i32 {
+    return 0;
+}

@@ -1,0 +1,22 @@
+// test_epoll_syscall.uya - 验证 libc.syscall 提供 epoll 系统调用封装
+// 不依赖 std.async_event，仅测试 epoll_create1 / epoll_wait
+
+use std.runtime.entry;
+use libc.syscall;
+
+export fn main() i32 {
+    const epfd: i32 = sys_epoll_create1(0) catch {
+        return 1;
+    };
+    if epfd < 0 {
+        return 2;
+    }
+    var ev: EpollEvent = EpollEvent{ events: 0, _pad: 0, data: 0 };
+    const n: i32 = sys_epoll_wait(epfd, &ev, 1, 0) catch {
+        return 3;
+    };
+    if n < 0 {
+        return 4;
+    }
+    return 0;
+}

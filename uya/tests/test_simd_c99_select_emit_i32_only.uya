@@ -1,0 +1,13 @@
+// TDD/回归：仅用 @vector.select(i32×4) 时，生成 C 不应包含 u32/f32 的 select 助手定义
+type V4i = @vector(i32, 4);
+
+export fn main() i32 {
+    const a: V4i = @vector.splat(1);
+    const b: V4i = @vector.splat(2);
+    const m: @mask(4) = a < b;
+    const r: V4i = @vector.select(m, a, b);
+    if @vector.all(r == a) == false {
+        return 1;
+    }
+    return 0;
+}

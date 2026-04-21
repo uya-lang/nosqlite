@@ -1,0 +1,15 @@
+// 错误可提前使用：在声明之前使用 error.X
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+fn f() !i32 {
+    return error.LateDeclared;  // 先使用
+}
+error LateDeclared;  // 后声明
+
+test "test_forward_use" {
+    const r: i32 = f() catch { 42; };
+    try assert_eq_i32(r, 42);
+}

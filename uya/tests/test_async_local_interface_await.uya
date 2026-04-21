@@ -1,0 +1,45 @@
+use std.async;
+use std.testing.assert_eq_i32;
+use std.testing.run_test;
+
+error UnexpectedPending;
+
+struct ReadyFuture : Future<!i32> {
+    value: i32,
+
+    fn poll(self: &Self, w: &Waker) Poll<!i32> {
+        _ = w;
+        return Poll<!i32>.Ready(ok<i32>(self.value));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+@async_fn
+fn await_local_interface_future() Future<!i32> {
+    const inner: ReadyFuture = ReadyFuture{ value: 7 };
+    const fut: Future<!i32> = inner;
+    const value: i32 = try @await fut;
+    return value;
+}
+
+fn test_async_local_interface_future() !void {
+    const fut: Future<!i32> = await_local_interface_future();
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = fut.poll(&w);
+    match p {
+        .Ready(r) => {
+            const value: i32 = try r;
+            try assert_eq_i32(value, 7);
+        },
+        .Pending(_) => {
+            return error.UnexpectedPending;
+        },
+    };
+}
+
+test "async_local_interface_future_await" {
+    run_test("async_local_interface_future_await", test_async_local_interface_future);
+}

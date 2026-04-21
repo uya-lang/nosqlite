@@ -1,0 +1,57 @@
+// 测试 to_json 结构体包含数组字段（[i64: N]）的编码
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.parser.parse;
+use std.json.encoder.to_json;
+use std.json.encoder.json_object_find_index;
+use std.json.encoder.json_expect_i64;
+use std.json.errors;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+struct WithArray {
+    id: i64,
+    ids: [i64: 3],
+}
+
+export fn main() i32 {
+    var arena_buf: [byte: 262144] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 262144);
+    var ids: [i64: 3] = [];
+    ids[0] = 1;
+    ids[1] = 2;
+    ids[2] = 3;
+    const obj: WithArray = WithArray{ id: 10, ids: ids };
+    const slice: &[byte] = to_json<WithArray>(&a, obj) catch { return 1; };
+
+    const parsed: JsonValue = parse(&a, slice.ptr, slice.len) catch { return 2; };
+    match parsed {
+        .obj(o) => {
+            if o.len != 2 { return 3; }
+            var id_key: [byte: 2] = [];
+            id_key[0] = 105;
+            id_key[1] = 100;
+            var ids_key: [byte: 3] = [];
+            ids_key[0] = 105;
+            ids_key[1] = 100;
+            ids_key[2] = 115;
+            const id_idx: usize = json_object_find_index(&o, &id_key[0], 2) catch { return 4; };
+            const id_val: i64 = json_expect_i64(&o.pairs[id_idx].value) catch { return 5; };
+            if id_val != 10 { return 6; }
+            const ids_idx: usize = json_object_find_index(&o, &ids_key[0], 3) catch { return 7; };
+            match o.pairs[ids_idx].value {
+                .arr(arr) => {
+                    if arr.len != 3 { return 8; }
+                    const v0: i64 = json_expect_i64(&arr.items[0]) catch { return 9; };
+                    const v1: i64 = json_expect_i64(&arr.items[1]) catch { return 10; };
+                    const v2: i64 = json_expect_i64(&arr.items[2]) catch { return 11; };
+                    if v0 != 1 || v1 != 2 || v2 != 3 { return 12; }
+                },
+                else => { return 13; },
+            }
+        },
+        else => { return 14; },
+    }
+    return 0;
+}

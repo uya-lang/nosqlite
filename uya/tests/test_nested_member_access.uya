@@ -1,0 +1,59 @@
+// 嵌套字段访问测试程序
+use std.runtime.entry;
+// 测试 parser.current_token.type 这样的嵌套字段访问
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Token {
+    type: TokenType,
+    value: &byte,
+    line: i32,
+    column: i32,
+}
+
+enum TokenType {
+    TOKEN_EOF,
+    TOKEN_IDENTIFIER,
+    TOKEN_NUMBER,
+}
+
+struct Parser {
+    current_token: &Token,
+    arena: &Arena,
+}
+
+struct Arena {
+    buffer: &byte,
+    size: i32,
+    offset: i32,
+}
+
+fn test_nested_access(parser: &Parser) !void {
+    try expect(parser.current_token.type != TokenType.TOKEN_EOF);
+    
+    const line: i32 = parser.current_token.line;
+    try expect(line >= 0);
+    
+    const column: i32 = parser.current_token.column;
+    try expect(column >= 0);
+    
+    const size: i32 = parser.arena.size;
+    try expect(size >= 0);
+    
+    const offset: i32 = parser.arena.offset;
+    try expect(offset >= 0);
+}
+
+fn test_nested_syntax() !void {
+    // 验证嵌套字段访问语法正确编译
+    // 实际运行时需要外部提供有效的指针
+}
+
+export fn main() i32 {
+    test_suite_begin("Nested Member Access Tests");
+    run_test("nested syntax", test_nested_syntax);
+    return test_suite_end();
+}

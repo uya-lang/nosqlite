@@ -1,0 +1,220 @@
+// test_async_io.uya
+// 测试 std.async 的 AsyncWriter/AsyncReader 接口与 MemAsyncWriter
+
+use std.async;
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+
+error UnexpectedPending;
+error AsyncIoFailed;
+
+fn test_write_impl() !void {
+    var w: MemAsyncWriter = mem_async_writer_new();
+    var buf: [byte: 4] = [ 1, 2, 3, 4 ];
+    const f: Future<!usize> = w.write(&buf[0] as &const byte, 4);
+    const wk: Waker = Waker{};
+    const p: Poll<!usize> = f.poll(&wk);
+    var result: usize = 0;
+    match p {
+        .Ready(n) => { result = n catch { return error.AsyncIoFailed; }; },
+        .Pending(_) => { return error.UnexpectedPending; },
+    };
+    try assert_eq_i32(result as i32, 4);
+}
+
+fn test_flush_impl() !void {
+    var w: MemAsyncWriter = mem_async_writer_new();
+    const f: Future<!usize> = w.flush();
+    const wk: Waker = Waker{};
+    const p: Poll<!usize> = f.poll(&wk);
+    var result: usize = 1;
+    match p {
+        .Ready(n) => { result = n catch { return error.AsyncIoFailed; }; },
+        .Pending(_) => { return error.UnexpectedPending; },
+    };
+    try assert_eq_i32(result as i32, 0);
+}
+
+fn test_write_all_impl() !void {
+    var w_impl: MemAsyncWriter = mem_async_writer_new();
+    const w: AsyncWriter = w_impl;
+    var buf: [byte: 4] = [ 5, 6, 7, 8 ];
+    const f: Future<!usize> = w.write_all(&buf[0] as &const byte, 4);
+    const wk: Waker = Waker{};
+    const p: Poll<!usize> = f.poll(&wk);
+    var result: usize = 0;
+    match p {
+        .Ready(n) => { result = n catch { return error.AsyncIoFailed; }; },
+        .Pending(_) => { return error.UnexpectedPending; },
+    };
+    try assert_eq_i32(result as i32, 4);
+}
+
+fn test_async_write_bytes_helper_impl() !void {
+    var w_impl: MemAsyncWriter = mem_async_writer_new();
+    const w: AsyncWriter = w_impl;
+    const data: &[byte] = &"hello"[0: 5];
+    const written: usize = try block_on<usize>(async_write_bytes(w, data));
+    try assert_eq_i32(written as i32, 5);
+}
+
+fn test_async_write_cstr_helper_impl() !void {
+    var w_impl: MemAsyncWriter = mem_async_writer_new();
+    const w: AsyncWriter = w_impl;
+    const written: usize = try block_on<usize>(async_write_cstr(w, "hello\0" as &const byte));
+    try assert_eq_i32(written as i32, 5);
+}
+
+fn test_async_print_to_helper_impl() !void {
+    var w_impl: MemAsyncWriter = mem_async_writer_new();
+    const w: AsyncWriter = w_impl;
+    const written: usize = try block_on<usize>(async_print_to(w, "hiya\0" as &const byte));
+    try assert_eq_i32(written as i32, 4);
+}
+
+fn test_async_println_to_helper_impl() !void {
+    var w_impl: MemAsyncWriter = mem_async_writer_new();
+    const w: AsyncWriter = w_impl;
+    const written: usize = try block_on<usize>(async_println_to(w, "hiya\0" as &const byte));
+    try assert_eq_i32(written as i32, 5);
+}
+
+fn test_async_println_bytes_to_helper_impl() !void {
+    var w_impl: MemAsyncWriter = mem_async_writer_new();
+    const w: AsyncWriter = w_impl;
+    const data: &[byte] = &"abcd"[0: 4];
+    const written: usize = try block_on<usize>(async_println_bytes_to(w, data));
+    try assert_eq_i32(written as i32, 5);
+}
+
+test "mem_async_writer_write_returns_ready" {
+    try test_write_impl();
+}
+
+test "mem_async_writer_flush_returns_ready" {
+    try test_flush_impl();
+}
+
+test "mem_async_writer_write_all_returns_ready" {
+    try test_write_all_impl();
+}
+
+test "async_write_bytes_helper_returns_ready" {
+    try test_async_write_bytes_helper_impl();
+}
+
+test "async_write_cstr_helper_returns_ready" {
+    try test_async_write_cstr_helper_impl();
+}
+
+test "async_print_to_helper_returns_ready" {
+    try test_async_print_to_helper_impl();
+}
+
+test "async_println_to_helper_returns_ready" {
+    try test_async_println_to_helper_impl();
+}
+
+test "async_println_bytes_to_helper_returns_ready" {
+    try test_async_println_bytes_to_helper_impl();
+}
+
+fn test_read_impl() !void {
+    var data: [byte: 4] = [ 10, 20, 30, 40 ];
+    var r: MemAsyncReader = mem_async_reader_new(&data[0] as &const byte, 4);
+    var buf: [byte: 8] = [];
+    const f: Future<!usize> = r.read(&buf[0], 4);
+    const wk: Waker = Waker{};
+    const p: Poll<!usize> = f.poll(&wk);
+    var result: usize = 0;
+    match p {
+        .Ready(n) => { result = n catch { return error.AsyncIoFailed; }; },
+        .Pending(_) => { return error.UnexpectedPending; },
+    };
+    try assert_eq_i32(result as i32, 4);
+    try assert_eq_i32(buf[0] as i32, 10);
+    try assert_eq_i32(buf[3] as i32, 40);
+}
+
+fn test_read_exact_impl() !void {
+    var data: [byte: 4] = [ 10, 20, 30, 40 ];
+    var r_impl: MemAsyncReader = mem_async_reader_new(&data[0] as &const byte, 4);
+    const r: AsyncReader = r_impl;
+    var buf: [byte: 8] = [];
+    const f: Future<!usize> = r.read_exact(&buf[0], 4);
+    const wk: Waker = Waker{};
+    const p: Poll<!usize> = f.poll(&wk);
+    var result: usize = 0;
+    match p {
+        .Ready(n) => { result = n catch { return error.AsyncIoFailed; }; },
+        .Pending(_) => { return error.UnexpectedPending; },
+    };
+    try assert_eq_i32(result as i32, 4);
+    try assert_eq_i32(buf[0] as i32, 10);
+    try assert_eq_i32(buf[3] as i32, 40);
+}
+
+fn test_read_exact_unexpected_eof_impl() !void {
+    var data: [byte: 2] = [ 1, 2 ];
+    var r: MemAsyncReader = mem_async_reader_new(&data[0] as &const byte, 2);
+    var buf: [byte: 4] = [];
+    const f: Future<!usize> = r.read_exact(&buf[0], 4);
+    const wk: Waker = Waker{};
+    const p: Poll<!usize> = f.poll(&wk);
+    var saw_eof: i32 = 0;
+    match p {
+        .Ready(n) => {
+            const _value: usize = n catch |err| {
+                if @error_id(err) == @error_id(error.UnexpectedEof) {
+                    saw_eof = 1;
+                }
+                0 as usize;
+            };
+            _ = _value;
+        },
+        .Pending(_) => { return error.UnexpectedPending; },
+    };
+    try assert_eq_i32(saw_eof, 1);
+    try assert_eq_i32(buf[0] as i32, 1);
+    try assert_eq_i32(buf[1] as i32, 2);
+}
+
+test "mem_async_reader_read_returns_ready" {
+    try test_read_impl();
+}
+
+test "mem_async_reader_read_exact_returns_ready" {
+    try test_read_exact_impl();
+}
+
+test "mem_async_reader_read_exact_returns_unexpected_eof" {
+    try test_read_exact_unexpected_eof_impl();
+}
+
+// 联合测试：从 MemAsyncReader 读取并写入 MemAsyncWriter
+fn test_read_then_write_impl() !void {
+    var src: [byte: 4] = [ 65, 66, 67, 68 ];
+    var r: MemAsyncReader = mem_async_reader_new(&src[0] as &const byte, 4);
+    var w: MemAsyncWriter = mem_async_writer_new();
+    var buf: [byte: 8] = [];
+    const fr: Future<!usize> = r.read(&buf[0], 4);
+    const wk: Waker = Waker{};
+    var pr: Poll<!usize> = fr.poll(&wk);
+    var n: usize = 0;
+    match pr {
+        .Ready(k) => { n = k catch { return error.AsyncIoFailed; }; },
+        .Pending(_) => { return error.UnexpectedPending; },
+    };
+    try assert_eq_i32(n as i32, 4);
+    const fw: Future<!usize> = w.write(&buf[0] as &const byte, n);
+    pr = fw.poll(&wk);
+    match pr {
+        .Ready(k) => { n = k catch { return error.AsyncIoFailed; }; },
+        .Pending(_) => { return error.UnexpectedPending; },
+    };
+    try assert_eq_i32(n as i32, 4);
+}
+
+test "mem_async_read_then_write" {
+    try test_read_then_write_impl();
+}

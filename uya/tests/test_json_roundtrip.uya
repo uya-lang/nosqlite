@@ -1,0 +1,70 @@
+// 测试 std.json 往返：parse → encode_to → parse，校验 JsonValue 一致
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.parser.parse;
+use std.json.encoder.encode_to;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.mem.arena.arena_reset;
+
+export fn main() i32 {
+    var arena_buf: [byte: 8192] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 8192);
+    var out_buf: [byte: 256] = [];
+
+    // 原始 JSON {"x":1}
+    var inp: [byte: 10] = [];
+    inp[0] = 123;
+    inp[1] = 34;
+    inp[2] = 120;
+    inp[3] = 34;
+    inp[4] = 58;
+    inp[5] = 49;
+    inp[6] = 125;
+    const v1: JsonValue = parse(&a, &inp[0], 7) catch { return 1; };
+    const n1: usize = encode_to(&v1, &out_buf[0], 256) catch { return 2; };
+    arena_reset(&a);
+    const v2: JsonValue = parse(&a, &out_buf[0], n1) catch { return 3; };
+    match v2 {
+        .obj(o) => {
+            if o.len != 1 { return 4; }
+            if o.pairs == null { return 5; }
+            if o.pairs[0].key.len != 1 || o.pairs[0].key.ptr[0] != 120 { return 6; }
+            match o.pairs[0].value {
+                .int_val(x) => { if x != 1 { return 7; } },
+                else => { return 8; },
+            }
+        },
+        else => { return 9; },
+    }
+
+    // [1,2] 往返
+    inp[0] = 91;
+    inp[1] = 49;
+    inp[2] = 44;
+    inp[3] = 50;
+    inp[4] = 93;
+    arena_reset(&a);
+    const arr1: JsonValue = parse(&a, &inp[0], 5) catch { return 10; };
+    const n2: usize = encode_to(&arr1, &out_buf[0], 256) catch { return 11; };
+    arena_reset(&a);
+    const arr2: JsonValue = parse(&a, &out_buf[0], n2) catch { return 12; };
+    match arr2 {
+        .arr(ar) => {
+            if ar.len != 2 { return 13; }
+            if ar.items == null { return 14; }
+            match ar.items[0] {
+                .int_val(x) => { if x != 1 { return 15; } },
+                else => { return 16; },
+            }
+            match ar.items[1] {
+                .int_val(x) => { if x != 2 { return 17; } },
+                else => { return 18; },
+            }
+        },
+        else => { return 19; },
+    }
+
+    return 0;
+}

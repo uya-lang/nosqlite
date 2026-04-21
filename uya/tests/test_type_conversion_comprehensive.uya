@@ -1,0 +1,117 @@
+// 类型转换完整测试程序
+// 测试所有支持的类型转换：i32↔byte、i32↔bool、i32↔usize、&void↔&T
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+test "i32 to byte" {
+    // i32 as byte（截断）
+    var i32_val: i32 = 256;
+    var byte_val: byte = i32_val as byte;
+    try assert_eq_i32(byte_val as i32, 0);  // 256 截断为 byte 应该是 0
+    
+    var i32_val2: i32 = 42;
+    var byte_val2: byte = i32_val2 as byte;
+    try assert_eq_i32(byte_val2 as i32, 42);
+    
+    var i32_val3: i32 = 300;
+    var byte_val3: byte = i32_val3 as byte;
+    try assert_eq_i32(byte_val3 as i32, 44);  // 300 % 256 = 44
+}
+
+test "byte to i32" {
+    // byte as i32（零扩展）
+    var byte_val4: byte = 200;
+    var i32_val4: i32 = byte_val4 as i32;
+    try assert_eq_i32(i32_val4, 200);
+    
+    var byte_val5: byte = 0;
+    var i32_val5: i32 = byte_val5 as i32;
+    try assert_eq_i32(i32_val5, 0);
+}
+
+test "i32 to bool" {
+    // i32 as bool（非零值为 true，零值为 false）
+    var i32_val6: i32 = 42;
+    var bool_val1: bool = i32_val6 as bool;
+    try expect(bool_val1);
+    
+    var i32_val7: i32 = 0;
+    var bool_val2: bool = i32_val7 as bool;
+    try expect(!bool_val2);
+    
+    var i32_val8: i32 = -1;
+    var bool_val3: bool = i32_val8 as bool;
+    try expect(bool_val3);
+}
+
+test "bool to i32" {
+    // bool as i32（true 转换为 1，false 转换为 0）
+    var bool_val4: bool = true;
+    var i32_val9: i32 = bool_val4 as i32;
+    try assert_eq_i32(i32_val9, 1);
+    
+    var bool_val5: bool = false;
+    var i32_val10: i32 = bool_val5 as i32;
+    try assert_eq_i32(i32_val10, 0);
+}
+
+test "i32 to usize" {
+    // i32 as usize
+    var i32_val11: i32 = 123;
+    var usize_val1: usize = i32_val11 as usize;
+    try assert_eq_i32(usize_val1 as i32, 123);
+    
+    var i32_val12: i32 = 0;
+    var usize_val2: usize = i32_val12 as usize;
+    try assert_eq_i32(usize_val2 as i32, 0);
+}
+
+test "usize to i32" {
+    // usize as i32
+    var usize_val3: usize = 456 as usize;
+    var i32_val13: i32 = usize_val3 as i32;
+    try assert_eq_i32(i32_val13, 456);
+    
+    var usize_val4: usize = 0 as usize;
+    var i32_val14: i32 = usize_val4 as i32;
+    try assert_eq_i32(i32_val14, 0);
+}
+
+test "pointer conversion" {
+    // &T as &void（类型擦除）
+    var x: i32 = 42;
+    var i32_ptr: &i32 = &x;
+    var void_ptr: &void = i32_ptr as &void;
+    try expect(void_ptr != null);
+    
+    // &void as &T（类型恢复）
+    var recovered_i32_ptr: &i32 = void_ptr as &i32;
+    try expect(recovered_i32_ptr != null);
+    try assert_eq_i32(*recovered_i32_ptr, 42);
+}
+
+test "conversion in expr" {
+    // 类型转换用于比较运算
+    var byte_val6: byte = 42;
+    try assert_eq_i32(byte_val6 as i32, 42);
+    
+    // 类型转换用于算术运算
+    var byte_val7: byte = 10;
+    var i32_val15: i32 = 20;
+    var result: i32 = (byte_val7 as i32) + i32_val15;
+    try assert_eq_i32(result, 30);
+    
+    // 类型转换用于条件表达式
+    var i32_val16: i32 = 42;
+    var bool_val6: bool = (i32_val16 as bool);
+    try expect(bool_val6);
+}
+
+test "conversion priority" {
+    // 类型转换优先级高于乘除运算
+    var i32_val17: i32 = 10;
+    var byte_val8: byte = 2;
+    var result2: i32 = (i32_val17 as byte) as i32 * (byte_val8 as i32);
+    try assert_eq_i32(result2, 20);
+}

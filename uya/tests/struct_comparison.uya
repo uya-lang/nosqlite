@@ -1,0 +1,49 @@
+// 测试结构体比较（== 和 !=）
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn test_struct_equal() !void {
+    const p1: Point = Point{ x: 10, y: 20 };
+    const p2: Point = Point{ x: 10, y: 20 };
+    
+    try expect(p1 == p2);
+}
+
+fn test_struct_not_equal() !void {
+    const p1: Point = Point{ x: 10, y: 20 };
+    const p3: Point = Point{ x: 10, y: 30 };
+    
+    try expect(p1 != p3);
+}
+
+fn test_ne_returns_false() !void {
+    const p1: Point = Point{ x: 10, y: 20 };
+    const p2: Point = Point{ x: 10, y: 20 };
+    
+    try expect(!(p1 != p2));
+}
+
+fn test_eq_returns_false() !void {
+    const p1: Point = Point{ x: 10, y: 20 };
+    const p3: Point = Point{ x: 10, y: 30 };
+    
+    try expect(!(p1 == p3));
+}
+
+export fn main() i32 {
+    test_suite_begin("Struct Comparison Tests");
+    run_test("struct equal", test_struct_equal);
+    run_test("struct not equal", test_struct_not_equal);
+    run_test("ne returns false", test_ne_returns_false);
+    run_test("eq returns false", test_eq_returns_false);
+    return test_suite_end();
+}

@@ -1,0 +1,62 @@
+// test_tls_aes_gcm.uya - TLS AES / AES-GCM 测试
+// 阶段 2.3：AES 块、AES-GCM 向量
+
+use std.runtime.entry;
+use tls.crypto.aes;
+use tls.crypto.gcm;
+
+extern fn aes_encrypt_block(key: &const byte, key_len: usize, in_block: &const byte, out_block: &byte) void;
+extern fn aes_gcm_encrypt(key: &const byte, key_len: usize, nonce: &const byte, nonce_len: usize, aad: &const byte, aad_len: usize, plain: &const byte, plain_len: usize, cipher_out: &byte, tag_out: &byte) i32;
+extern fn aes_gcm_decrypt(key: &const byte, key_len: usize, nonce: &const byte, nonce_len: usize, aad: &const byte, aad_len: usize, cipher: &const byte, cipher_len: usize, tag: &const byte, plain_out: &byte) i32;
+
+export fn main() i32 {
+    // NIST FIPS 197 Appendix C.1: AES-128 单块
+    const key: [byte: 16] = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f];
+    const pt: [byte: 16] = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+    var ct: [byte: 16] = [];
+    aes_encrypt_block(&key[0], 16, &pt[0], &ct[0]);
+    if ct[0] != 0x69 { return 1; }
+    if ct[1] != 0xc4 { return 2; }
+    if ct[15] != 0x5a { return 3; }
+
+    // NIST SP 800-38D 示例：Key 128-bit, IV 96-bit, 空 AAD 空 PT -> Tag
+    // Key FEFFE9928665731C6D6A8F9467308308, IV CAFEBABEFACEDBADDECAF888
+    // 预期 Tag: 3247184B3C4F69A44DBCD22887BBB418
+    const key_gcm: [byte: 16] = [0xfe, 0xff, 0xe9, 0x92, 0x86, 0x65, 0x73, 0x1c, 0x6d, 0x6a, 0x8f, 0x94, 0x67, 0x30, 0x83, 0x08];
+    const nonce: [byte: 12] = [0xca, 0xfe, 0xba, 0xbe, 0xfa, 0xce, 0xdb, 0xad, 0xde, 0xca, 0xf8, 0x88];
+    var tag_empty: [byte: 16] = [];
+    var ct_empty: [byte: 1] = [];
+    if aes_gcm_encrypt(&key_gcm[0], 16, &nonce[0], 12, null, 0, null, 0, &ct_empty[0], &tag_empty[0]) != 0 {
+        return 10;
+    }
+    if tag_empty[0] != 0x32 { return 11; }
+    if tag_empty[1] != 0x47 { return 12; }
+    if tag_empty[15] != 0x18 { return 13; }
+
+    // NIST SP 800-38D 常用向量：zero key/nonce, 16-byte zero PT
+    // CT: 0388DACE60B6A392F328C2B971B2FE78
+    // Tag: AB6E47D42CEC13BDF53A67B21257BDDF
+    const key_zero: [byte: 16] = [0:16];
+    const nonce_zero: [byte: 12] = [0:12];
+    const pt_zero: [byte: 16] = [0:16];
+    var ct_zero: [byte: 16] = [];
+    var tag_zero: [byte: 16] = [];
+    if aes_gcm_encrypt(&key_zero[0], 16, &nonce_zero[0], 12, null, 0, &pt_zero[0], 16, &ct_zero[0], &tag_zero[0]) != 0 {
+        return 14;
+    }
+    if ct_zero[0] != 0x03 || ct_zero[1] != 0x88 || ct_zero[15] != 0x78 {
+        return 15;
+    }
+    if tag_zero[0] != 0xab || tag_zero[1] != 0x6e || tag_zero[15] != 0xdf {
+        return 16;
+    }
+    var roundtrip: [byte: 16] = [];
+    if aes_gcm_decrypt(&key_zero[0], 16, &nonce_zero[0], 12, null, 0, &ct_zero[0], 16, &tag_zero[0], &roundtrip[0]) != 0 {
+        return 17;
+    }
+    if roundtrip[0] != 0 || roundtrip[15] != 0 {
+        return 18;
+    }
+
+    return 0;
+}

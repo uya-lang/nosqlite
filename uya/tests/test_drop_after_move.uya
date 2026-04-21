@@ -1,0 +1,33 @@
+// 移动语义 + drop：被移动的变量离开作用域时不调用 drop
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+var drop_count: i32 = 0;
+
+struct S {
+  id: i32,
+  fn drop(self: S) void {
+    drop_count = drop_count + 1;
+  }
+}
+
+fn test_drop_after_move() !void {
+  drop_count = 0;
+  {
+    const a: S = S{ id: 42 };
+    const b: S = a;  // a 移入 b，a 不再持有值
+  }  // 仅 b 离开作用域，应只 drop 一次
+  try assert_eq_i32(drop_count, 1);
+}
+
+export fn main() i32 {
+  test_suite_begin("Drop After Move Tests");
+  
+  run_test("drop after move", test_drop_after_move);
+  
+  return test_suite_end();
+}

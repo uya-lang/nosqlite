@@ -1,0 +1,71 @@
+// tests/test_loop_unroll.uya
+// 测试循环展开优化
+
+use std.testing.assert_eq_i32;
+
+// 全局计数器用于验证循环执行次数
+var loop_counter: i32 = 0;
+var sum_result: i32 = 0;
+
+test "simple_unroll" {
+    loop_counter = 0;
+    
+    // 常量循环 0..3，应展开为 3 次调用
+    for 0..3 |_| {
+        loop_counter = loop_counter + 1;
+    }
+    
+    // 展开后应该是常量 3
+    try assert_eq_i32(loop_counter, 3);
+}
+
+test "loop_variable" {
+    sum_result = 0;
+    
+    // 循环变量 i 应在展开时被替换为常量
+    for 0..4 |i| {
+        sum_result = sum_result + i;
+    }
+    
+    // 0 + 1 + 2 + 3 = 6
+    try assert_eq_i32(sum_result, 6);
+}
+
+test "nested_loop" {
+    loop_counter = 0;
+    
+    // 嵌套循环：外层 2 次，内层 3 次
+    for 0..2 |_| {
+        for 0..3 |_| {
+            loop_counter = loop_counter + 1;
+        }
+    }
+    
+    // 2 * 3 = 6
+    try assert_eq_i32(loop_counter, 6);
+}
+
+test "unroll_with_folding" {
+    sum_result = 0;
+    
+    // 循环体内的表达式应被常量折叠
+    for 0..3 |i| {
+        // i * 2 应在展开时计算
+        sum_result = sum_result + i * 2;
+    }
+    
+    // 0*2 + 1*2 + 2*2 = 0 + 2 + 4 = 6
+    try assert_eq_i32(sum_result, 6);
+}
+
+test "expr_in_loop" {
+    sum_result = 0;
+    
+    // 循环体内的表达式
+    for 0..3 |i| {
+        sum_result = sum_result + (2 - i);
+    }
+    
+    // (2-0) + (2-1) + (2-2) = 2 + 1 + 0 = 3
+    try assert_eq_i32(sum_result, 3);
+}

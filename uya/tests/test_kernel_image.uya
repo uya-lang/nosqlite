@@ -1,0 +1,335 @@
+// Tests for kernel image validation (3-stage)
+
+use kernel.errors;
+use kernel.image;
+use kernel.rv32_scan;
+use std.testing.assert_eq_i32;
+use std.crypto.sha256;
+
+// ── Helper: write LE u32/u16 into array ──
+
+fn w32(buf: &[byte], off: usize, val: u32) void {
+    buf.ptr[off] = (val & 255u32) as byte;
+    buf.ptr[off + 1] = ((val >> 8) & 255u32) as byte;
+    buf.ptr[off + 2] = ((val >> 16) & 255u32) as byte;
+    buf.ptr[off + 3] = ((val >> 24) & 255u32) as byte;
+}
+
+fn w16(buf: &[byte], off: usize, val: u16) void {
+    buf.ptr[off] = (val & 255u16) as byte;
+    buf.ptr[off + 1] = ((val >> 8) & 255u16) as byte;
+}
+
+// Build minimal valid v2 image: header + 4-byte code (ecall)
+fn build_test_image(buf: &[byte]) void {
+    const total: u32 = IMAGE_HEADER_SIZE + 4u32;
+    // Zero out
+    var i: usize = 0;
+    while i < total as usize && i < buf.len {
+        buf.ptr[i] = 0;
+        i = i + 1;
+    }
+
+    w32(buf, 0, IMAGE_MAGIC);       // magic
+    w16(buf, 4, 2);                  // format_version
+    w16(buf, 6, 1);                  // api_version
+    w32(buf, 8, total);             // image_size
+    w32(buf, 12, 0);                // entry_offset
+    w32(buf, 16, 4);                // code_size
+    w32(buf, 20, 0);                // rodata_size
+    w32(buf, 24, 0);                // reloc_count
+    w32(buf, 96, 0);                // data_size
+    w32(buf, 100, 0);               // bss_size
+    w32(buf, 104, 0);               // stack_size_hint
+    w32(buf, 108, IMAGE_HEADER_SIZE); // code_offset
+    w32(buf, 112, IMAGE_HEADER_SIZE + 4u32); // rodata_offset
+    w32(buf, 116, IMAGE_HEADER_SIZE + 4u32); // data_offset
+    w32(buf, 120, IMAGE_HEADER_SIZE + 4u32); // reloc_offset
+    w32(buf, 124, 0);               // profile_id
+    w32(buf, 128, 0);               // flags
+    buf.ptr[64] = 1;                // build_mode = container
+    buf.ptr[65] = image_target_arch_to_byte(ImageTargetArch.ita_rv32);
+    buf.ptr[132] = image_bridge_kind_to_byte(ImageBridgeKind.ibk_trap);
+    w32(buf, 136, IMAGE_HEADER_SIZE); // entry_va
+    w32(buf, 140, IMAGE_HEADER_SIZE); // code_va
+    w32(buf, 144, IMAGE_HEADER_SIZE + 4u32); // rodata_va
+    w32(buf, 148, IMAGE_HEADER_SIZE + 4u32); // data_va
+    w32(buf, 60, 0);                // required_caps
+
+    // Code: ecall = 0x00000073 (LE)
+    w32(buf, IMAGE_HEADER_SIZE as usize, 115u32);
+
+    // Compute SHA-256 (sha256 field at offset 28 is already zeroed)
+    var digest: [byte: 32] = [];
+    sha256_digest(buf[0: total as usize], digest[0: 32]);
+
+    // Write hash
+    i = 0;
+    while i < 32 {
+        buf.ptr[28 + i] = digest[i];
+        i = i + 1;
+    }
+}
+
+// ── Header Parse Tests ──
+
+test "image_parse_header_valid" {
+    var buf: [byte: 192] = [];
+    build_test_image(buf[0: 192]);
+
+    const hdr: ImageHeader = try image_parse_header(buf[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    try assert_eq_i32(hdr.magic as i32, IMAGE_MAGIC as i32);
+    try assert_eq_i32(hdr.code_size as i32, 4);
+    try assert_eq_i32(hdr.entry_offset as i32, 0);
+    try assert_eq_i32(hdr.build_mode as i32, 1);
+    try assert_eq_i32(hdr.target_arch as i32, ImageTargetArch.ita_rv32 as i32);
+    try assert_eq_i32(hdr.bridge_kind as i32, ImageBridgeKind.ibk_trap as i32);
+    try assert_eq_i32(hdr.entry_va as i32, IMAGE_HEADER_SIZE as i32);
+    try assert_eq_i32(hdr.code_va as i32, IMAGE_HEADER_SIZE as i32);
+}
+
+test "image_parse_header_bad_magic" {
+    var buf: [byte: 192] = [];
+    build_test_image(buf[0: 192]);
+    buf[1] = 0;  // corrupt magic byte (0x41 → 0x00)
+    var failed: i32 = 0;
+    const hdr: ImageHeader = image_parse_header(buf[0: IMAGE_HEADER_SIZE as usize + 4usize]) catch |err| {
+        failed = 1;
+        ImageHeader{ magic: 0, format_version: 0, container_api_version: 0,
+            image_size: 0, entry_offset: 0, code_size: 0, rodata_size: 0,
+            data_size: 0, bss_size: 0, stack_size_hint: 0, reloc_count: 0,
+            code_offset: 0, rodata_offset: 0, data_offset: 0, reloc_offset: 0,
+            profile_id: 0, sha256: [], required_caps: 0, flags: 0, build_mode: 0,
+            target_arch: ImageTargetArch.ita_unknown, bridge_kind: ImageBridgeKind.ibk_unknown };
+    };
+    try assert_eq_i32(failed, 1);
+}
+
+// ── Stage 1: Integrity Tests ──
+
+test "image_verify_integrity_pass" {
+    var buf: [byte: 192] = [];
+    build_test_image(buf[0: 192]);
+    try image_verify_integrity(buf[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+}
+
+test "image_verify_integrity_tampered" {
+    var buf: [byte: 192] = [];
+    build_test_image(buf[0: 192]);
+    buf[IMAGE_HEADER_SIZE as usize + 1usize] = 255;  // tamper code byte
+    var failed: i32 = 0;
+    image_verify_integrity(buf[0: IMAGE_HEADER_SIZE as usize + 4usize]) catch |err| { failed = 1; };
+    try assert_eq_i32(failed, 1);
+}
+
+// ── Stage 2: Structure Tests ──
+
+test "image_verify_structure_pass" {
+    var buf: [byte: 192] = [];
+    build_test_image(buf[0: 192]);
+    const hdr: ImageHeader = try image_parse_header(buf[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    try image_verify_structure(&hdr, IMAGE_HEADER_SIZE + 4u32);
+}
+
+test "image_verify_structure_bad_size" {
+    var buf: [byte: 192] = [];
+    build_test_image(buf[0: 192]);
+    const hdr: ImageHeader = try image_parse_header(buf[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    var failed: i32 = 0;
+    image_verify_structure(&hdr, 200) catch |err| { failed = 1; };
+    try assert_eq_i32(failed, 1);
+}
+
+test "image_verify_structure_bad_arch" {
+    var buf: [byte: 192] = [];
+    build_test_image(buf[0: 192]);
+    buf[65] = image_target_arch_to_byte(ImageTargetArch.ita_unknown);
+    var digest: [byte: 32] = [];
+    var i: usize = 0;
+    while i < 32 {
+        buf[28 + i] = 0;
+        i = i + 1;
+    }
+    sha256_digest(buf[0: IMAGE_HEADER_SIZE as usize + 4usize], digest[0: 32]);
+    i = 0;
+    while i < 32 {
+        buf[28 + i] = digest[i];
+        i = i + 1;
+    }
+    const hdr: ImageHeader = try image_parse_header(buf[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    var failed: i32 = 0;
+    image_verify_structure(&hdr, IMAGE_HEADER_SIZE + 4u32) catch |err| { failed = 1; };
+    try assert_eq_i32(failed, 1);
+}
+
+test "image_verify_structure_x86_64_pass" {
+    var buf: [byte: 192] = [];
+    build_test_image(buf[0: 192]);
+    buf[65] = image_target_arch_to_byte(ImageTargetArch.ita_x86_64);
+    buf[132] = image_bridge_kind_to_byte(ImageBridgeKind.ibk_call_gate);
+    var digest: [byte: 32] = [];
+    var i: usize = 0;
+    while i < 32 {
+        buf[28 + i] = 0;
+        i = i + 1;
+    }
+    sha256_digest(buf[0: IMAGE_HEADER_SIZE as usize + 4usize], digest[0: 32]);
+    i = 0;
+    while i < 32 {
+        buf[28 + i] = digest[i];
+        i = i + 1;
+    }
+    const hdr: ImageHeader = try image_parse_header(buf[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    try image_verify_structure(&hdr, IMAGE_HEADER_SIZE + 4u32);
+}
+
+test "image_verify_relocations_x86_64_pass" {
+    var buf: [byte: 256] = [];
+    build_test_image(buf[0: 256]);
+    buf[65] = image_target_arch_to_byte(ImageTargetArch.ita_x86_64);
+    buf[132] = image_bridge_kind_to_byte(ImageBridgeKind.ibk_call_gate);
+    w32(buf[0: 256], 20, 8u32);               // rodata_size
+    w32(buf[0: 256], 24, 1u32);               // reloc_count
+    w32(buf[0: 256], 96, 8u32);               // data_size
+    w32(buf[0: 256], 108, IMAGE_HEADER_SIZE); // code_offset
+    w32(buf[0: 256], 112, IMAGE_HEADER_SIZE + 4u32);  // rodata_offset
+    w32(buf[0: 256], 116, IMAGE_HEADER_SIZE + 12u32); // data_offset
+    w32(buf[0: 256], 120, IMAGE_HEADER_SIZE + 20u32); // reloc_offset
+    w32(buf[0: 256], 140, IMAGE_HEADER_SIZE);         // code_va
+    w32(buf[0: 256], 144, IMAGE_HEADER_SIZE + 4u32);  // rodata_va
+    w32(buf[0: 256], 148, IMAGE_HEADER_SIZE + 12u32); // data_va
+    w32(buf[0: 256], 8, IMAGE_HEADER_SIZE + 28u32);   // image_size
+    // rodata payload
+    buf[IMAGE_HEADER_SIZE as usize + 4usize] = 65 as byte;
+    // data payload
+    w32(buf[0: 256], IMAGE_HEADER_SIZE as usize + 12usize, IMAGE_HEADER_SIZE + 12u32);
+    w32(buf[0: 256], IMAGE_HEADER_SIZE as usize + 16usize, 0u32);
+    // one normalized relocation record: target=data_va, value=rodata_va
+    w32(buf[0: 256], IMAGE_HEADER_SIZE as usize + 20usize, IMAGE_HEADER_SIZE + 12u32);
+    w32(buf[0: 256], IMAGE_HEADER_SIZE as usize + 24usize, IMAGE_HEADER_SIZE + 4u32);
+    var digest: [byte: 32] = [];
+    var i: usize = 0;
+    while i < 32 {
+        buf[28 + i] = 0;
+        i = i + 1;
+    }
+    sha256_digest(buf[0: IMAGE_HEADER_SIZE as usize + 28usize], digest[0: 32]);
+    i = 0;
+    while i < 32 {
+        buf[28 + i] = digest[i];
+        i = i + 1;
+    }
+    const hdr: ImageHeader = try image_parse_header(buf[0: IMAGE_HEADER_SIZE as usize + 28usize]);
+    try image_verify_relocations(buf[0: IMAGE_HEADER_SIZE as usize + 28usize], &hdr);
+}
+
+test "image_verify_relocations_x86_64_bad_target" {
+    var buf: [byte: 256] = [];
+    build_test_image(buf[0: 256]);
+    buf[65] = image_target_arch_to_byte(ImageTargetArch.ita_x86_64);
+    buf[132] = image_bridge_kind_to_byte(ImageBridgeKind.ibk_call_gate);
+    w32(buf[0: 256], 20, 8u32);
+    w32(buf[0: 256], 24, 1u32);
+    w32(buf[0: 256], 96, 8u32);
+    w32(buf[0: 256], 112, IMAGE_HEADER_SIZE + 4u32);
+    w32(buf[0: 256], 116, IMAGE_HEADER_SIZE + 12u32);
+    w32(buf[0: 256], 120, IMAGE_HEADER_SIZE + 20u32);
+    w32(buf[0: 256], 140, IMAGE_HEADER_SIZE);
+    w32(buf[0: 256], 144, IMAGE_HEADER_SIZE + 4u32);
+    w32(buf[0: 256], 148, IMAGE_HEADER_SIZE + 12u32);
+    w32(buf[0: 256], 8, IMAGE_HEADER_SIZE + 28u32);
+    // malformed target_va points into rodata, not writable data/bss
+    w32(buf[0: 256], IMAGE_HEADER_SIZE as usize + 20usize, IMAGE_HEADER_SIZE + 4u32);
+    w32(buf[0: 256], IMAGE_HEADER_SIZE as usize + 24usize, IMAGE_HEADER_SIZE + 4u32);
+    var digest: [byte: 32] = [];
+    var i: usize = 0;
+    while i < 32 {
+        buf[28 + i] = 0;
+        i = i + 1;
+    }
+    sha256_digest(buf[0: IMAGE_HEADER_SIZE as usize + 28usize], digest[0: 32]);
+    i = 0;
+    while i < 32 {
+        buf[28 + i] = digest[i];
+        i = i + 1;
+    }
+    const hdr: ImageHeader = try image_parse_header(buf[0: IMAGE_HEADER_SIZE as usize + 28usize]);
+    var failed: i32 = 0;
+    image_verify_relocations(buf[0: IMAGE_HEADER_SIZE as usize + 28usize], &hdr) catch |err| { failed = 1; };
+    try assert_eq_i32(failed, 1);
+}
+
+test "image_verify_structure_bss_only_span_pass" {
+    var buf: [byte: 192] = [];
+    build_test_image(buf[0: 192]);
+    w32(buf[0: 192], 100, 16u32); // bss_size
+    w32(buf[0: 192], 148, IMAGE_HEADER_SIZE + 4u32); // data_va doubles as bss base when data_size=0
+    var digest: [byte: 32] = [];
+    var i: usize = 0;
+    while i < 32 {
+        buf[28 + i] = 0;
+        i = i + 1;
+    }
+    sha256_digest(buf[0: IMAGE_HEADER_SIZE as usize + 4usize], digest[0: 32]);
+    i = 0;
+    while i < 32 {
+        buf[28 + i] = digest[i];
+        i = i + 1;
+    }
+    const hdr: ImageHeader = try image_parse_header(buf[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    try image_verify_structure(&hdr, IMAGE_HEADER_SIZE + 4u32);
+}
+
+// ── Stage 3: RV32 Instruction Policy Tests ──
+
+test "rv32_scan_ecall_allowed" {
+    var code: [byte: 4] = [115, 0, 0, 0];  // ecall
+    try rv32_scan_policy(code[0: 4]);
+}
+
+test "rv32_scan_mret_denied" {
+    // mret = 0x30200073 → LE: [0x73, 0x00, 0x20, 0x30]
+    var code: [byte: 4] = [115, 0, 32, 48];
+    var denied: i32 = 0;
+    rv32_scan_policy(code[0: 4]) catch |err| { denied = 1; };
+    try assert_eq_i32(denied, 1);
+}
+
+test "rv32_scan_csrr_denied" {
+    // csrrw: opcode=0x73, funct3=001 → insn = 0x1073
+    var code: [byte: 4] = [115, 16, 0, 0];
+    var denied: i32 = 0;
+    rv32_scan_policy(code[0: 4]) catch |err| { denied = 1; };
+    try assert_eq_i32(denied, 1);
+}
+
+test "rv32_scan_fence_i_denied" {
+    // fence.i: opcode=0x0F, funct3=001 → insn = 0x100F
+    var code: [byte: 4] = [15, 16, 0, 0];
+    var denied: i32 = 0;
+    rv32_scan_policy(code[0: 4]) catch |err| { denied = 1; };
+    try assert_eq_i32(denied, 1);
+}
+
+test "rv32_scan_wfi_denied" {
+    // wfi = 0x10500073 → LE: [0x73, 0x00, 0x50, 0x10]
+    var code: [byte: 4] = [115, 0, 80, 16];
+    var denied: i32 = 0;
+    rv32_scan_policy(code[0: 4]) catch |err| { denied = 1; };
+    try assert_eq_i32(denied, 1);
+}
+
+test "rv32_scan_normal_insn_allowed" {
+    // addi x1, x0, 42 = 0x02A00013 → LE: [0x13, 0x00, 0xA0, 0x02]
+    var code: [byte: 4] = [19, 0, 160, 2];
+    try rv32_scan_policy(code[0: 4]);
+}
+
+// ── Full 3-stage Validation ──
+
+test "image_validate_full_pass" {
+    var buf: [byte: 192] = [];
+    build_test_image(buf[0: 192]);
+    const hdr: ImageHeader = try image_validate(buf[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    try assert_eq_i32(hdr.code_size as i32, 4);
+}

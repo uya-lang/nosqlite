@@ -1,0 +1,15 @@
+use std.runtime.entry;
+
+enum SmallTag {
+    a,
+    b,
+}
+
+export fn main() i32 {
+    const raw: i32 = 1;
+    const tag: SmallTag = raw as SmallTag;
+    if tag == SmallTag.b {
+        return 0;
+    }
+    return 1;
+}

@@ -1,0 +1,8 @@
+// SIMD 向量元素类型第一阶段仅允许数值标量类型
+// 预期编译失败
+
+type BadVec = @vector(bool, 4);
+
+export fn main() i32 {
+    return 0;
+}

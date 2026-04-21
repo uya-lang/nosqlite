@@ -1,0 +1,81 @@
+// 测试 std.yaml Flow 解析：空数组、嵌套数组、混合类型
+use std.runtime.entry;
+use std.yaml.value.YamlValue;
+use std.yaml.parser.parse;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 8192] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 8192);
+
+    var buf: [byte: 64] = [];
+    buf[0] = 91;
+    buf[1] = 93;
+    const v0: YamlValue = parse(&a, &buf[0], 2) catch { return 1; };
+    match v0 {
+        .y_arr(ar) => { if ar.len != 0 { return 2; } },
+        else => { return 3; },
+    }
+
+    buf[0] = 91;
+    buf[1] = 49;
+    buf[2] = 44;
+    buf[3] = 50;
+    buf[4] = 44;
+    buf[5] = 51;
+    buf[6] = 93;
+    const v1: YamlValue = parse(&a, &buf[0], 7) catch { return 4; };
+    match v1 {
+        .y_arr(ar) => {
+            if ar.len != 3 { return 5; }
+            if ar.items == null { return 6; }
+            match ar.items[0] {
+                .int_val(x) => { if x != 1 { return 7; } },
+                else => { return 8; },
+            }
+            match ar.items[1] {
+                .int_val(x) => { if x != 2 { return 9; } },
+                else => { return 10; },
+            }
+            match ar.items[2] {
+                .int_val(x) => { if x != 3 { return 11; } },
+                else => { return 12; },
+            }
+        },
+        else => { return 13; },
+    }
+
+    buf[0] = 91;
+    buf[1] = 91;
+    buf[2] = 49;
+    buf[3] = 93;
+    buf[4] = 44;
+    buf[5] = 91;
+    buf[6] = 93;
+    buf[7] = 93;
+    const v2: YamlValue = parse(&a, &buf[0], 8) catch { return 14; };
+    match v2 {
+        .y_arr(outer) => {
+            if outer.len != 2 { return 15; }
+            match outer.items[0] {
+                .y_arr(inner) => {
+                    if inner.len != 1 { return 16; }
+                    match inner.items[0] {
+                        .int_val(x) => { if x != 1 { return 17; } },
+                        else => { return 18; },
+                    }
+                },
+                else => { return 19; },
+            }
+            match outer.items[1] {
+                .y_arr(emp) => { if emp.len != 0 { return 20; } },
+                else => { return 21; },
+            }
+        },
+        else => { return 22; },
+    }
+
+    return 0;
+}

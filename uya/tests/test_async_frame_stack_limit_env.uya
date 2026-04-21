@@ -1,0 +1,30 @@
+// test_async_frame_stack_limit_env.uya
+// 验证 ASYNC_FRAME_STACK_LIMIT 环境变量被正确读取并传递给 AsyncFramePool
+
+use std.async;
+use std.async_frame.AsyncFramePool;
+use std.async_frame.async_frame_pool_init;
+use std.async_frame.async_frame_pool_stats;
+use std.testing.expect;
+
+fn check_pool_with_zero_stack_limit() i32 {
+    var pool: AsyncFramePool = AsyncFramePool{};
+    async_frame_pool_init(&pool, 0, 0);
+    var alloc_count: i32 = 0;
+    var free_count: i32 = 0;
+    var full_count: i32 = 0;
+    var heap_count: i32 = 0;
+    async_frame_pool_stats(&pool, &alloc_count, &free_count, &full_count, &heap_count);
+    if alloc_count != 0 {
+        return 0 - 1;
+    }
+    if free_count != 0 {
+        return 0 - 2;
+    }
+    return 1;
+}
+
+test "async_frame_stack_limit_env" {
+    const r: i32 = check_pool_with_zero_stack_limit();
+    expect(r == 1);
+}

@@ -1,0 +1,20 @@
+// @vector.reduce_add：水平求和，标量结果
+type V4i = @vector(i32, 4);
+type V2f = @vector(f32, 2);
+type V8u = @vector(u32, 8);
+
+export fn main() i32 {
+    const a: V4i = @vector.splat(3);
+    if @vector.reduce_add(a) != 12 {
+        return 1;
+    }
+    const b: V2f = @vector.splat(2.5f32);
+    if @vector.reduce_add(b) != 5.0f32 {
+        return 2;
+    }
+    const c: V8u = @vector.splat(1 as u32);
+    if @vector.reduce_add(c) != 8 as u32 {
+        return 3;
+    }
+    return 0;
+}

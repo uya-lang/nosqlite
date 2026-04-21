@@ -1,0 +1,38 @@
+// test_naked_fn.uya - 测试 @naked_fn 函数属性
+// TDD: 此测试在实现前应该编译失败（红）
+
+use std.runtime.entry;
+
+// 顶层函数定义
+@naked_fn fn simple_naked() void {
+    @asm {
+        "ret" ();
+    } clobbers = [];
+}
+
+// 带参数的 naked 函数 - 使用正确的 AT&T 语法
+@naked_fn fn naked_with_param(x: i32) i32 {
+    @asm {
+        "mov %0, %%eax" (x ->);
+        "ret" ();
+    } clobbers = ["eax"];
+}
+
+export @naked_fn fn exported_naked() void {
+    @asm {
+        "ret" ();
+    } clobbers = [];
+}
+
+// 测试用例
+test "naked_fn_basic" {
+    // 编译通过即验证成功
+}
+
+test "naked_fn_with_params" {
+    // 编译通过即验证成功
+}
+
+test "naked_fn_export" {
+    // 编译通过即验证成功
+}

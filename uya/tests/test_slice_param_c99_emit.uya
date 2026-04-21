@@ -1,0 +1,25 @@
+// tests/test_slice_param_c99_emit.uya — 切片形参 C99：按值 struct uya_slice_*（与 verify_slice_param_c99_emit.sh 配套）
+//
+// 含：带实现的函数、仅 extern 声明（无体），供生成 C 签名检查；运行期只调用有实现的函数。
+
+extern fn uya_test_slice_param_extern_decl(s: &[byte]) i32;
+
+fn uya_test_slice_param_def(s: &[byte]) i32 {
+    return s.len as i32;
+}
+
+fn uya_test_slice_param_call_inner() void {
+    var a: [byte: 8] = [];
+    const sl: &[byte] = a[0: 8];
+    _ = uya_test_slice_param_def(sl);
+}
+
+use std.testing.assert_eq_i32;
+
+test "slice_param_def_passes_slice_by_value" {
+    // 保持 helper 可达，便于 verify_slice_param_c99_emit.sh 检查普通调用点的 C 发射。
+    uya_test_slice_param_call_inner();
+    var a: [byte: 8] = [];
+    const sl: &[byte] = a[0: 8];
+    try assert_eq_i32(uya_test_slice_param_def(sl), 8);
+}

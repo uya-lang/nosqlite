@@ -1,0 +1,19 @@
+// SIMD：f64 向量 * 与 /
+type Vec4f64 = @vector(f64, 4);
+type Mask4 = @mask(4);
+
+export fn main() i32 {
+    const a: Vec4f64 = @vector.splat(2.0);
+    const b: Vec4f64 = @vector.splat(3.0);
+    const p: Vec4f64 = a * b;
+    const ok1: Mask4 = p == @vector.splat(6.0);
+    if @vector.all(ok1) == false {
+        return 1;
+    }
+    const q: Vec4f64 = p / @vector.splat(2.0);
+    const ok2: Mask4 = q == @vector.splat(3.0);
+    if @vector.all(ok2) == false {
+        return 2;
+    }
+    return 0;
+}

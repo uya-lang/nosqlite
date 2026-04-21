@@ -1,0 +1,14 @@
+// 回归：仅 u32×2 @vector.select → 生成 select_u32x2，不生成其它宽度的 select 定义
+type V2u = @vector(u32, 2);
+
+export fn main() i32 {
+    const a: V2u = @vector.splat(2 as u32);
+    const b: V2u = @vector.splat(9 as u32);
+    const m: @mask(2) = a < b;
+    const z: V2u = @vector.splat(0 as u32);
+    const r: V2u = @vector.select(m, a, z);
+    if @vector.all(r == a) == false {
+        return 1;
+    }
+    return 0;
+}

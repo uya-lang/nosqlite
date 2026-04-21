@@ -1,0 +1,12 @@
+// 调试逻辑与运算
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+test "test_logical_and" {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    try assert_eq_i32(a == b, false);
+    try assert_eq_i32(a != b, true);
+}

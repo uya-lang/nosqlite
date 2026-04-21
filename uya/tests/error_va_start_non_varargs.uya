@@ -1,0 +1,22 @@
+// 预期编译失败：@va_start、@va_end、@va_arg 在非可变参数函数内使用
+// 错误信息应包含 "只能在可变参数函数内使用"
+
+fn bad_va_start() void {
+    var ap_buf: [byte: 32] = [];
+    var ap: &void = &ap_buf[0] as &void;
+    @va_start(ap, ap);  // 错误：此函数无 ...
+}
+fn bad_va_end() void {
+    var ap_buf: [byte: 32] = [];
+    var ap: &void = &ap_buf[0] as &void;
+    @va_end(ap);  // 错误：此函数无 ...
+}
+fn bad_va_arg(n: i32) i32 {
+    var ap_buf: [byte: 32] = [];
+    var ap: &void = &ap_buf[0] as &void;
+    const x: i32 = @va_arg(ap, i32);  // 错误：此函数无 ...
+    return x + n;
+}
+fn main() i32 {
+    return 0;
+}

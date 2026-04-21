@@ -1,0 +1,65 @@
+// 测试结构体字段默认值
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 带默认值的结构体
+struct Config {
+    port: i32 = 8080,
+    max_connections: i32 = 100,
+    debug: bool = false,
+}
+
+// 混合默认值和无默认值的字段
+struct Point {
+    x: i32,           // 无默认值
+    y: i32 = 0,       // 有默认值
+    z: i32 = 0,       // 有默认值
+}
+
+fn test_default_values() !void {
+    var cfg: Config = Config { };
+    try assert_eq_i32(cfg.port, 8080);
+    try assert_eq_i32(cfg.max_connections, 100);
+    try expect(cfg.debug == false);
+}
+
+fn test_partial_override() !void {
+    var cfg2: Config = Config { port: 3000 };
+    try assert_eq_i32(cfg2.port, 3000);
+    try assert_eq_i32(cfg2.max_connections, 100);
+}
+
+fn test_full_override() !void {
+    var cfg3: Config = Config { port: 9000, max_connections: 50, debug: true };
+    try assert_eq_i32(cfg3.port, 9000);
+    try expect(cfg3.debug == true);
+}
+
+fn test_mixed_fields() !void {
+    var pt: Point = Point { x: 10 };
+    try assert_eq_i32(pt.x, 10);
+    try assert_eq_i32(pt.y, 0);
+    try assert_eq_i32(pt.z, 0);
+}
+
+fn test_override_default_field() !void {
+    var pt2: Point = Point { x: 5, y: 15 };
+    try assert_eq_i32(pt2.x, 5);
+    try assert_eq_i32(pt2.y, 15);
+    try assert_eq_i32(pt2.z, 0);
+}
+
+export fn main() i32 {
+    test_suite_begin("Struct Default Tests");
+    run_test("default values", test_default_values);
+    run_test("partial override", test_partial_override);
+    run_test("full override", test_full_override);
+    run_test("mixed fields", test_mixed_fields);
+    run_test("override default field", test_override_default_field);
+    return test_suite_end();
+}

@@ -1,0 +1,54 @@
+// f32 和 f64 浮点类型测试程序
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+test "f32 basic" {
+    const x: f32 = 3.14;
+    const y: f32 = 2.0;
+    var sum: f32 = x + y;
+    try expect(sum > 5.13 && sum < 5.15);
+}
+
+test "f64 basic" {
+    const a: f64 = 1.5;
+    const b: f64 = 2.5;
+    var product: f64 = a * b;
+    try expect(product > 3.74 && product < 3.76);
+}
+
+test "mixed float" {
+    var f32_val: f32 = 1.0;
+    var f64_val: f64 = 2.0;
+    var mixed: f64 = f32_val as f64 + f64_val;
+    try expect(mixed > 2.99 && mixed < 3.01);
+}
+
+test "float comparison" {
+    try expect(3.14 > 3.0);
+    try expect(1.0 == 1.0);
+}
+
+test "float unary neg" {
+    var neg: f32 = -2.5;
+    try expect(neg > -2.51 && neg < -2.49);
+}
+
+test "float int cast" {
+    const int_val: i32 = 42;
+    var f_from_int: f64 = int_val as f64;
+    try expect(f_from_int > 41.99 && f_from_int < 42.01);
+    
+    var i2: i32 = f_from_int as i32;
+    try assert_eq_i32(i2, 42);
+}
+
+test "float sizeof" {
+    try assert_eq_i32(@size_of(f32), 4);
+    try assert_eq_i32(@size_of(f64), 8);
+}
+
+test "float literal" {
+    var lit: f64 = 1.5e1;  // 15.0
+    try expect(lit > 14.99 && lit < 15.01);
+}

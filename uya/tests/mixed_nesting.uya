@@ -1,0 +1,93 @@
+// 混合嵌套测试
+use std.runtime.entry;
+// 测试控制流、函数调用和结构体访问的混合嵌套
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+fn multiply(a: i32, b: i32) i32 {
+    return a * b;
+}
+
+fn get_sum(p: Point) i32 {
+    return add(p.x, p.y);
+}
+
+fn process_point(p: Point, factor: i32) i32 {
+    if factor > 0 {
+        if p.x > 0 {
+            return multiply(get_sum(p), factor);
+        } else {
+            return 0;
+        }
+    } else {
+        return get_sum(p);
+    }
+}
+
+fn test_if_nested_call() !void {
+    const p1: Point = Point{ x: 3, y: 4 };
+    var result: i32 = 0;
+    if get_sum(p1) > 5 {
+        result = multiply(get_sum(p1), 2);
+    } else {
+        result = get_sum(p1);
+    }
+    try assert_eq_i32(result, 14);
+}
+
+fn test_process_point() !void {
+    const p1: Point = Point{ x: 3, y: 4 };
+    const r1: i32 = process_point(p1, 2);
+    try assert_eq_i32(r1, 14);
+}
+
+fn test_loop_with_struct() !void {
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    while i < 3 {
+        var p: Point = Point{ x: i, y: i + 1 };
+        if i > 0 {
+            sum = add(sum, get_sum(p));
+        }
+        i = i + 1;
+    }
+    try assert_eq_i32(sum, 8);
+}
+
+fn test_deep_mixed() !void {
+    var count: i32 = 0;
+    var x: i32 = 0;
+    while x < 2 {
+        const p: Point = Point{ x: x, y: x * 2 };
+        if process_point(p, 1) > 0 {
+            var y: i32 = 0;
+            while y < 2 {
+                count = add(count, multiply(get_sum(p), y + 1));
+                y = y + 1;
+            }
+        }
+        x = x + 1;
+    }
+    try assert_eq_i32(count, 9);
+}
+
+export fn main() i32 {
+    test_suite_begin("Mixed Nesting Tests");
+    run_test("if nested call", test_if_nested_call);
+    run_test("process point", test_process_point);
+    run_test("loop with struct", test_loop_with_struct);
+    run_test("deep mixed", test_deep_mixed);
+    return test_suite_end();
+}

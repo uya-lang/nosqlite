@@ -1,0 +1,146 @@
+// Block 风格：映射、序列、嵌套
+use std.runtime.entry;
+use std.yaml.value.YamlValue;
+use std.yaml.parser.parse;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.mem.arena.arena_reset;
+
+export fn main() i32 {
+    var arena_buf: [byte: 8192] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 8192);
+
+    var buf: [byte: 128] = [];
+    // a: 1\nb: 2\n
+    buf[0] = 97;
+    buf[1] = 58;
+    buf[2] = 32;
+    buf[3] = 49;
+    buf[4] = 10;
+    buf[5] = 98;
+    buf[6] = 58;
+    buf[7] = 32;
+    buf[8] = 50;
+    buf[9] = 10;
+    const vm: YamlValue = parse(&a, &buf[0], 10) catch { return 1; };
+    match vm {
+        .y_obj(o) => {
+            if o.len != 2 { return 2; }
+            if o.pairs[0].key.len != 1 || o.pairs[0].key.ptr[0] != 97 { return 3; }
+            match o.pairs[0].value {
+                .int_val(x) => { if x != 1 { return 4; } },
+                else => { return 5; },
+            }
+            if o.pairs[1].key.len != 1 || o.pairs[1].key.ptr[0] != 98 { return 6; }
+            match o.pairs[1].value {
+                .int_val(x2) => { if x2 != 2 { return 7; } },
+                else => { return 8; },
+            }
+        },
+        else => { return 9; },
+    }
+
+    // - 1\n- 2\n
+    buf[0] = 45;
+    buf[1] = 32;
+    buf[2] = 49;
+    buf[3] = 10;
+    buf[4] = 45;
+    buf[5] = 32;
+    buf[6] = 50;
+    buf[7] = 10;
+    arena_reset(&a);
+    const va: YamlValue = parse(&a, &buf[0], 8) catch { return 10; };
+    match va {
+        .y_arr(ar) => {
+            if ar.len != 2 { return 11; }
+            match ar.items[0] {
+                .int_val(y) => { if y != 1 { return 12; } },
+                else => { return 13; },
+            }
+            match ar.items[1] {
+                .int_val(y2) => { if y2 != 2 { return 14; } },
+                else => { return 15; },
+            }
+        },
+        else => { return 16; },
+    }
+
+    // k:\n  a: 1\n
+    buf[0] = 107;
+    buf[1] = 58;
+    buf[2] = 10;
+    buf[3] = 32;
+    buf[4] = 32;
+    buf[5] = 97;
+    buf[6] = 58;
+    buf[7] = 32;
+    buf[8] = 49;
+    buf[9] = 10;
+    arena_reset(&a);
+    const vn: YamlValue = parse(&a, &buf[0], 10) catch { return 17; };
+    match vn {
+        .y_obj(outer) => {
+            if outer.len != 1 { return 18; }
+            if outer.pairs[0].key.len != 1 || outer.pairs[0].key.ptr[0] != 107 { return 19; }
+            match outer.pairs[0].value {
+                .y_obj(inner) => {
+                    if inner.len != 1 { return 20; }
+                    if inner.pairs[0].key.len != 1 || inner.pairs[0].key.ptr[0] != 97 { return 21; }
+                    match inner.pairs[0].value {
+                        .int_val(z) => { if z != 1 { return 22; } },
+                        else => { return 23; },
+                    }
+                },
+                else => { return 24; },
+            }
+        },
+        else => { return 25; },
+    }
+
+    // items:\n  - 1\n  - 2\n
+    buf[0] = 105;
+    buf[1] = 116;
+    buf[2] = 101;
+    buf[3] = 109;
+    buf[4] = 115;
+    buf[5] = 58;
+    buf[6] = 10;
+    buf[7] = 32;
+    buf[8] = 32;
+    buf[9] = 45;
+    buf[10] = 32;
+    buf[11] = 49;
+    buf[12] = 10;
+    buf[13] = 32;
+    buf[14] = 32;
+    buf[15] = 45;
+    buf[16] = 32;
+    buf[17] = 50;
+    buf[18] = 10;
+    arena_reset(&a);
+    const vs: YamlValue = parse(&a, &buf[0], 19) catch { return 26; };
+    match vs {
+        .y_obj(oo) => {
+            if oo.len != 1 { return 27; }
+            match oo.pairs[0].value {
+                .y_arr(seq) => {
+                    if seq.len != 2 { return 28; }
+                    match seq.items[0] {
+                        .int_val(u) => { if u != 1 { return 29; } },
+                        else => { return 30; },
+                    }
+                    match seq.items[1] {
+                        .int_val(u2) => { if u2 != 2 { return 31; } },
+                        else => { return 32; },
+                    }
+                },
+                else => { return 33; },
+            }
+        },
+        else => { return 34; },
+    }
+
+    return 0;
+}

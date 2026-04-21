@@ -1,0 +1,28 @@
+// SIMD：64×i32 / 64×f32 通过 16× uya_simd_sse_*x4
+type Vec64i32 = @vector(i32, 64);
+type Vec64f32 = @vector(f32, 64);
+type Mask64 = @mask(64);
+
+export fn main() i32 {
+    const a: Vec64i32 = @vector.splat(1);
+    const b: Vec64i32 = @vector.splat(10);
+    const s: Vec64i32 = a + b;
+    if @vector.all(s == @vector.splat(11)) == false {
+        return 1;
+    }
+    const t: Vec64i32 = -s;
+    if @vector.all(t == @vector.splat(-11)) == false {
+        return 2;
+    }
+    const m: Mask64 = s < @vector.splat(12);
+    if @vector.all(m) == false {
+        return 3;
+    }
+    const u: Vec64f32 = @vector.splat(3.0f32);
+    const v: Vec64f32 = @vector.splat(2.0f32);
+    const w: Vec64f32 = u * v;
+    if @vector.all(w == @vector.splat(6.0f32)) == false {
+        return 4;
+    }
+    return 0;
+}

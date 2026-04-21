@@ -1,0 +1,42 @@
+// 控制流测试
+// 测试 if/else 和 while 语句
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+test "test_if_else" {
+    var x: i32 = 0;
+    
+    if true {
+        x = 10;
+    } else {
+        x = 20;
+    }
+    
+    try assert_eq_i32(x, 10);
+}
+
+test "test_while_loop" {
+    var count: i32 = 0;
+    while count < 5 {
+        count = count + 1;
+    }
+    try assert_eq_i32(count, 5);
+}
+
+test "test_combined" {
+    var x: i32 = 0;
+    
+    if true {
+        x = 10;
+    } else {
+        x = 20;
+    }
+    
+    var count: i32 = 0;
+    while count < 5 {
+        count = count + 1;
+    }
+    
+    try expect(x == 10 && count == 5);
+}

@@ -1,0 +1,27 @@
+// 测试泛型函数调用语法
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn max<T: Ord>(a: T, b: T) T {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+
+fn test_generic_call() !void {
+    const x: i32 = max<i32>(10, 20);
+    try assert_eq_i32(x, 20);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Call Tests");
+    
+    run_test("generic call", test_generic_call);
+    
+    return test_suite_end();
+}

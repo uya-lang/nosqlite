@@ -1,0 +1,119 @@
+// test_std_io.uya - 测试 std.io 模块
+use std.runtime.entry;
+// 测试文件 I/O 函数（使用 libc 的 FILE* 流）
+
+use libc.fopen;
+use libc.fclose;
+use libc.fread;
+use libc.fwrite;
+use libc.fgetc;
+use libc.fputc;
+use libc.fputs;
+use libc.fprintf;
+use libc.fflush;
+use libc.O_RDONLY;
+use libc.O_WRONLY;
+use libc.O_CREAT;
+use libc.O_TRUNC;
+use libc.S_IRWXU;
+
+export fn main() i32 {
+    // 测试 1: fopen/fclose - 打开和关闭文件
+    const test_file: &const byte = "./test_std_io.txt\0" as &const byte;
+    const mode_w: &const byte = "w\0" as &const byte;
+    const mode_r: &const byte = "r\0" as &const byte;
+    
+    const file1: &void = fopen(test_file, mode_w);
+    if file1 == null {
+        return 1;  // 打开文件失败
+    }
+    const close_result: i32 = fclose(file1);
+    if close_result != 0 {
+        return 2;  // 关闭文件失败
+    }
+    
+    // 测试 2: fwrite/fread - 写入和读取文件
+    const file2: &void = fopen(test_file, mode_w);
+    if file2 == null {
+        return 3;  // 打开文件失败
+    }
+    const write_data: &const byte = "Hello World\0" as &const byte;
+    const write_size: usize = 11;
+    const written: usize = fwrite(write_data, 1, write_size, file2);
+    if written != write_size {
+        _ = fclose(file2);
+        return 4;  // 写入字节数不匹配
+    }
+    _ = fclose(file2);
+    
+    // 读取文件
+    const file3: &void = fopen(test_file, mode_r);
+    if file3 == null {
+        return 5;  // 打开文件失败
+    }
+    var read_buf: [byte: 20] = [];
+    const read_size: usize = fread(&read_buf[0], 1, 20, file3);
+    if read_size != write_size {
+        _ = fclose(file3);
+        return 6;  // 读取字节数不匹配
+    }
+    // 验证读取内容（简化：只检查第一个字符）
+    if read_buf[0] != 72 {  // 'H' = 72
+        _ = fclose(file3);
+        return 7;  // 读取内容不匹配
+    }
+    _ = fclose(file3);
+    
+    // 测试 3: fputc/fgetc - 字符写入和读取
+    const file4: &void = fopen(test_file, mode_w);
+    if file4 == null {
+        return 8;  // 打开文件失败
+    }
+    const put_result: i32 = fputc(65, file4);  // 'A' = 65
+    if put_result != 65 {
+        _ = fclose(file4);
+        return 9;  // 写入字符失败
+    }
+    _ = fclose(file4);
+    
+    const file5: &void = fopen(test_file, mode_r);
+    if file5 == null {
+        return 10;  // 打开文件失败
+    }
+    const get_result: i32 = fgetc(file5);
+    if get_result != 65 {
+        _ = fclose(file5);
+        return 11;  // 读取字符失败
+    }
+    _ = fclose(file5);
+    
+    // 测试 4: fputs - 写入字符串
+    const file6: &void = fopen(test_file, mode_w);
+    if file6 == null {
+        return 12;  // 打开文件失败
+    }
+    const put_str: &const byte = "Test String\0" as &const byte;
+    const puts_result: i32 = fputs(put_str, file6);
+    if puts_result < 0 {
+        _ = fclose(file6);
+        return 13;  // 写入字符串失败
+    }
+    _ = fclose(file6);
+    
+    // 测试 5: fprintf - 格式化输出（简化测试）
+    const file7: &void = fopen(test_file, mode_w);
+    if file7 == null {
+        return 14;  // 打开文件失败
+    }
+    const fmt: &const byte = "Number: %d\0" as &const byte;
+    const num: i32 = 42;
+    const fprintf_result: i32 = fprintf(file7, fmt, num);
+    if fprintf_result < 0 {
+        _ = fclose(file7);
+        return 15;  // 格式化输出失败
+    }
+    _ = fflush(file7);
+    _ = fclose(file7);
+    
+    return 0;
+}

@@ -1,0 +1,56 @@
+// Block 折叠编码 ↔ 解析：段落用空行，与解析器折叠规则一致
+use std.runtime.entry;
+use std.yaml.value.YamlValue;
+use std.yaml.parser.parse;
+use std.yaml.encoder.yaml_encode_to;
+use std.yaml.encoder.YamlEncodeStyle;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.mem.arena.arena_reset;
+
+export fn main() i32 {
+    var arena_buf: [byte: 16384] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 16384);
+
+    var inb: [byte: 64] = [];
+    // k: >\n  hi\n\n  lo\n
+    inb[0] = 107;
+    inb[1] = 58;
+    inb[2] = 32;
+    inb[3] = 62;
+    inb[4] = 10;
+    inb[5] = 32;
+    inb[6] = 32;
+    inb[7] = 104;
+    inb[8] = 105;
+    inb[9] = 10;
+    inb[10] = 10;
+    inb[11] = 32;
+    inb[12] = 32;
+    inb[13] = 108;
+    inb[14] = 111;
+    inb[15] = 10;
+    const v0: YamlValue = parse(&a, &inb[0], 16) catch { return 1; };
+
+    var outb: [byte: 256] = [];
+    const n: usize = yaml_encode_to(&v0, &outb[0], 256, YamlEncodeStyle.Block) catch { return 2; };
+    if n == 0 || n > 256 { return 3; }
+
+    arena_reset(&a);
+    const v1: YamlValue = parse(&a, &outb[0], n) catch { return 4; };
+    match v1 {
+        .y_obj(o) => {
+            if o.len != 1 { return 5; }
+            match o.pairs[0].value {
+                .y_str(s) => {
+                    if s.len != 5 { return 6; }
+                    if s.ptr[0] != 104 || s.ptr[1] != 105 || s.ptr[2] != 10 || s.ptr[3] != 108 || s.ptr[4] != 111 { return 7; }
+                },
+                else => { return 9; },
+            }
+        },
+        else => { return 10; },
+    }
+    return 0;
+}

@@ -1,0 +1,124 @@
+// test_asm_platform.uya - @asm 平台检测和跨平台支持测试
+// 测试平台检测和条件编译
+
+// ===== 测试平台检测 =====
+
+// 测试当前平台检测
+test "asm platform detection" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    }
+}
+
+// 测试平台特定 clobbers
+test "asm platform specific clobbers" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    } clobbers = ["rax", "rbx"];
+}
+
+// ===== 测试跨平台代码 =====
+
+// 测试简单跨平台函数
+fn simple_add_platform(a: i32, b: i32) i32 {
+    var result: i32 = 0;
+    
+    // x86-64 平台
+    @asm {
+        "nop" (a, b, -> result);
+    }
+    
+    return result;
+}
+
+test "asm cross platform add" {
+    const sum: i32 = simple_add_platform(10, 20);
+}
+
+// ===== 测试寄存器类型 =====
+
+// 测试通用寄存器
+test "asm general register" {
+    var x: i32 = 42;
+    var y: i32 = 0;
+    @asm {
+        "nop" (x, -> y);
+    }
+}
+
+// 测试多个寄存器
+test "asm multiple registers" {
+    var a: i32 = 1;
+    var b: i32 = 2;
+    var c: i32 = 3;
+    var result: i32 = 0;
+    @asm {
+        "nop" (a, b, c, -> result);
+    }
+}
+
+// ===== 测试平台相关指令 =====
+
+// 测试 nop 指令（所有平台都支持）
+test "asm universal nop" {
+    @asm {
+        "nop" ();
+    }
+}
+
+// 测试平台相关指令
+test "asm platform instructions" {
+    var x: i32 = 0;
+    var y: i32 = 10;
+    
+    // 使用通用指令
+    @asm {
+        "nop" (y, -> x);
+    }
+}
+
+// ===== 测试内存操作跨平台 =====
+
+// 测试跨平台内存操作
+test "asm cross platform memory" {
+    var arr: [i32: 4] = [1, 2, 3, 4];
+    var ptr: &i32 = &arr[0];
+    var value: i32 = 0;
+    
+    @asm {
+        "nop" (ptr, -> value);
+    }
+}
+
+// ===== 测试系统调用跨平台 =====
+
+// 注意：实际的系统调用需要不同的参数在 x86-64 和 ARM64 上
+// 这里只测试基本语法
+
+test "asm syscall syntax" {
+    var result: i64 = 0;
+    @asm {
+        "nop" (-> result);
+    } clobbers = ["memory"];
+}
+
+// ===== 测试条件编译（占位符，未来实现） =====
+
+// 未来支持：
+// if @asm_target() == .x86_64_linux {
+//     @asm { ... }
+// } else if @asm_target() == .arm64_linux {
+//     @asm { ... }
+// }
+
+test "asm future conditional compilation" {
+    // 当前使用简单的条件
+    var x: i32 = 42;
+    var result: i32 = 0;
+    
+    @asm {
+        "nop" (x, -> result);
+    }
+}

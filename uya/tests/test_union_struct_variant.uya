@@ -1,0 +1,51 @@
+// 测试 union 包含结构体变体
+use std.runtime.entry;
+// 验证方案 A' 可行性：union 变体可以是结构体类型
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 定义结构体类型
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Size {
+    width: i32,
+    height: i32,
+}
+
+// union 包含结构体变体
+union Shape {
+    point: Point,
+    size: Size,
+}
+
+fn test_union_struct_variant() !void {
+    var s: Shape = Shape.point(Point{ x: 10, y: 20 });
+    const result: i32 = match s {
+        .point(p) => p.x + p.y,
+        .size(sz) => sz.width + sz.height,
+    };
+    try assert_eq_i32(result, 30);
+}
+
+fn test_union_struct_variant_size() !void {
+    var s: Shape = Shape.size(Size{ width: 100, height: 50 });
+    const result: i32 = match s {
+        .point(p) => p.x + p.y,
+        .size(sz) => sz.width * sz.height,
+    };
+    try assert_eq_i32(result, 5000);
+}
+
+export fn main() i32 {
+    test_suite_begin("Union Struct Variant Tests");
+    run_test("union struct variant", test_union_struct_variant);
+    run_test("union struct variant size", test_union_struct_variant_size);
+    return test_suite_end();
+}

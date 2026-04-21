@@ -1,0 +1,42 @@
+use std.testing;
+use std.collections.vec.Vec;
+use std.collections.vec.vec_new;
+use std.mem.allocator.IAllocator;
+use std.mem.allocator.MallocAllocator;
+use std.mem.allocator.get_allocator;
+
+struct MallocWrapper : IAllocator {
+    inner: &MallocAllocator,
+
+    fn alloc(self: &Self, size: usize) !&byte {
+        return self.inner.alloc(size);
+    },
+
+    fn dealloc(self: &Self, ptr: &byte) void {
+        self.inner.dealloc(ptr);
+    },
+
+    fn realloc(self: &Self, ptr: &byte, new_size: usize) !&byte {
+        return self.inner.realloc(ptr, new_size);
+    },
+}
+
+struct StringBuf {
+    buf: Vec<byte>,
+
+    fn push(self: &Self, b: byte) !void {
+        try self.buf.push(b);
+    },
+
+    fn len(self: &Self) usize {
+        return self.buf.len();
+    },
+}
+
+test "string_buf_vec_field_push" {
+    var w: MallocWrapper = MallocWrapper{ inner: get_allocator() };
+    var sb: StringBuf = StringBuf{ buf: vec_new<byte>(w) };
+    try sb.push(65);
+    try sb.push(66);
+    try assert_eq_i32(sb.len() as i32, 2);
+}

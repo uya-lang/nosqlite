@@ -1,0 +1,16 @@
+// SIMD：@vector.splat 在向量算术/比较中由对侧向量类型推断目标类型
+type Vec4i32 = @vector(i32, 4);
+
+export fn main() i32 {
+    const a: Vec4i32 = @vector.splat(2);
+    const b: Vec4i32 = a + @vector.splat(1);
+    const m: @mask(4) = b == @vector.splat(3);
+    if @vector.all(m) == false {
+        return 1;
+    }
+    const m2: @mask(4) = @vector.splat(2) == a;
+    if @vector.all(m2) == false {
+        return 2;
+    }
+    return 0;
+}

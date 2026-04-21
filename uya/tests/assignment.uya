@@ -1,0 +1,21 @@
+// 赋值测试
+// 测试变量赋值（var 变量）
+
+use std.testing.assert_eq_i32;
+
+test "test_basic_assignment" {
+    var x: i32 = 10;
+    try assert_eq_i32(x, 10);
+}
+
+test "test_reassignment" {
+    var x: i32 = 10;
+    x = 20;
+    try assert_eq_i32(x, 20);
+}
+
+test "test_assignment_with_expr" {
+    var x: i32 = 10;
+    x = x + 5;
+    try assert_eq_i32(x, 15);
+}

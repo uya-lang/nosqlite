@@ -1,0 +1,46 @@
+// 嵌套结构体测试
+use std.runtime.entry;
+// 测试结构体字段访问和嵌套结构体
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Rect {
+    top_left: Point,
+    bottom_right: Point,
+}
+
+fn test_nested_struct_access() !void {
+    const p1: Point = Point{ x: 0, y: 0 };
+    const p2: Point = Point{ x: 10, y: 10 };
+    const rect: Rect = Rect{ top_left: p1, bottom_right: p2 };
+    
+    try assert_eq_i32(rect.top_left.x, 0);
+    try assert_eq_i32(rect.top_left.y, 0);
+    try assert_eq_i32(rect.bottom_right.x, 10);
+    try assert_eq_i32(rect.bottom_right.y, 10);
+}
+
+fn test_nested_struct_equality() !void {
+    const p1: Point = Point{ x: 0, y: 0 };
+    const p2: Point = Point{ x: 10, y: 10 };
+    const rect1: Rect = Rect{ top_left: p1, bottom_right: p2 };
+    const rect2: Rect = Rect{ top_left: Point{ x: 0, y: 0 }, bottom_right: Point{ x: 10, y: 10 } };
+    
+    try expect(rect1 == rect2);
+}
+
+export fn main() i32 {
+    test_suite_begin("Nested Struct Tests");
+    run_test("nested struct access", test_nested_struct_access);
+    run_test("nested struct equality", test_nested_struct_equality);
+    return test_suite_end();
+}

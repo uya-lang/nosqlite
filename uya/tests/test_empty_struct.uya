@@ -1,0 +1,74 @@
+// 空结构体测试程序
+// 测试空结构体的定义、实例化、sizeof、alignof
+// 根据规范，空结构体大小为 1 字节，对齐为 1 字节
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+struct Empty {
+    // 空结构体，无字段
+}
+
+struct Container {
+    data: i32,
+    empty: Empty,
+}
+
+fn process_empty(e: Empty) Empty {
+    return e;
+}
+
+test "empty struct sizeof" {
+    const empty_size: i32 = @size_of(Empty);
+    try assert_eq_i32(empty_size, 1);
+    
+    var empty: Empty = Empty{};
+    const empty_var_size: i32 = @size_of(empty);
+    try assert_eq_i32(empty_var_size, 1);
+}
+
+test "empty struct alignof" {
+    const empty_align: i32 = @align_of(Empty);
+    try assert_eq_i32(empty_align, 1);
+    
+    var empty: Empty = Empty{};
+    const empty_var_align: i32 = @align_of(empty);
+    try assert_eq_i32(empty_var_align, 1);
+}
+
+test "empty struct pointer" {
+    const empty_ptr_size: i32 = @size_of(&Empty);
+    try expect(empty_ptr_size == 4 || empty_ptr_size == 8);
+    
+    var empty: Empty = Empty{};
+    var empty_ptr: &Empty = &empty;
+    try expect(empty_ptr != null);
+}
+
+test "empty struct comparison" {
+    var empty1: Empty = Empty{};
+    var empty2: Empty = Empty{};
+    try expect(empty1 == empty2);
+    
+    var empty3: Empty = empty1;
+    try expect(empty3 == empty2);
+}
+
+test "empty struct array" {
+    var empty_array: [Empty: 3] = [Empty{}, Empty{}, Empty{}];
+    const empty_array_size: i32 = @size_of(empty_array);
+    try assert_eq_i32(empty_array_size, 3);
+}
+
+test "empty struct as param and return" {
+    var empty2: Empty = Empty{};
+    var empty4: Empty = process_empty(empty2);
+    const empty_cmp: Empty = Empty{};
+    try expect(empty4 == empty_cmp);
+}
+
+test "empty struct as field" {
+    var container: Container = Container{ data: 42, empty: Empty{} };
+    const container_size: i32 = @size_of(Container);
+    try assert_eq_i32(container_size, 8);
+}

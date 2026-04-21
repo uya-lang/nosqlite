@@ -1,0 +1,31 @@
+// test_null_check.uya - 空指针检测测试
+use std.runtime.entry;
+// 
+// 功能：验证编译器能够识别空指针检查后的非空状态
+//
+// 预期：编译成功，指针解引用安全
+
+export fn main() i32 {
+    // 测试1：&val 取地址获得的指针不需要空指针检查（永远非空）
+    var val: i32 = 10;
+    var ptr1: &i32 = &val;  // ptr1 永远不可能为 null
+    ptr1[0] = 42;           // 直接解引用，不需要检查
+    if ptr1[0] != 42 {
+        return 1;  // 失败
+    }
+    
+    // 测试2：初始化为 null 的指针需要空指针检查
+    var ptr2: &i32 = null;
+    if ptr2 != null {
+        // 如果 ptr2 非空，解引用
+        ptr2[0] = 100;
+        if ptr2[0] == 100 {
+            return 0;  // 成功（但 ptr2 实际为 null，不会进入此分支）
+        }
+        return 1;  // 失败
+    }
+    
+    // ptr2 是 null，正确跳过了解引用
+    // 这是正确的行为，返回 0 表示测试通过
+    return 0;
+}

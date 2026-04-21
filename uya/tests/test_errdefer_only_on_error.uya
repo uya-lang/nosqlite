@@ -1,0 +1,29 @@
+// errdefer 仅在错误返回时执行；正常返回只执行 defer
+use std.runtime.entry;
+
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+error E;
+
+fn f(flag: i32) !i32 {
+    var x: i32 = 0;
+    errdefer { x = 99; }
+    defer { x = x + 1; }
+    if (flag != 0) { return error.E; }
+    return 42;
+}
+
+fn test_errdefer_only_on_error() !void {
+    _ = f(0) catch { 0; };  // 正常返回
+    _ = f(1) catch { 0; };  // 错误返回
+}
+
+export fn main() i32 {
+    test_suite_begin("Errdefer Only On Error Tests");
+    
+    run_test("errdefer only on error", test_errdefer_only_on_error);
+    
+    return test_suite_end();
+}

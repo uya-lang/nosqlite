@@ -1,0 +1,152 @@
+// 嵌套结构体字段访问测试程序
+// 测试嵌套结构体的字段访问、自动解引用、字段赋值
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+struct Inner {
+    value: i32,
+}
+
+struct Outer {
+    inner: Inner,
+    count: i32,
+}
+
+struct DeepInner {
+    data: i32,
+}
+
+struct DeepMiddle {
+    deep: DeepInner,
+    middle: i32,
+}
+
+struct DeepOuter {
+    middle: DeepMiddle,
+    outer: i32,
+}
+
+struct ArrayOuter {
+    items: [Inner: 3],
+    size: i32,
+}
+
+fn get_inner_value(o: Outer) i32 {
+    return o.inner.value;
+}
+
+fn modify_inner_value(o: &Outer) void {
+    o.inner.value = 700;
+}
+
+test "basic nested access" {
+    // 值访问
+    var outer: Outer = Outer{ inner: Inner{ value: 42 }, count: 10 };
+    var inner_value: i32 = outer.inner.value;
+    try assert_eq_i32(inner_value, 42);
+    
+    // 字段赋值
+    outer.inner.value = 100;
+    try assert_eq_i32(outer.inner.value, 100);
+}
+
+test "pointer field access" {
+    // 指针字段访问（自动解引用）
+    var inner: Inner = Inner{ value: 50 };
+    var outer2: Outer = Outer{ inner: inner, count: 20 };
+    var inner_ptr: &Inner = &outer2.inner;
+    
+    // 通过指针访问嵌套字段
+    var value1: i32 = inner_ptr.value;
+    try assert_eq_i32(value1, 50);
+    
+    // 通过指针修改嵌套字段
+    inner_ptr.value = 200;
+    try assert_eq_i32(outer2.inner.value, 200);
+}
+
+test "deep nesting" {
+    // 三层嵌套访问
+    var deep: DeepOuter = DeepOuter{
+        middle: DeepMiddle{
+            deep: DeepInner{ data: 300 },
+            middle: 200,
+        },
+        outer: 100,
+    };
+    
+    var deep_data: i32 = deep.middle.deep.data;
+    try assert_eq_i32(deep_data, 300);
+    
+    // 三层嵌套字段赋值
+    deep.middle.deep.data = 400;
+    try assert_eq_i32(deep.middle.deep.data, 400);
+    
+    // 中间层字段访问
+    var middle_value: i32 = deep.middle.middle;
+    try assert_eq_i32(middle_value, 200);
+}
+
+test "pointer to nested" {
+    var deep: DeepOuter = DeepOuter{
+        middle: DeepMiddle{
+            deep: DeepInner{ data: 300 },
+            middle: 200,
+        },
+        outer: 100,
+    };
+    
+    // 外层指针访问嵌套字段
+    var deep_ptr: &DeepOuter = &deep;
+    var data1: i32 = deep_ptr.middle.deep.data;
+    try assert_eq_i32(data1, 300);
+    
+    // 通过外层指针修改嵌套字段
+    deep_ptr.middle.deep.data = 500;
+    try assert_eq_i32(deep.middle.deep.data, 500);
+    
+    // 中间层指针访问
+    var middle_ptr: &DeepMiddle = &deep.middle;
+    var data2: i32 = middle_ptr.deep.data;
+    try assert_eq_i32(data2, 500);
+}
+
+test "array field access" {
+    var array_outer: ArrayOuter = ArrayOuter{
+        items: [
+            Inner{ value: 1 },
+            Inner{ value: 2 },
+            Inner{ value: 3 },
+        ],
+        size: 3,
+    };
+    
+    // 访问数组元素的结构体字段
+    var item_value: i32 = array_outer.items[0].value;
+    try assert_eq_i32(item_value, 1);
+    
+    // 修改数组元素的结构体字段
+    array_outer.items[1].value = 20;
+    try assert_eq_i32(array_outer.items[1].value, 20);
+}
+
+test "nested in function" {
+    var outer3: Outer = Outer{ inner: Inner{ value: 600 }, count: 30 };
+    var value2: i32 = get_inner_value(outer3);
+    try assert_eq_i32(value2, 600);
+    
+    var outer3b: Outer = Outer{ inner: Inner{ value: 600 }, count: 30 };
+    modify_inner_value(&outer3b);
+    try assert_eq_i32(outer3b.inner.value, 700);
+}
+
+test "nested comparison" {
+    var outer4: Outer = Outer{ inner: Inner{ value: 100 }, count: 10 };
+    var outer5: Outer = Outer{ inner: Inner{ value: 100 }, count: 10 };
+    
+    try expect(outer4 == outer5);
+    
+    var outer6: Outer = Outer{ inner: Inner{ value: 200 }, count: 10 };
+    try expect(outer4 != outer6);
+}

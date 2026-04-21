@@ -1,0 +1,36 @@
+// test_struct_forward_decl.uya - 测试结构体前置声明
+use std.runtime.entry;
+// 验证：结构体字段使用其他结构体指针时，C代码生成器应自动生成前置声明
+
+use std.testing.assert_true;
+
+// 结构体 B 在 A 之前定义，但 A 的字段使用了 *B
+// 这需要在 C 代码中生成前置声明 struct B;
+
+struct NodeA {
+    data: i32,
+    next: *NodeB,
+}
+
+struct NodeB {
+    value: i32,
+    prev: *NodeA,
+}
+
+fn test_forward_decl() void {
+    var a: NodeA = NodeA{ data: 1, next: null };
+    var b: NodeB = NodeB{ value: 2, prev: null };
+    
+    // 验证结构体正确初始化
+    assert_true(a.data == 1);
+    assert_true(b.value == 2);
+    
+    printf("  forward decl: OK\n");
+}
+
+export fn main() i32 {
+    printf("=== Struct Forward Declaration Tests ===\n");
+    test_forward_decl();
+    printf("=== All tests passed ===\n");
+    return 0;
+}

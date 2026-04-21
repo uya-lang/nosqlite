@@ -1,0 +1,62 @@
+// 枚举类型比较运算符测试程序
+
+use std.testing.expect;
+
+enum Priority {
+    LOW = 1,
+    MEDIUM = 2,
+    HIGH = 3,
+}
+
+enum Status {
+    PENDING,
+    RUNNING,
+    COMPLETED,
+}
+
+test "enum eq" {
+    var p1: Priority = Priority.LOW;
+    var p2: Priority = Priority.LOW;
+    try expect(p1 == p2);
+    
+    var p3: Priority = Priority.MEDIUM;
+    try expect(p1 != p3);
+}
+
+test "enum lt" {
+    var p1: Priority = Priority.LOW;
+    var p3: Priority = Priority.MEDIUM;
+    try expect(p1 < p3);
+    try expect(p3 < Priority.HIGH);
+}
+
+test "enum gt" {
+    var p1: Priority = Priority.LOW;
+    var p3: Priority = Priority.MEDIUM;
+    try expect(p3 > p1);
+    try expect(Priority.HIGH > p3);
+}
+
+test "enum lte" {
+    var p1: Priority = Priority.LOW;
+    var p2: Priority = Priority.LOW;
+    try expect(p1 <= p2);
+    try expect(p1 <= Priority.MEDIUM);
+}
+
+test "enum gte" {
+    var p1: Priority = Priority.LOW;
+    var p2: Priority = Priority.LOW;
+    try expect(p1 >= p2);
+    try expect(Priority.MEDIUM >= p1);
+}
+
+test "enum auto increment compare" {
+    var s1: Status = Status.PENDING;
+    var s2: Status = Status.RUNNING;
+    var s3: Status = Status.COMPLETED;
+    
+    try expect(s1 < s2);
+    try expect(s2 < s3);
+    try expect(s3 > s2);
+}

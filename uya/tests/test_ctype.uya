@@ -1,0 +1,118 @@
+// test_ctype.uya - ctype 模块测试
+use std.runtime.entry;
+// 使用 lib/std/testing.uya 测试框架
+
+use libc.isalpha;
+use libc.isdigit;
+use libc.isalnum;
+use libc.isspace;
+use libc.isupper;
+use libc.islower;
+use libc.isxdigit;
+use libc.isprint;
+use libc.toupper;
+use libc.tolower;
+
+// 导入测试框架
+use std.testing.assert;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+fn test_isalpha() !void {
+    try assert(isalpha(97) != 0, "isalpha 'a'");
+    try assert(isalpha(122) != 0, "isalpha 'z'");
+    try assert(isalpha(65) != 0, "isalpha 'A'");
+    try assert(isalpha(90) != 0, "isalpha 'Z'");
+    try assert(isalpha(48) == 0, "isalpha '0'");
+    try assert(isalpha(32) == 0, "isalpha ' '");
+}
+
+fn test_isdigit() !void {
+    try assert(isdigit(48) != 0, "isdigit '0'");
+    try assert(isdigit(57) != 0, "isdigit '9'");
+    try assert(isdigit(53) != 0, "isdigit '5'");
+    try assert(isdigit(47) == 0, "isdigit '/'");
+    try assert(isdigit(65) == 0, "isdigit 'A'");
+}
+
+fn test_isalnum() !void {
+    try assert(isalnum(48) != 0, "isalnum '0'");
+    try assert(isalnum(65) != 0, "isalnum 'A'");
+    try assert(isalnum(97) != 0, "isalnum 'a'");
+    try assert(isalnum(32) == 0, "isalnum ' '");
+    try assert(isalnum(64) == 0, "isalnum '@'");
+}
+
+fn test_isspace() !void {
+    try assert(isspace(32) != 0, "isspace ' '");
+    try assert(isspace(9) != 0, "isspace '\\t'");
+    try assert(isspace(10) != 0, "isspace '\\n'");
+    try assert(isspace(65) == 0, "isspace 'A'");
+}
+
+fn test_isupper() !void {
+    try assert(isupper(65) != 0, "isupper 'A'");
+    try assert(isupper(90) != 0, "isupper 'Z'");
+    try assert(isupper(97) == 0, "isupper 'a'");
+}
+
+fn test_islower() !void {
+    try assert(islower(97) != 0, "islower 'a'");
+    try assert(islower(122) != 0, "islower 'z'");
+    try assert(islower(65) == 0, "islower 'A'");
+}
+
+fn test_toupper() !void {
+    try assert(toupper(97) == 65, "toupper 'a'");
+    try assert(toupper(122) == 90, "toupper 'z'");
+    try assert(toupper(65) == 65, "toupper 'A'");
+    try assert(toupper(48) == 48, "toupper '0'");
+}
+
+fn test_tolower() !void {
+    try assert(tolower(65) == 97, "tolower 'A'");
+    try assert(tolower(90) == 122, "tolower 'Z'");
+    try assert(tolower(97) == 97, "tolower 'a'");
+    try assert(tolower(48) == 48, "tolower '0'");
+}
+
+fn test_isxdigit() !void {
+    try assert(isxdigit(48) != 0, "isxdigit '0'");
+    try assert(isxdigit(57) != 0, "isxdigit '9'");
+    try assert(isxdigit(97) != 0, "isxdigit 'a'");
+    try assert(isxdigit(65) != 0, "isxdigit 'A'");
+    try assert(isxdigit(103) == 0, "isxdigit 'g'");
+}
+
+fn test_isprint() !void {
+    try assert(isprint(32) != 0, "isprint ' '");
+    try assert(isprint(126) != 0, "isprint '~'");
+    try assert(isprint(31) == 0, "isprint ctrl");
+    try assert(isprint(127) == 0, "isprint DEL");
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    test_suite_begin("libc.ctype");
+
+    run_test("isalpha", test_isalpha);
+    run_test("isdigit", test_isdigit);
+    run_test("isalnum", test_isalnum);
+    run_test("isspace", test_isspace);
+    run_test("isupper", test_isupper);
+    run_test("islower", test_islower);
+    run_test("toupper", test_toupper);
+    run_test("tolower", test_tolower);
+    run_test("isxdigit", test_isxdigit);
+    run_test("isprint", test_isprint);
+
+    return test_suite_end();
+}

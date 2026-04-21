@@ -1,0 +1,38 @@
+// 测试源代码位置内置函数
+// @src_name: 返回源文件名
+// @src_line: 返回当前行号
+// @src_col: 返回当前列号
+// @func_name: 返回当前函数名
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+test "test_src_line_col" {
+    const line: i32 = @src_line;
+    const col: i32 = @src_col;
+    try assert_eq_i32(line > 0, true);
+    try assert_eq_i32(col > 0, true);
+}
+
+test "test_src_name_path" {
+    const name: *byte = @src_name;
+    const path: *byte = @src_path;
+    try assert_eq_i32(name != null, true);
+    try assert_eq_i32(path != null, true);
+}
+
+test "test_func_name" {
+    const func: *byte = @func_name;
+    try assert_eq_i32(func != null, true);
+}
+
+fn helper_src_location() i32 {
+    const line1: i32 = @src_line;
+    const line2: i32 = @src_line;
+    return line2 - line1;
+}
+
+test "test_line_increment" {
+    try assert_eq_i32(helper_src_location(), 1);
+}

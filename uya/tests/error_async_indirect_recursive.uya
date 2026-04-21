@@ -1,0 +1,27 @@
+// error_async_indirect_recursive.uya
+//
+// 预期：编译失败。两个 @async_fn 互相调用会形成异步调用环，
+// 状态机大小无法在编译期确定；在完整大小计算实现前应先禁止。
+
+use std.async;
+
+@async_fn
+fn ping(n: i32) Future<!i32> {
+    if n <= 0 {
+        return 0;
+    }
+    const x: i32 = try @await pong(n - 1);
+    return x;
+}
+
+@async_fn
+fn pong(n: i32) Future<!i32> {
+    if n <= 0 {
+        return 0;
+    }
+    const x: i32 = try @await ping(n - 1);
+    return x;
+}
+
+test "expect_compile_fail" {
+}

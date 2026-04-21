@@ -1,0 +1,123 @@
+// 测试宏：与其他语言特性的集成
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 基础常量宏
+mc ARRAY_SIZE() expr {
+    @mc_code(@mc_ast(10));
+}
+
+mc INIT_VALUE() expr {
+    @mc_code(@mc_ast(42));
+}
+
+mc LOOP_COUNT() expr {
+    @mc_code(@mc_ast(5));
+}
+
+mc THRESHOLD() expr {
+    @mc_code(@mc_ast(100));
+}
+
+// 结构体定义
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+// 测试宏用于数组大小（编译期常量）
+fn test_array_size() !void {
+    var arr: [i32: 10] = [0: 10];
+    arr[0] = INIT_VALUE();
+    try assert_eq_i32(arr[0], 42);
+}
+
+// 测试宏用于初始化
+fn test_init_value() !void {
+    const val: i32 = INIT_VALUE();
+    try assert_eq_i32(val, 42);
+    
+    var mutable: i32 = INIT_VALUE();
+    mutable = mutable + 1;
+    try assert_eq_i32(mutable, 43);
+}
+
+// 测试宏用于循环
+fn test_loop() !void {
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    while i < LOOP_COUNT() {
+        sum = sum + 1;
+        i = i + 1;
+    }
+    try assert_eq_i32(sum, 5);
+}
+
+// 测试宏用于条件判断
+fn test_condition() !void {
+    const val: i32 = 50;
+    try expect(val < THRESHOLD());
+}
+
+// 测试宏用于 for 循环范围
+fn test_for_range() !void {
+    var sum: i32 = 0;
+    for 0..LOOP_COUNT() |i| {
+        sum = sum + i;
+    }
+    // 0+1+2+3+4 = 10
+    try assert_eq_i32(sum, 10);
+}
+
+// 测试宏用于结构体初始化
+fn test_struct_init() !void {
+    var p: Point = Point { x: INIT_VALUE(), y: INIT_VALUE() };
+    try assert_eq_i32(p.x, 42);
+    try assert_eq_i32(p.y, 42);
+}
+
+// 测试宏用于函数参数
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+fn test_function_call() !void {
+    const result: i32 = add(INIT_VALUE(), LOOP_COUNT());
+    try assert_eq_i32(result, 47);  // 42 + 5 = 47
+}
+
+// 测试宏用于赋值
+fn test_assignment() !void {
+    var x: i32 = 0;
+    x = INIT_VALUE();
+    try assert_eq_i32(x, 42);
+    
+    x = x + LOOP_COUNT();
+    try assert_eq_i32(x, 47);
+}
+
+// 测试宏用于数组索引
+fn test_array_index() !void {
+    var arr: [i32: 50] = [0: 50];
+    arr[INIT_VALUE()] = 100;
+    try assert_eq_i32(arr[42], 100);
+}
+
+export fn main() i32 {
+    test_suite_begin("Macro Integration Tests");
+    run_test("array size", test_array_size);
+    run_test("init value", test_init_value);
+    run_test("loop", test_loop);
+    run_test("condition", test_condition);
+    run_test("for range", test_for_range);
+    run_test("struct init", test_struct_init);
+    run_test("function call", test_function_call);
+    run_test("assignment", test_assignment);
+    run_test("array index", test_array_index);
+    return test_suite_end();
+}

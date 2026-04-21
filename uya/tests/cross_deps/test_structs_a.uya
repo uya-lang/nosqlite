@@ -1,0 +1,43 @@
+// test_structs_a.uya - 文件A：定义结构体和函数，使用文件B的结构体和函数
+
+// 定义结构体 Point，供文件B使用
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+// 定义函数，使用文件B的结构体 Rectangle
+fn create_point(x: i32, y: i32) Point {
+    return Point{ x: x, y: y };
+}
+
+// 定义函数，参数使用文件B的结构体 Rectangle
+fn point_in_rectangle(p: Point, r: Rectangle) bool {
+    if p.x >= r.x && p.x <= (r.x + r.width) {
+        if p.y >= r.y && p.y <= (r.y + r.height) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 定义函数，调用文件B的函数
+fn test_cross_file_call() i32 {
+    const p: Point = create_point(5, 10);
+    const r: Rectangle = create_rectangle(0, 0, 20, 20);
+    const inside: bool = point_in_rectangle(p, r);
+    if !inside {
+        return 1;
+    }
+    
+    // 重新创建 r，因为之前的 r 已被移动
+    const r2: Rectangle = create_rectangle(0, 0, 20, 20);
+    // 调用文件B的函数
+    const area: i32 = calculate_rectangle_area(r2);
+    if area != 400 {
+        return 2;
+    }
+    
+    return 0;
+}
+

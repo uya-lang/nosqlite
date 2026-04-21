@@ -1,0 +1,81 @@
+// 饱和运算 +| -| *| 与包装运算 +% -% *% 测试，规范 uya.md §10、§16
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+test "saturating add" {
+    const max_i32: i32 = 2147483647;
+    const a: i32 = 2000000000;
+    const b: i32 = 2000000000;
+    const sat_add: i32 = a +| b;  // 溢出，饱和到 INT32_MAX
+    try assert_eq_i32(sat_add, max_i32);
+    
+    const c: i32 = -2000000000;
+    const d: i32 = -2000000000;
+    const sat_add_neg: i32 = c +| d;  // 下溢，饱和到 INT32_MIN
+    const min_i32: i32 = (-2147483647 - 1);
+    try assert_eq_i32(sat_add_neg, min_i32);
+    
+    const normal_add: i32 = 10 +| 20;
+    try assert_eq_i32(normal_add, 30);
+}
+
+test "saturating sub" {
+    const max_i32: i32 = 2147483647;
+    const min_i32: i32 = (-2147483647 - 1);
+    
+    const e: i32 = -2000000000;
+    const f: i32 = 2000000000;
+    const sat_sub: i32 = e -| f;  // 下溢，饱和到 INT32_MIN
+    try assert_eq_i32(sat_sub, min_i32);
+    
+    const g: i32 = 2000000000;
+    const h: i32 = -2000000000;
+    const sat_sub_pos: i32 = g -| h;  // 上溢，饱和到 INT32_MAX
+    try assert_eq_i32(sat_sub_pos, max_i32);
+    
+    const normal_sub: i32 = 50 -| 8;
+    try assert_eq_i32(normal_sub, 42);
+}
+
+test "saturating mul" {
+    const max_i32: i32 = 2147483647;
+    
+    const m1: i32 = 50000;
+    const m2: i32 = 50000;
+    const sat_mul: i32 = m1 *| m2;  // 溢出，饱和到 INT32_MAX
+    try assert_eq_i32(sat_mul, max_i32);
+    
+    const normal_mul: i32 = 3 *| 7;
+    try assert_eq_i32(normal_mul, 21);
+}
+
+test "wrapping add" {
+    const max_i32: i32 = 2147483647;
+    const min_i32: i32 = (-2147483647 - 1);
+    
+    const w1: i32 = max_i32;
+    const w2: i32 = 1;
+    const wrap_add: i32 = w1 +% w2;  // 包装到 INT32_MIN
+    try assert_eq_i32(wrap_add, min_i32);
+    
+    const wrap_add2: i32 = 100 +% 200;
+    try assert_eq_i32(wrap_add2, 300);
+}
+
+test "wrapping sub" {
+    const max_i32: i32 = 2147483647;
+    const min_i32: i32 = (-2147483647 - 1);
+    
+    const w3: i32 = min_i32;
+    const w4: i32 = 1;
+    const wrap_sub: i32 = w3 -% w4;  // 包装到 2147483647
+    try assert_eq_i32(wrap_sub, max_i32);
+}
+
+test "wrapping mul" {
+    const w5: i32 = 65536;
+    const w6: i32 = 65536;
+    const wrap_mul: i32 = w5 *% w6;  // 包装
+    try assert_eq_i32(wrap_mul, 0);
+}

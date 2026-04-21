@@ -1,0 +1,14 @@
+// error_asm_ffi_pointer.uya - @asm FFI 指针输入错误测试
+// 期望编译错误：FFI 指针 (*T) 不能直接用于 @asm
+
+extern fn malloc(size: usize) *void;
+
+fn main() i32 {
+    var ptr: *i32 = malloc(4) as *i32;
+    var result: i32 = 0;
+    // 错误：FFI 指针不能直接用于 @asm
+    @asm {
+        "nop" (ptr, -> result);
+    }
+    return 0;
+}

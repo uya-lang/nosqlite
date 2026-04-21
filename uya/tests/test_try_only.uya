@@ -1,0 +1,12 @@
+// 测试 try 语法
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+fn foo() !i32 { return 0; }
+
+test "test_try_only" {
+    const x: i32 = try foo();
+    try assert_eq_i32(x, 0);
+}

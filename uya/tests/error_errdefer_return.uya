@@ -1,0 +1,7 @@
+// errdefer 块中不能使用 return 语句
+// 预期：编译失败
+error E;
+fn main() !i32 {
+    errdefer { return 0; }
+    return 1;
+}

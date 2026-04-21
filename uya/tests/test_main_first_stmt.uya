@@ -1,0 +1,13 @@
+// 测试 main 函数首语句可以是 try 表达式
+
+use std.testing.assert_eq_i32;
+
+fn divide(a: i32, b: i32) !i32 { 
+    return a / b; 
+}
+
+test "main first stmt try" {
+    // 测试 try 表达式可以在函数首语句使用
+    const x: i32 = try divide(10, 2);
+    try assert_eq_i32(x, 5);
+}

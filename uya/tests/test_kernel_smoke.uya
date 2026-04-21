@@ -1,0 +1,13 @@
+// Smoke test: verify lib/kernel/ module discovery works
+
+use kernel.errors;
+use std.testing.assert_eq_i32;
+
+fn might_fail() !i32 {
+    return error.PageFault;
+}
+
+test "kernel_module_discovery" {
+    const val: i32 = might_fail() catch |err| { 42; };
+    try assert_eq_i32(val, 42);
+}

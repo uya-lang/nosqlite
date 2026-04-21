@@ -1,0 +1,108 @@
+// test_stdio.uya - stdio 模块测试
+use std.runtime.entry;
+// TDD: 先写测试，再实现
+
+use libc.printf;
+use libc.puts;
+use libc.fgets;
+use libc.fopen;
+use libc.fclose;
+use libc.fprintf;
+use libc.stdout;
+use libc.FILE;
+
+// ============================================================
+// printf 测试
+// ============================================================
+
+fn test_printf() void {
+    fprintf(stdout, "test printf: ");
+    var passed: i32 = 1;
+    
+    // 测试基本输出
+    const ret1: i32 = printf("hello %s\n\0" as &const byte, "world\0" as &const byte);
+    if ret1 < 0 { passed = 0; }
+    
+    const ret2: i32 = printf("num: %d\n\0" as &const byte, 42);
+    if ret2 < 0 { passed = 0; }
+    
+    const ret3: i32 = printf("percent: %%\n\0" as &const byte);
+    if ret3 < 0 { passed = 0; }
+    
+    if passed != 0 {
+        fprintf(stdout, "PASS\n");
+    } else {
+        fprintf(stdout, "FAIL\n");
+    }
+}
+
+// ============================================================
+// puts 测试
+// ============================================================
+
+fn test_puts() void {
+    fprintf(stdout, "test puts: ");
+    var passed: i32 = 1;
+    
+    const ret: i32 = puts("Hello from puts\0" as &const byte);
+    if ret < 0 { passed = 0; }
+    
+    if passed != 0 {
+        fprintf(stdout, "PASS\n");
+    } else {
+        fprintf(stdout, "FAIL\n");
+    }
+}
+
+// ============================================================
+// fgets 测试（需要文件）
+// ============================================================
+
+fn test_fgets() void {
+    fprintf(stdout, "test fgets: ");
+    var passed: i32 = 1;
+    
+    // 创建测试文件
+    var f: &FILE = fopen("/tmp/test_fgets.txt\0" as &const byte, "w\0" as &const byte);
+    if f == null as &FILE {
+        fprintf(stdout, "SKIP (cannot create file)\n");
+        return;
+    }
+    
+    fprintf(f, "line1\nline2\n\0" as &const byte);
+    fclose(f);
+    
+    // 读取测试
+    var f2: &FILE = fopen("/tmp/test_fgets.txt\0" as &const byte, "r\0" as &const byte);
+    if f2 == null as &FILE {
+        fprintf(stdout, "SKIP (cannot open file)\n");
+        return;
+    }
+    
+    var buf: [byte: 256] = [];
+    var line: &byte = fgets(&buf[0] as &byte, 256, f2);
+    if line == null as &byte { passed = 0; }
+    
+    fclose(f2);
+    
+    if passed != 0 {
+        fprintf(stdout, "PASS\n");
+    } else {
+        fprintf(stdout, "FAIL\n");
+    }
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    fprintf(stdout, "=== libc.stdio tests ===\n");
+    
+    test_printf();
+    test_puts();
+    test_fgets();
+    
+    fprintf(stdout, "=== done ===\n");
+    return 0;
+}

@@ -1,0 +1,11 @@
+use std.runtime.entry;
+
+struct Data {
+    value: i32,
+}
+
+extern fn test_extern_fn(ptr: *Data) i32;
+
+export fn main() i32 {
+    return 0;
+}

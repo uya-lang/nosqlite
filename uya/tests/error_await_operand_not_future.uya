@@ -1,0 +1,17 @@
+// error_await_operand_not_future.uya
+//
+// 预期：编译失败，@await 的操作数必须是 !Future<T>
+
+use std.async;
+
+@async_fn
+fn bad_await_operand() !Future<i32> {
+    const x: i32 = 1;
+    const _f: Future<i32> = try @await x;
+    _ = _f;
+    return 42;
+}
+
+test "expect_compile_fail" {
+}
+

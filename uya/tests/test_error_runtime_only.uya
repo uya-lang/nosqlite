@@ -1,0 +1,14 @@
+// 运行时错误：无需预声明，直接使用 error.X
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+fn f() !i32 {
+    return error.NoDeclaration;  // 无 error NoDeclaration; 声明
+}
+
+test "test_runtime_error" {
+    const r: i32 = f() catch { 99; };
+    try assert_eq_i32(r, 99);
+}

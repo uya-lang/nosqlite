@@ -1,0 +1,62 @@
+// 测试 std.c.stdlib 模块（只测试 malloc 和 calloc，不测试 free）
+use std.runtime.entry;
+// 测试：内存分配函数
+
+use libc.malloc;
+use libc.calloc;
+use libc.memcmp;
+
+export fn main() i32 {
+    // ============================================================
+    // 测试 1: malloc
+    // ============================================================
+    {
+        const ptr1: &void = malloc(100);
+        if ptr1 == null {
+            return 1;  // malloc 失败
+        }
+        
+        // 使用内存
+        var bytes1: &byte = ptr1 as &byte;
+        bytes1[0] = 65 as byte;  // 'A'
+        bytes1[1] = 66 as byte;  // 'B'
+        bytes1[2] = 67 as byte;  // 'C'
+        
+        if bytes1[0] != 65 as byte || bytes1[1] != 66 as byte || bytes1[2] != 67 as byte {
+            return 2;  // 内存写入失败
+        }
+    }
+    
+    // ============================================================
+    // 测试 2: calloc（分配并清零）
+    // ============================================================
+    {
+        const ptr2: &void = calloc(10, 4);  // 分配 40 字节
+        if ptr2 == null {
+            return 3;  // calloc 失败
+        }
+        
+        // 检查是否为零
+        var bytes2: &byte = ptr2 as &byte;
+        var i: usize = 0;
+        while i < 40 {
+            if bytes2[i] != 0 as byte {
+                return 4;  // calloc 未清零
+            }
+            i = i + 1;
+        }
+    }
+    
+    // ============================================================
+    // 测试 3: malloc(0) 应返回 null
+    // ============================================================
+    {
+        const ptr_zero: &void = malloc(0);
+        if ptr_zero != null {
+            return 5;
+        }
+    }
+    
+    return 0;  // 所有测试通过
+}
+

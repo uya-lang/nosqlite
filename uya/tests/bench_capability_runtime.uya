@@ -1,0 +1,330 @@
+// bench_capability_runtime.uya - capability manager 生命周期基准
+// 运行：tests/run_capability_runtime_benchmark.sh
+
+use std.runtime.entry;
+use libc.FILE;
+use libc.fclose;
+use libc.fopen;
+use libc.fprintf;
+use libc.snprintf;
+
+use std.runtime.capability.backend.CapabilityBackendConfig;
+use std.runtime.capability.benchmark.CapabilityBenchmarkCase;
+use std.runtime.capability.benchmark.CapabilityBenchmarkCaseKind;
+use std.runtime.capability.benchmark.CapabilityBenchmarkResult;
+use std.runtime.capability.benchmark.capability_benchmark_backend_name;
+use std.runtime.capability.benchmark.capability_benchmark_case_latency_us;
+use std.runtime.capability.benchmark.capability_benchmark_case_name;
+use std.runtime.capability.benchmark.capability_benchmark_relative_ratio;
+use std.runtime.capability.benchmark.capability_benchmark_run_manager_case;
+use std.runtime.capability.hostapi.CapabilityHostApi;
+use std.runtime.capability.manifest.CapabilityManifest;
+use std.runtime.capability.manifest.capability_manifest_init;
+use std.runtime.capability.types.CapabilityBackendKind;
+
+extern "libc" fn printf(fmt: *byte, ...) i32;
+const RESULT_COUNT: usize = 6;
+
+fn make_valid_manifest(id0: byte, backend_kind: CapabilityBackendKind) CapabilityManifest {
+    var manifest: CapabilityManifest = capability_manifest_init();
+    manifest.id_len = 1 as usize;
+    manifest.id[0] = id0;
+    manifest.entry_len = 4 as usize;
+    manifest.entry[0] = 'm' as byte;
+    manifest.entry[1] = 'a' as byte;
+    manifest.entry[2] = 'i' as byte;
+    manifest.entry[3] = 'n' as byte;
+    manifest.backend_kind = backend_kind;
+    return manifest;
+}
+
+fn open_report_file(name: &const byte) &FILE {
+    const direct: &FILE = fopen(name as &byte, "w\0" as &byte);
+    if direct != null {
+        return direct;
+    }
+    var fallback: [byte: 128] = [];
+    const written: i32 = snprintf(&fallback[0], @len(fallback), "tests/%s\0" as &const byte, name);
+    if written < 0 {
+        return null;
+    }
+    return fopen(&fallback[0], "w\0" as &byte);
+}
+
+fn print_result(result: &CapabilityBenchmarkResult) void {
+    printf(
+        "capability_bench: backend=%s case=%s payload=%zu iter=%d ok=%d install=%lu activate=%lu first=%lu avg=%lu p99=%lu failures=%u timeouts=%u\n" as *byte,
+        capability_benchmark_backend_name(result.case_info.backend),
+        capability_benchmark_case_name(result.case_info.case_kind),
+        result.case_info.payload_size,
+        result.case_info.iterations,
+        result.status_ok as i32,
+        result.metrics.install_us,
+        result.metrics.activate_us,
+        result.metrics.first_invoke_us,
+        result.metrics.avg_invoke_us,
+        result.metrics.p99_invoke_us,
+        result.metrics.failure_count,
+        result.metrics.timeout_count,
+    );
+}
+
+fn print_summary_row(
+    baseline: &CapabilityBenchmarkResult,
+    sample: &CapabilityBenchmarkResult,
+) void {
+    const baseline_us: u64 = capability_benchmark_case_latency_us(baseline);
+    const sample_us: u64 = capability_benchmark_case_latency_us(sample);
+    const rel: f64 = capability_benchmark_relative_ratio(baseline_us, sample_us);
+    printf(
+        "capability_summary: case=%s backend=%s latency=%luus rel=%.2fx first=%luus p99=%luus failures=%u\n" as *byte,
+        capability_benchmark_case_name(sample.case_info.case_kind),
+        capability_benchmark_backend_name(sample.case_info.backend),
+        sample_us,
+        rel,
+        sample.metrics.first_invoke_us,
+        sample.metrics.p99_invoke_us,
+        sample.metrics.failure_count,
+    );
+}
+
+fn write_csv_report(results: &[CapabilityBenchmarkResult]) bool {
+    const fp: &FILE = open_report_file("build/capability_runtime_benchmark.csv\0" as &const byte);
+    if fp == null {
+        return false;
+    }
+
+    _ = fprintf(fp, "backend,case,payload_size,iterations,status_ok,latency_us,install_us,activate_us,first_invoke_us,avg_invoke_us,p99_invoke_us,failure_count,timeout_count\n" as &byte);
+
+    var i: usize = 0;
+    while i < results.len {
+        const result: &CapabilityBenchmarkResult = &results[i];
+        _ = fprintf(
+            fp,
+            "%s,%s,%zu,%d,%d,%lu,%lu,%lu,%lu,%lu,%lu,%u,%u\n" as &byte,
+            capability_benchmark_backend_name(result.case_info.backend),
+            capability_benchmark_case_name(result.case_info.case_kind),
+            result.case_info.payload_size,
+            result.case_info.iterations,
+            result.status_ok as i32,
+            capability_benchmark_case_latency_us(result),
+            result.metrics.install_us,
+            result.metrics.activate_us,
+            result.metrics.first_invoke_us,
+            result.metrics.avg_invoke_us,
+            result.metrics.p99_invoke_us,
+            result.metrics.failure_count,
+            result.metrics.timeout_count,
+        );
+        i = i + 1;
+    }
+
+    _ = fclose(fp);
+    return true;
+}
+
+fn write_json_report(results: &[CapabilityBenchmarkResult]) bool {
+    const fp: &FILE = open_report_file("build/capability_runtime_benchmark.json\0" as &const byte);
+    if fp == null {
+        return false;
+    }
+
+    _ = fprintf(fp, "{\n  \"results\": [\n" as &byte);
+    var i: usize = 0;
+    while i < results.len {
+        const result: &CapabilityBenchmarkResult = &results[i];
+        _ = fprintf(
+            fp,
+            "    {\"backend\":\"%s\",\"case\":\"%s\",\"payload_size\":%zu,\"iterations\":%d,\"status_ok\":%d,\"latency_us\":%lu,\"install_us\":%lu,\"activate_us\":%lu,\"first_invoke_us\":%lu,\"avg_invoke_us\":%lu,\"p99_invoke_us\":%lu,\"failure_count\":%u,\"timeout_count\":%u}" as &byte,
+            capability_benchmark_backend_name(result.case_info.backend),
+            capability_benchmark_case_name(result.case_info.case_kind),
+            result.case_info.payload_size,
+            result.case_info.iterations,
+            result.status_ok as i32,
+            capability_benchmark_case_latency_us(result),
+            result.metrics.install_us,
+            result.metrics.activate_us,
+            result.metrics.first_invoke_us,
+            result.metrics.avg_invoke_us,
+            result.metrics.p99_invoke_us,
+            result.metrics.failure_count,
+            result.metrics.timeout_count,
+        );
+        if i + 1 < results.len {
+            _ = fprintf(fp, ",\n" as &byte);
+        } else {
+            _ = fprintf(fp, "\n" as &byte);
+        }
+        i = i + 1;
+    }
+    _ = fprintf(fp, "  ]\n}\n" as &byte);
+
+    _ = fclose(fp);
+    return true;
+}
+
+fn run_case(
+    host: &CapabilityHostApi,
+    backend: CapabilityBackendKind,
+    case_kind: CapabilityBenchmarkCaseKind,
+    iterations: i32,
+    trigger_id: i32,
+    manifest: CapabilityManifest,
+    payload: &const byte,
+    payload_len: usize,
+) !CapabilityBenchmarkResult {
+    return try capability_benchmark_run_manager_case(
+        CapabilityBenchmarkCase{
+            backend: backend,
+            case_kind: case_kind,
+            iterations: iterations,
+            payload_size: payload_len,
+        },
+        CapabilityBackendConfig{
+            kind: backend,
+            host_api: host,
+        },
+        manifest,
+        payload,
+        payload_len,
+        trigger_id,
+    );
+}
+
+export fn main() i32 {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var results: [CapabilityBenchmarkResult: RESULT_COUNT] = [];
+
+    var fake_payload: [byte: 1] = [];
+    fake_payload[0] = 'x' as byte;
+    const fake_loop: CapabilityBenchmarkResult = run_case(
+        &host,
+        CapabilityBackendKind.Fake,
+        CapabilityBenchmarkCaseKind.InvokeLoop,
+        20000,
+        0,
+        make_valid_manifest('f' as byte, CapabilityBackendKind.Fake),
+        &fake_payload[0] as &const byte,
+        1 as usize,
+    ) catch {
+        return 1;
+    };
+    print_result(&fake_loop);
+
+    const fake_warm: CapabilityBenchmarkResult = run_case(
+        &host,
+        CapabilityBackendKind.Fake,
+        CapabilityBenchmarkCaseKind.InvokeWarm,
+        1,
+        0,
+        make_valid_manifest('g' as byte, CapabilityBackendKind.Fake),
+        &fake_payload[0] as &const byte,
+        1 as usize,
+    ) catch {
+        return 2;
+    };
+    print_result(&fake_warm);
+
+    var wamr_payload: [byte: 4] = [];
+    wamr_payload[0] = 0 as byte;
+    wamr_payload[1] = 'a' as byte;
+    wamr_payload[2] = 's' as byte;
+    wamr_payload[3] = 'm' as byte;
+    const wamr_loop: CapabilityBenchmarkResult = run_case(
+        &host,
+        CapabilityBackendKind.Wamr,
+        CapabilityBenchmarkCaseKind.InvokeLoop,
+        20000,
+        0,
+        make_valid_manifest('w' as byte, CapabilityBackendKind.Wamr),
+        &wamr_payload[0] as &const byte,
+        4 as usize,
+    ) catch {
+        return 3;
+    };
+    print_result(&wamr_loop);
+
+    const wamr_denied: CapabilityBenchmarkResult = run_case(
+        &host,
+        CapabilityBackendKind.Wamr,
+        CapabilityBenchmarkCaseKind.PermissionDenied,
+        1,
+        -1,
+        make_valid_manifest('x' as byte, CapabilityBackendKind.Wamr),
+        &wamr_payload[0] as &const byte,
+        4 as usize,
+    ) catch {
+        return 4;
+    };
+    print_result(&wamr_denied);
+
+    var native_payload: [byte: 4] = [];
+    native_payload[0] = 'U' as byte;
+    native_payload[1] = 'Y' as byte;
+    native_payload[2] = 'A' as byte;
+    native_payload[3] = '!' as byte;
+    const native_loop: CapabilityBenchmarkResult = run_case(
+        &host,
+        CapabilityBackendKind.NativeUya,
+        CapabilityBenchmarkCaseKind.InvokeLoop,
+        20000,
+        0,
+        make_valid_manifest('n' as byte, CapabilityBackendKind.NativeUya),
+        &native_payload[0] as &const byte,
+        4 as usize,
+    ) catch {
+        return 5;
+    };
+    print_result(&native_loop);
+
+    const native_cold: CapabilityBenchmarkResult = run_case(
+        &host,
+        CapabilityBackendKind.NativeUya,
+        CapabilityBenchmarkCaseKind.InvokeCold,
+        1,
+        0,
+        make_valid_manifest('o' as byte, CapabilityBackendKind.NativeUya),
+        &native_payload[0] as &const byte,
+        4 as usize,
+    ) catch {
+        return 6;
+    };
+    print_result(&native_cold);
+
+    printf("capability_summary: baseline backend=%s case=%s\n" as *byte,
+           capability_benchmark_backend_name(fake_loop.case_info.backend),
+           capability_benchmark_case_name(fake_loop.case_info.case_kind));
+    print_summary_row(&fake_loop, &fake_loop);
+    print_summary_row(&fake_loop, &wamr_loop);
+    print_summary_row(&fake_loop, &native_loop);
+
+    printf("capability_summary: baseline backend=%s case=%s\n" as *byte,
+           capability_benchmark_backend_name(fake_warm.case_info.backend),
+           capability_benchmark_case_name(fake_warm.case_info.case_kind));
+    print_summary_row(&fake_warm, &fake_warm);
+
+    printf("capability_summary: failure_case backend=%s case=%s ok=%d failures=%u\n" as *byte,
+           capability_benchmark_backend_name(wamr_denied.case_info.backend),
+           capability_benchmark_case_name(wamr_denied.case_info.case_kind),
+           wamr_denied.status_ok as i32,
+           wamr_denied.metrics.failure_count);
+
+    results[0] = fake_loop;
+    results[1] = fake_warm;
+    results[2] = wamr_loop;
+    results[3] = wamr_denied;
+    results[4] = native_loop;
+    results[5] = native_cold;
+
+    if !write_csv_report(&results[0: RESULT_COUNT]) {
+        return 7;
+    }
+    if !write_json_report(&results[0: RESULT_COUNT]) {
+        return 8;
+    }
+    printf("capability_export: csv=%s json=%s\n" as *byte,
+           "build/capability_runtime_benchmark.csv\0" as &byte,
+           "build/capability_runtime_benchmark.json\0" as &byte);
+
+    return 0;
+}

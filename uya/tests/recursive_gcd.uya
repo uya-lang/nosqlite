@@ -1,0 +1,46 @@
+// 递归函数测试 - 最大公约数（GCD）
+use std.runtime.entry;
+// 测试欧几里得算法的递归实现
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn gcd(a: i32, b: i32) i32 {
+    if b == 0 {
+        return a;
+    } else {
+        return gcd(b, a % b);
+    }
+}
+
+fn test_gcd_48_18() !void {
+    try assert_eq_i32(gcd(48, 18), 6);
+}
+
+fn test_gcd_18_48() !void {
+    try assert_eq_i32(gcd(18, 48), 6);
+}
+
+fn test_gcd_coprime() !void {
+    try assert_eq_i32(gcd(17, 13), 1);
+}
+
+fn test_gcd_100_25() !void {
+    try assert_eq_i32(gcd(100, 25), 25);
+}
+
+fn test_gcd_42_56() !void {
+    try assert_eq_i32(gcd(42, 56), 14);
+}
+
+export fn main() i32 {
+    test_suite_begin("Recursive GCD Tests");
+    run_test("gcd 48 18", test_gcd_48_18);
+    run_test("gcd 18 48", test_gcd_18_48);
+    run_test("gcd coprime", test_gcd_coprime);
+    run_test("gcd 100 25", test_gcd_100_25);
+    run_test("gcd 42 56", test_gcd_42_56);
+    return test_suite_end();
+}

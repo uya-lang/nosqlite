@@ -1,0 +1,114 @@
+// alignof 测试程序
+use std.runtime.entry;
+// 测试 @align_of 内置函数（基础类型、指针类型、结构体类型、数组类型）
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Mixed {
+    a: byte,
+    b: i32,
+    c: i32,
+}
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+fn test_basic_types() !void {
+    const i32_align: i32 = @align_of(i32);
+    try assert_eq_i32(i32_align, 4);
+    
+    const bool_align: i32 = @align_of(bool);
+    try assert_eq_i32(bool_align, 1);
+    
+    const byte_align: i32 = @align_of(byte);
+    try assert_eq_i32(byte_align, 1);
+}
+
+fn test_pointer_types() !void {
+    // 指针对齐值应该是 4（32位）或 8（64位）
+    const ptr_i32_align: i32 = @align_of(&i32);
+    try expect(ptr_i32_align == 4 || ptr_i32_align == 8);
+    
+    const ptr_bool_align: i32 = @align_of(&bool);
+    try assert_eq_i32(ptr_bool_align, ptr_i32_align);
+}
+
+fn test_expr_alignof() !void {
+    var x: i32 = 42;
+    const x_align: i32 = @align_of(x);
+    try assert_eq_i32(x_align, 4);
+    
+    var b: bool = true;
+    const b_align: i32 = @align_of(b);
+    try assert_eq_i32(b_align, 1);
+    
+    var byte_val: byte = 0;
+    const byte_val_align: i32 = @align_of(byte_val);
+    try assert_eq_i32(byte_val_align, 1);
+}
+
+fn test_struct_alignof() !void {
+    const point_align: i32 = @align_of(Point);
+    try assert_eq_i32(point_align, 4);
+    
+    const mixed_align: i32 = @align_of(Mixed);
+    try assert_eq_i32(mixed_align, 4);
+}
+
+fn test_struct_var_alignof() !void {
+    var p: Point = Point{ x: 10, y: 20 };
+    const p_align: i32 = @align_of(p);
+    try assert_eq_i32(p_align, 4);
+}
+
+fn test_array_alignof() !void {
+    const array_i32_align: i32 = @align_of([i32: 10]);
+    try assert_eq_i32(array_i32_align, 4);
+    
+    const array_bool_align: i32 = @align_of([bool: 5]);
+    try assert_eq_i32(array_bool_align, 1);
+}
+
+fn test_array_var_alignof() !void {
+    var arr: [i32: 5] = [1, 2, 3, 4, 5];
+    const arr_align: i32 = @align_of(arr);
+    try assert_eq_i32(arr_align, 4);
+}
+
+fn test_alignof_vs_sizeof() !void {
+    var arr: [i32: 5] = [1, 2, 3, 4, 5];
+    const arr_size: i32 = @size_of(arr);
+    const arr_align: i32 = @align_of(arr);
+    
+    try assert_eq_i32(arr_size, 20);   // 5 * 4 字节
+    try assert_eq_i32(arr_align, 4);
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    test_suite_begin("Alignof Tests");
+    
+    run_test("basic_types", test_basic_types);
+    run_test("pointer_types", test_pointer_types);
+    run_test("expr_alignof", test_expr_alignof);
+    run_test("struct_alignof", test_struct_alignof);
+    run_test("struct_var_alignof", test_struct_var_alignof);
+    run_test("array_alignof", test_array_alignof);
+    run_test("array_var_alignof", test_array_var_alignof);
+    run_test("alignof_vs_sizeof", test_alignof_vs_sizeof);
+    
+    return test_suite_end();
+}

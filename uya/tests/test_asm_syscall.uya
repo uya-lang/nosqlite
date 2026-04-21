@@ -1,0 +1,81 @@
+// test_asm_syscall.uya - @asm 基本语法测试
+// 测试 @asm 基本功能，不依赖特定汇编指令
+
+// 测试空指令
+test "asm nop" {
+    @asm {
+        "nop" ();
+    }
+}
+
+// 测试单条指令
+test "asm single instruction" {
+    var x: i32 = 10;
+    @asm {
+        "nop" (x);
+    }
+}
+
+// 测试输出参数
+test "asm output parameter" {
+    var result: i32 = 0;
+    @asm {
+        "nop" (-> result);
+    }
+}
+
+// 测试输入和输出
+test "asm input output" {
+    var a: i32 = 10;
+    var result: i32 = 0;
+    @asm {
+        "nop" (a, -> result);
+    }
+}
+
+// 测试多条指令
+test "asm multiple instructions" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+        "nop" (x, -> x);
+        "nop" (x, -> x);
+    }
+}
+
+// 测试多个输出
+test "asm multiple outputs" {
+    var a: i32 = 0;
+    var b: i32 = 0;
+    @asm {
+        "nop" (-> a);
+    }
+    @asm {
+        "nop" (-> b);
+    }
+}
+
+// 测试控制流中使用 @asm
+test "asm in if statement" {
+    var x: i32 = 10;
+    var result: i32 = 0;
+    
+    if x > 5 {
+        @asm {
+            "nop" (x, -> result);
+        }
+    }
+}
+
+// 测试在循环中使用 @asm
+test "asm in loop" {
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    
+    while i < 3 {
+        @asm {
+            "nop" (sum, -> sum);
+        }
+        i = i + 1;
+    }
+}

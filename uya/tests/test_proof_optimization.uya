@@ -1,0 +1,102 @@
+// tests/test_proof_optimization.uya
+// 测试证明优化（利用内存安全证明消除运行时检查）
+
+use std.testing.assert_eq_i32;
+
+test "constant_index" {
+    const arr: [i32: 5] = [1, 2, 3, 4, 5];
+    const i: i32 = 2;
+    
+    // 编译器可以证明 i >= 0 && i < 5
+    // 优化：移除 if，直接访问 arr[i]
+    if i >= 0 && i < 5 {
+        const value: i32 = arr[i];
+        try assert_eq_i32(value, 3);
+    }
+}
+
+test "loop_variable_proof" {
+    var arr: [i32: 10] = [0: 10];
+    
+    // 编译器可以证明 i 在 [0, 10) 范围内
+    // 优化：移除边界检查
+    for 0..10 |i| {
+        if i >= 0 && i < 10 {
+            arr[i] = i * 2;
+        }
+    }
+    
+    try assert_eq_i32(arr[5], 10);
+}
+
+test "null_check" {
+    var ptr: &i32 = null;
+    var value: i32 = 42;
+    ptr = &value;
+    
+    // 编译器可以证明 ptr != null（刚刚赋值）
+    // 优化：移除 null 检查
+    if ptr != null {
+        const v: i32 = *ptr;
+        try assert_eq_i32(v, 42);
+    }
+}
+
+test "array_size" {
+    var arr: [i32: 100] = [0: 100];
+    const size: i32 = @len(arr);
+    
+    // 编译器知道 size = 100
+    // 优化：移除 size 检查
+    if size == 100 {
+        arr[50] = 123;
+        try assert_eq_i32(arr[50], 123);
+    }
+}
+
+test "expr_boundary" {
+    var arr: [i32: 20] = [0: 20];
+    const base: i32 = 5;
+    const offset: i32 = 3;
+    const index: i32 = base + offset;  // 编译期计算 = 8
+    
+    // 编译器可以证明 index = 8, 8 >= 0 && 8 < 20
+    // 优化：移除边界检查
+    if index >= 0 && index < @len(arr) {
+        arr[index] = 999;
+        try assert_eq_i32(arr[8], 999);
+    }
+}
+
+test "negative_index" {
+    var arr: [i32: 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const len: i32 = @len(arr);
+    const i: i32 = len - 3;  // 倒数第3个 = 8
+    
+    // 编译器可以证明 i = 7
+    // 优化：移除边界检查
+    if i >= 0 && i < len {
+        const value: i32 = arr[i];
+        try assert_eq_i32(value, 8);
+    }
+}
+
+test "combined_conditions" {
+    const arr: [i32: 10] = [0: 10];
+    const a: i32 = 3;
+    const b: i32 = 5;
+    
+    // 编译器可以证明 a >= 0 && a < 10 && b >= 0 && b < 10
+    // 优化：移除所有边界检查
+    if a >= 0 && a < 10 && b >= 0 && b < 10 {
+        const sum: i32 = arr[a] + arr[b];
+        try assert_eq_i32(sum, 0);
+    }
+}
+
+test "size_of_condition" {
+    // 内置函数 @size_of 在常量条件中可求值，条件恒为真时移除 if
+    if @size_of(i32) == 4 {
+        try assert_eq_i32(1, 1);
+    }
+}

@@ -1,0 +1,20 @@
+// test_use_main_main.uya - 主程序文件：测试子模块引用主模块
+// 此文件位于项目根目录，属于 main 模块
+
+// 导出一个辅助函数供子模块使用
+export fn helper_from_main() i32 {
+    return 100;
+}
+
+// 导出一个结构体
+export struct MainStruct {
+    value: i32,
+}
+
+fn main() i32 {
+    // 此测试用例仅验证子模块能否使用 use main.xxx 引用主模块
+    // 子模块会调用 helper_from_main()，如果成功则返回 0
+    // 如果 use main.xxx 不工作，编译会失败
+    return 0;
+}
+

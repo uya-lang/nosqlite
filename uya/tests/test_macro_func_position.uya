@@ -1,0 +1,16 @@
+// 测试函数调用位置的宏插值 - 简化版
+use std.runtime.entry;
+
+// 使用 @mc_code @mc_ast 的 ident 类型参数
+mc call_func(FuncName: ident, Arg: expr) expr {
+    @mc_code(@mc_ast(${FuncName}(${Arg})));
+}
+
+fn add_one(x: i32) i32 {
+    return x + 1;
+}
+
+export fn main() i32 {
+    const a: i32 = call_func(add_one, 5);
+    return a - 6;  // 应该返回 0
+}

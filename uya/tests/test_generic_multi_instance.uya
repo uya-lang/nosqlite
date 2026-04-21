@@ -1,0 +1,43 @@
+// 测试泛型 - 多实例化
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn identity<T>(x: T) T {
+    return x;
+}
+
+struct Wrapper<T> {
+    value: T,
+}
+
+fn test_generic_fn_multi_instance() !void {
+    const i1: i32 = identity<i32>(10);
+    const i2: i64 = identity<i64>(20);
+    const i3: i8 = identity<i8>(30);
+    const i4: u32 = identity<u32>(40);
+    try assert_eq_i32(i1, 10);
+    try expect(i2 == 20);
+    try expect(i3 == 30);
+    try expect(i4 == 40);
+}
+
+fn test_generic_struct_multi_instance() !void {
+    const w1: Wrapper<i32> = Wrapper<i32>{ value: 100 };
+    const w2: Wrapper<i64> = Wrapper<i64>{ value: 200 };
+    const w3: Wrapper<bool> = Wrapper<bool>{ value: true };
+    try assert_eq_i32(w1.value, 100);
+    try expect(w2.value == 200);
+    try expect(w3.value == true);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Multi Instance Tests");
+    run_test("generic fn multi instance", test_generic_fn_multi_instance);
+    run_test("generic struct multi instance", test_generic_struct_multi_instance);
+    return test_suite_end();
+}

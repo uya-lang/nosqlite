@@ -1,0 +1,19 @@
+// test_asm_expressions.uya - @asm 表达式测试
+
+// 测试变量引用作为输入
+test "asm variable input" {
+    var a: i32 = 10;
+    var result: i32 = 0;
+    @asm {
+        "nop" (a, -> result);
+    }
+}
+
+// 测试常量引用作为输入
+test "asm const input" {
+    const value: i32 = 42;
+    var result: i32 = 0;
+    @asm {
+        "nop" (value, -> result);
+    }
+}

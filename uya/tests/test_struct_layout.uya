@@ -1,0 +1,132 @@
+// 结构体内存布局验证测试
+// 根据 UYA_MINI_SPEC.md 2.3 节的结构体内存布局详细规则进行验证
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+struct Example1 {
+    a: i32,
+    b: i32,
+    c: i32,
+}
+
+struct Example2 {
+    a: byte,
+    b: i32,
+    c: byte,
+}
+
+struct Inner {
+    x: i32,
+    y: i32,
+}
+
+struct Outer {
+    a: byte,
+    inner: Inner,
+    b: byte,
+}
+
+struct Example4 {
+    a: byte,
+    arr: [i32: 3],
+    b: i32,
+}
+
+struct Example5 {
+    a: byte,
+    b: i32,
+    c: i32,
+}
+
+struct PlatformStruct {
+    ptr: &i32,
+    size: usize,
+}
+
+struct Empty {
+}
+
+test "basic align" {
+    const size1: i32 = @size_of(Example1);
+    const align1: i32 = @align_of(Example1);
+    try assert_eq_i32(size1, 12);
+    try assert_eq_i32(align1, 4);
+}
+
+test "padding struct" {
+    const size2: i32 = @size_of(Example2);
+    const align2: i32 = @align_of(Example2);
+    try assert_eq_i32(size2, 12);
+    try assert_eq_i32(align2, 4);
+}
+
+test "nested struct" {
+    const inner_size: i32 = @size_of(Inner);
+    const inner_align: i32 = @align_of(Inner);
+    try assert_eq_i32(inner_size, 8);
+    try assert_eq_i32(inner_align, 4);
+    
+    const outer_size: i32 = @size_of(Outer);
+    const outer_align: i32 = @align_of(Outer);
+    try assert_eq_i32(outer_size, 16);
+    try assert_eq_i32(outer_align, 4);
+}
+
+test "array field" {
+    const size4: i32 = @size_of(Example4);
+    const align4: i32 = @align_of(Example4);
+    try assert_eq_i32(size4, 20);
+    try assert_eq_i32(align4, 4);
+}
+
+test "size calculation" {
+    const size5: i32 = @size_of(Example5);
+    const align5: i32 = @align_of(Example5);
+    try assert_eq_i32(size5, 12);
+    try assert_eq_i32(align5, 4);
+}
+
+test "platform struct" {
+    const platform_size: i32 = @size_of(PlatformStruct);
+    const platform_align: i32 = @align_of(PlatformStruct);
+    const ptr_size: i32 = @size_of(&i32);
+    const usize_size: i32 = @size_of(usize);
+    
+    try expect(ptr_size == 4 || ptr_size == 8);
+    try assert_eq_i32(usize_size, ptr_size);
+    try assert_eq_i32(platform_size, ptr_size * 2);
+    try assert_eq_i32(platform_align, ptr_size);
+}
+
+test "empty struct" {
+    const empty_size: i32 = @size_of(Empty);
+    const empty_align: i32 = @align_of(Empty);
+    try assert_eq_i32(empty_size, 1);
+    try assert_eq_i32(empty_align, 1);
+}
+
+test "field access" {
+    var e1: Example1 = Example1{ a: 1, b: 2, c: 3 };
+    try assert_eq_i32(e1.a, 1);
+    try assert_eq_i32(e1.b, 2);
+    try assert_eq_i32(e1.c, 3);
+    
+    var e2: Example2 = Example2{ a: 1, b: 2, c: 3 };
+    try assert_eq_i32(e2.a, 1);
+    try assert_eq_i32(e2.b, 2);
+    try assert_eq_i32(e2.c, 3);
+    
+    var e4: Example4 = Example4{ a: 1, arr: [10, 20, 30], b: 4 };
+    try assert_eq_i32(e4.a, 1);
+    try assert_eq_i32(e4.arr[0], 10);
+    try assert_eq_i32(e4.arr[1], 20);
+    try assert_eq_i32(e4.arr[2], 30);
+    try assert_eq_i32(e4.b, 4);
+    
+    var outer: Outer = Outer{ a: 1, inner: Inner{ x: 10, y: 20 }, b: 2 };
+    try assert_eq_i32(outer.a, 1);
+    try assert_eq_i32(outer.inner.x, 10);
+    try assert_eq_i32(outer.inner.y, 20);
+    try assert_eq_i32(outer.b, 2);
+}

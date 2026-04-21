@@ -1,0 +1,25 @@
+// 测试原始字符串字面量（反引号语法）
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+test "test_raw_string_backslash" {
+    // 原始字符串：反斜杠不会被转义
+    const s1: [byte: 16] = `C:\Users\name\n`;
+    try assert_eq_i32(s1[2] == 92, true);  // \ 字符
+    try assert_eq_i32(s1[3] == 85, true);  // U 字符
+}
+
+test "test_raw_string_no_escape" {
+    // 制表符不会被转义
+    const s2: [byte: 15] = `path\to\file\n`;
+    try assert_eq_i32(s2[4] == 92, true);  // \ 字符
+    try assert_eq_i32(s2[5] == 116, true); // t 字符（不是制表符）
+}
+
+test "test_raw_string_quotes" {
+    // 双引号不会被转义
+    const s3: [byte: 14] = `say "hello"\n`;
+    try assert_eq_i32(s3[4] == 34, true);  // " 字符
+}

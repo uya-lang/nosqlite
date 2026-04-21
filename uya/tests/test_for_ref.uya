@@ -1,0 +1,25 @@
+// 测试 for 循环引用迭代
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_for_ref_modify() !void {
+    var arr: [i32: 3] = [1, 2, 3];
+    
+    for arr |&item| {
+        *item = *item * 2;
+    }
+    
+    try expect(arr[0] == 2 && arr[1] == 4 && arr[2] == 6);
+}
+
+export fn main() i32 {
+    test_suite_begin("For Ref Tests");
+    
+    run_test("for ref modify", test_for_ref_modify);
+    
+    return test_suite_end();
+}

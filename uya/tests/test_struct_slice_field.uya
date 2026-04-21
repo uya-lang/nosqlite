@@ -1,0 +1,62 @@
+// 测试结构体含 &[T] 切片字段
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Data {
+    values: &[i32],
+    tag: i32,
+}
+
+fn test_slice_field_init() !void {
+    var arr: [i32: 5] = [1, 2, 3, 4, 5];
+    const s: &[i32] = arr[0:3];
+    var data: Data = Data{ values: s, tag: 42 };
+    try assert_eq_i32(data.tag, 42);
+    try assert_eq_i32(@len(data.values), 3);
+    try assert_eq_i32(data.values[0], 1);
+    try assert_eq_i32(data.values[2], 3);
+}
+
+fn test_slice_field_modify() !void {
+    var arr: [i32: 5] = [1, 2, 3, 4, 5];
+    const s: &[i32] = arr[0:3];
+    var data: Data = Data{ values: s, tag: 42 };
+    arr[1] = 99;
+    try assert_eq_i32(data.values[1], 99);
+}
+
+fn test_slice_field_size() !void {
+    var arr: [i32: 5] = [1, 2, 3, 4, 5];
+    const s: &[i32] = arr[0:3];
+    var data: Data = Data{ values: s, tag: 42 };
+    try expect(@size_of(Data) == @size_of(data));
+    try expect(@size_of(data.values) == @size_of(&[i32]));
+}
+
+fn test_slice_field_align() !void {
+    var arr: [i32: 5] = [1, 2, 3, 4, 5];
+    const s: &[i32] = arr[0:3];
+    var data: Data = Data{ values: s, tag: 42 };
+    try expect(@align_of(Data) == @align_of(data));
+    try expect(@align_of(s) == @align_of(&[i32]));
+}
+
+fn test_fat_pointer() !void {
+    try expect(@size_of(&[i32]) == @size_of(usize) * 2);
+    try expect(@align_of(&[i32]) == @align_of(usize));
+}
+
+export fn main() i32 {
+    test_suite_begin("Struct Slice Field Tests");
+    run_test("slice field init", test_slice_field_init);
+    run_test("slice field modify", test_slice_field_modify);
+    run_test("slice field size", test_slice_field_size);
+    run_test("slice field align", test_slice_field_align);
+    run_test("fat pointer", test_fat_pointer);
+    return test_suite_end();
+}

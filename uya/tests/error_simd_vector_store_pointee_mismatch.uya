@@ -1,0 +1,9 @@
+// 负例：@vector.store 指针元素类型与向量元素类型不匹配
+type V4u = @vector(u32, 4);
+
+export fn main() i32 {
+    var x: i32 = 0;
+    const v: V4u = @vector.splat(1u32);
+    @vector.store(&x, v);
+    return 0;
+}

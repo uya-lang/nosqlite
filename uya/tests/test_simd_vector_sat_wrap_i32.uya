@@ -1,0 +1,48 @@
+// SIMD：i32 向量饱和 +| / *| 与包装 +% / *%（按通道，与标量语义一致）
+type Vec4i32 = @vector(i32, 4);
+type Vec4u8 = @vector(u8, 4);
+type Mask4 = @mask(4);
+
+export fn main() i32 {
+    const big: i32 = 2000000000;
+    const a: Vec4i32 = @vector.splat(big);
+    const sat: Vec4i32 = a +| a;
+    const maxv: Vec4i32 = @vector.splat(2147483647);
+    const ok_sat: Mask4 = sat == maxv;
+    if @vector.all(ok_sat) == false {
+        return 1;
+    }
+
+    const max_lane: Vec4i32 = @vector.splat(2147483647);
+    const one_lane: Vec4i32 = @vector.splat(1);
+    const w: Vec4i32 = max_lane +% one_lane;
+    const min_lane: Vec4i32 = @vector.splat((-2147483647 - 1));
+    const ok_wrap: Mask4 = w == min_lane;
+    if @vector.all(ok_wrap) == false {
+        return 2;
+    }
+
+    const m1: Vec4i32 = @vector.splat(50000);
+    const mul_sat: Vec4i32 = m1 *| m1;
+    const ok_mul: Mask4 = mul_sat == maxv;
+    if @vector.all(ok_mul) == false {
+        return 3;
+    }
+
+    const h1: Vec4i32 = @vector.splat(65536);
+    const wrap_mul: Vec4i32 = h1 *% h1;
+    const ok_wm: Mask4 = wrap_mul == @vector.splat(0);
+    if @vector.all(ok_wm) == false {
+        return 4;
+    }
+
+    const ua: Vec4u8 = @vector.splat(250);
+    const ub: Vec4u8 = @vector.splat(10);
+    const uc: Vec4u8 = ua +% ub;
+    const ok_u8: Mask4 = uc == @vector.splat(4);
+    if @vector.all(ok_u8) == false {
+        return 5;
+    }
+
+    return 0;
+}

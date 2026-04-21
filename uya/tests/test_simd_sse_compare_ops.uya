@@ -1,0 +1,78 @@
+// SIMD SSE lowering：向量比较 → @mask(4)（i32 / u32 / f32 六种关系）
+type Vec4i32 = @vector(i32, 4);
+type Vec4u32 = @vector(u32, 4);
+type Vec4f32 = @vector(f32, 4);
+type Mask4 = @mask(4);
+
+export fn main() i32 {
+    const a: Vec4i32 = @vector.splat(1);
+    const b: Vec4i32 = @vector.splat(2);
+    const c: Vec4i32 = @vector.splat(1);
+    const mlt: Mask4 = a < b;
+    if @vector.all(mlt) == false {
+        return 1;
+    }
+    const mgt: Mask4 = b > a;
+    if @vector.all(mgt) == false {
+        return 2;
+    }
+    const mle: Mask4 = a <= c;
+    if @vector.all(mle) == false {
+        return 3;
+    }
+    const mge: Mask4 = b >= b;
+    if @vector.all(mge) == false {
+        return 4;
+    }
+    const mne: Mask4 = a != b;
+    if @vector.all(mne) == false {
+        return 5;
+    }
+    const uf: Vec4u32 = @vector.splat(3 as u32);
+    const ug: Vec4u32 = @vector.splat(3 as u32);
+    const ueq: Mask4 = uf == ug;
+    if @vector.all(ueq) == false {
+        return 6;
+    }
+    const uh: Vec4u32 = @vector.splat(2 as u32);
+    const une: Mask4 = uf != uh;
+    if @vector.all(une) == false {
+        return 7;
+    }
+    const u_hi: Vec4u32 = @vector.splat(0xFFFFFFFEu32);
+    const u_max: Vec4u32 = @vector.splat(0xFFFFFFFFu32);
+    if @vector.all(u_hi < u_max) == false {
+        return 13;
+    }
+    if @vector.all(u_max > u_hi) == false {
+        return 14;
+    }
+    if @vector.all(u_hi <= u_max) == false {
+        return 15;
+    }
+    if @vector.all(u_max >= u_hi) == false {
+        return 16;
+    }
+    const u_z: Vec4u32 = @vector.splat(0 as u32);
+    if @vector.all(u_z < u_max) == false {
+        return 17;
+    }
+    const x: Vec4f32 = @vector.splat(1.0f32);
+    const y: Vec4f32 = @vector.splat(2.0f32);
+    if @vector.all(x < y) == false {
+        return 8;
+    }
+    if @vector.all(y > x) == false {
+        return 9;
+    }
+    if @vector.all(x <= x) == false {
+        return 10;
+    }
+    if @vector.all(y >= y) == false {
+        return 11;
+    }
+    if @vector.all(x != y) == false {
+        return 12;
+    }
+    return 0;
+}

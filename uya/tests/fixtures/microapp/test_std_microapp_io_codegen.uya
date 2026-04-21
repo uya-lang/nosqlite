@@ -1,0 +1,10 @@
+// microapp 代码生成回归：std.microapp.io 内部的 @syscall 也必须重定向到 microcontainer host API
+
+use std.microapp.io.write_stdout_bytes;
+
+export fn main() i32 {
+    _ = write_stdout_bytes("hello std.microapp.io\n", 22) catch {
+        return 1;
+    };
+    return 0;
+}

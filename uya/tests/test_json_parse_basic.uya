@@ -1,0 +1,55 @@
+// 测试 std.json 解析：null、bool、数字、字符串（端到端调用 parse）
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.parser.parse;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 4096] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 4096);
+
+    var buf: [byte: 32] = [];
+    buf[0] = 110;
+    buf[1] = 117;
+    buf[2] = 108;
+    buf[3] = 108;
+    const vn: JsonValue = parse(&a, &buf[0], 4) catch { return 1; };
+    const vn0: JsonValue = vn;
+    match vn0 {
+        .json_null(_) => {},
+        else => { return 2; },
+    }
+
+    buf[0] = 116;
+    buf[1] = 114;
+    buf[2] = 117;
+    buf[3] = 101;
+    const vt: JsonValue = parse(&a, &buf[0], 4) catch { return 3; };
+    match vt {
+        .bool_val(x) => { if !x { return 4; } },
+        else => { return 5; },
+    }
+
+    buf[0] = 49;
+    buf[1] = 50;
+    buf[2] = 51;
+    const vi: JsonValue = parse(&a, &buf[0], 3) catch { return 6; };
+    match vi {
+        .int_val(x) => { if x != 123 { return 7; } },
+        else => { return 8; },
+    }
+
+    // 浮点数 3.0  "3.0" -> 51, 46, 48
+    buf[0] = 51;
+    buf[1] = 46;
+    buf[2] = 48;
+    const vf: JsonValue = parse(&a, &buf[0], 3) catch { return 9; };
+    match vf {
+        .float_val(x) => { if x != 3.0 { return 10; } },
+        else => { return 11; },
+    }
+
+    return 0;
+}

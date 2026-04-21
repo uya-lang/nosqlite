@@ -1,0 +1,47 @@
+// 物理布局与 syscall 号与需求文档一致
+
+use kernel.layout;
+use kernel.mem;
+use kernel.syscall;
+use std.testing.assert_eq_i32;
+
+test "phys_layout_closes_to_512k" {
+    try assert_eq_i32((PHYS_OFF_TRAILER + PHYS_SIZE_TRAILER) as i32, PHYS_MEM_SIZE as i32);
+}
+
+test "phys_container_slot0_bases" {
+    const code0: u32 = try phys_container_code_base(0);
+    const data0: u32 = try phys_container_data_base(0);
+    try assert_eq_i32(code0 as i32, PHYS_OFF_CONTAINER_CODE as i32);
+    try assert_eq_i32(data0 as i32, PHYS_OFF_CONTAINER_DATA as i32);
+}
+
+test "phys_container_slot7_in_range" {
+    const code7: u32 = try phys_container_code_base(7);
+    const end_code: u32 = code7 + CONTAINER_CODE_SIZE;
+    try assert_eq_i32(end_code as i32, PHYS_OFF_CONTAINER_DATA as i32);
+
+    const data7: u32 = try phys_container_data_base(7);
+    const end_data: u32 = data7 + CONTAINER_DATA_SIZE;
+    try assert_eq_i32(end_data as i32, PHYS_OFF_SHARED as i32);
+}
+
+test "phys_container_slot_invalid" {
+    var bad: i32 = 0;
+    const ignored: u32 = phys_container_code_base(8) catch |err| {
+        bad = 1;
+        0u32;
+    };
+    try assert_eq_i32(bad, 1);
+}
+
+test "syscall_numbers_match_abi_doc" {
+    try assert_eq_i32(SYS_PRINT as i32, 1);
+    try assert_eq_i32(SYS_ALLOC as i32, 2);
+    try assert_eq_i32(SYS_IO as i32, 3);
+    try assert_eq_i32(SYS_YIELD as i32, 4);
+    try assert_eq_i32(SYS_TIME as i32, 5);
+    try assert_eq_i32(syscall_num_is_known(SYS_YIELD), 1);
+    try assert_eq_i32(syscall_num_is_known(SYS_TIME), 1);
+    try assert_eq_i32(syscall_num_is_known(99), 0);
+}

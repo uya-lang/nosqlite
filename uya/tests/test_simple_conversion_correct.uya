@@ -1,0 +1,16 @@
+// 最简单的 FFI 指针转换测试
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+struct Node {
+    id: i32,
+}
+
+test "test_ptr_conversion" {
+    var node: Node = Node{ id: 1 };
+    var node_ptr: &Node = &node;
+    var ffi_ptr: *Node = node_ptr as *Node;
+    try assert_eq_i32(ffi_ptr == null, false);
+}

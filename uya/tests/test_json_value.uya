@@ -1,0 +1,31 @@
+// 测试 std.json 值类型构造与 match（不调用 parse，避免 !JsonValue 的 codegen 限制）
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.value.JsonStrView;
+
+export fn main() i32 {
+    const vn: JsonValue = JsonValue.json_null();
+    match vn {
+        .json_null(_) => { },
+        _ => { return 1; },
+    }
+    const vt: JsonValue = JsonValue.bool_val(true);
+    match vt {
+        .bool_val(x) => { if !x { return 2; } },
+        _ => { return 3; },
+    }
+    const vi: JsonValue = JsonValue.int_val(123);
+    match vi {
+        .int_val(n) => { if n != 123 { return 4; } },
+        _ => { return 5; },
+    }
+    var buf: [byte: 4] = [];
+    buf[0] = 97;
+    const view: JsonStrView = JsonStrView{ ptr: &buf[0], len: 1 };
+    const vs: JsonValue = JsonValue.str(view);
+    match vs {
+        .str(s) => { if s.len != 1 || s.ptr[0] != 97 { return 6; } },
+        _ => { return 7; },
+    }
+    return 0;
+}

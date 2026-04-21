@@ -1,0 +1,22 @@
+// test_async_return_value.uya
+// TDD：@async_fn 中直接 return 值，自动包装为 Future<T>；无 @await 时 poll 立即返回 Ready(value)
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+@async_fn
+fn answer() !Future<i32> {
+    return 42;
+}
+
+test "async_return_value_poll_ready" {
+    const f: Future<i32> = try answer();
+    const w: Waker = Waker{};
+    const p: Poll<i32> = f.poll(&w);
+    var result: i32 = 0 - 1;
+    match p {
+        .Ready(x) => { result = x; },
+        .Pending(_) => { result = 0 - 2; },
+    };
+    try assert_eq_i32(result, 42);
+}

@@ -1,0 +1,48 @@
+// 复杂表达式测试
+// 测试嵌套的复杂表达式
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+fn double(x: i32) i32 {
+    return x * 2;
+}
+
+test "test_nested_expr" {
+    const a: i32 = 5;
+    const b: i32 = 10;
+    
+    // 测试复杂的嵌套表达式
+    const result1: i32 = (a + b) * 2 - double(a);
+    // (5 + 10) * 2 - 10 = 30 - 10 = 20
+    try assert_eq_i32(result1, 20);
+}
+
+test "test_func_arithmetic" {
+    const a: i32 = 5;
+    const b: i32 = 10;
+    
+    // 测试函数调用和算术运算组合
+    const result2: i32 = double(a) + double(b) * 2;
+    // 10 + 20 * 2 = 10 + 40 = 50
+    try assert_eq_i32(result2, 50);
+}
+
+test "test_comparison_logic" {
+    const a: i32 = 5;
+    const b: i32 = 10;
+    
+    // 测试比较和逻辑运算组合
+    const result3: bool = (a < b) && (b > a) && (a + b == 15);
+    try expect(result3);
+}
+
+test "test_unary_arithmetic" {
+    const a: i32 = 5;
+    const b: i32 = 10;
+    
+    // 测试一元运算符和算术运算
+    const result4: i32 = -a + b - (-b);
+    // -5 + 10 - (-10) = -5 + 10 + 10 = 15
+    try assert_eq_i32(result4, 15);
+}

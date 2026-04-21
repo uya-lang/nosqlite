@@ -1,0 +1,56 @@
+// Phase 2：packed repeated int32 解析与 roundtrip
+use std.runtime.entry;
+use std.protobuf.demo.DemoIntList;
+use std.protobuf.demo.PbI32Strip;
+use std.protobuf.decode.decode_demo_int_list;
+use std.protobuf.encode.encode_demo_int_list_packed_to;
+use std.protobuf.encode.encode_demo_int_list_unpacked_to;
+use std.protobuf.wire.pb_buf_load_u32_le_as_i32;
+use std.protobuf.wire.pb_buf_store_u32_le_at;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 512] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 512);
+
+    var nb: [byte: 12] = [];
+    pb_buf_store_u32_le_at(&nb[0], 0, 1 as u32);
+    pb_buf_store_u32_le_at(&nb[0], 4, 2 as u32);
+    pb_buf_store_u32_le_at(&nb[0], 8, 3 as u32);
+    const lst: DemoIntList = DemoIntList{ nums: PbI32Strip{ data: &nb[0], count: 3 } };
+
+    var packed: [byte: 64] = [];
+    const np: usize = encode_demo_int_list_packed_to(&lst, &packed[0], 64) catch { return 1; };
+    const dp: DemoIntList = decode_demo_int_list(&a, &packed[0], np) catch { return 2; };
+    if dp.nums.count != 3 {
+        return 3;
+    }
+    if pb_buf_load_u32_le_as_i32(dp.nums.data, 0) != 1 {
+        return 4;
+    }
+    if pb_buf_load_u32_le_as_i32(dp.nums.data, 4) != 2 {
+        return 5;
+    }
+    if pb_buf_load_u32_le_as_i32(dp.nums.data, 8) != 3 {
+        return 6;
+    }
+
+    // 非 packed 编码后再解码，应与 packed 合并结果一致
+    var unp: [byte: 64] = [];
+    const nu: usize = encode_demo_int_list_unpacked_to(&lst, &unp[0], 64) catch { return 7; };
+    arena_init(&a, &arena_buf[0], 512);
+    const du: DemoIntList = decode_demo_int_list(&a, &unp[0], nu) catch { return 8; };
+    if du.nums.count != 3 {
+        return 9;
+    }
+    if pb_buf_load_u32_le_as_i32(du.nums.data, 0) != 1 || pb_buf_load_u32_le_as_i32(du.nums.data, 4) != 2 {
+        return 10;
+    }
+    if pb_buf_load_u32_le_as_i32(du.nums.data, 8) != 3 {
+        return 11;
+    }
+
+    return 0;
+}

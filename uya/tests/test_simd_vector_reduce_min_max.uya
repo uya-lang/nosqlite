@@ -1,0 +1,36 @@
+// @vector.reduce_min / @vector.reduce_max：水平最小/最大值
+type V4i = @vector(i32, 4);
+type V2f = @vector(f32, 2);
+type V8u = @vector(u32, 8);
+
+export fn main() i32 {
+    const a: V4i = @vector.splat(0 as i32);
+    if @vector.reduce_min(a) != 0 {
+        return 1;
+    }
+    if @vector.reduce_max(a) != 0 {
+        return 2;
+    }
+    const b: V4i = @vector.splat(3 as i32);
+    if @vector.reduce_min(b) != 3 {
+        return 3;
+    }
+    if @vector.reduce_max(b) != 3 {
+        return 4;
+    }
+    const c: V2f = @vector.splat(1.5f32);
+    if @vector.reduce_min(c) != 1.5f32 {
+        return 5;
+    }
+    if @vector.reduce_max(c) != 1.5f32 {
+        return 6;
+    }
+    const d: V8u = @vector.splat(7 as u32);
+    if @vector.reduce_min(d) != 7 as u32 {
+        return 7;
+    }
+    if @vector.reduce_max(d) != 7 as u32 {
+        return 8;
+    }
+    return 0;
+}

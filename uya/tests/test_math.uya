@@ -1,0 +1,109 @@
+// test_math.uya - 测试数学函数
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use libc.cos;
+use libc.sin;
+use libc.sqrt;
+use libc.fabs;
+use libc.isinf;
+use libc.isnan;
+use libc.PI;
+
+// ============================================================
+// cos 函数测试
+// ============================================================
+
+test "cos_zero" {
+    const c: f64 = cos(0.0);
+    // cos(0.0) 应该等于 1.0
+    const diff: f64 = fabs(c - 1.0);
+    try expect(diff < 0.0001);
+}
+
+test "cos_pi_over_2" {
+    const c: f64 = cos(PI / 2.0);
+    // cos(PI/2) 应该接近 0
+    try expect(fabs(c) < 0.0001);
+}
+
+test "cos_pi" {
+    const c: f64 = cos(PI);
+    // cos(PI) 应该接近 -1
+    try expect(fabs(c + 1.0) < 0.0001);
+}
+
+// ============================================================
+// sin 函数测试
+// ============================================================
+
+test "sin_zero" {
+    const s: f64 = sin(0.0);
+    // sin(0.0) 应该等于 0.0
+    try expect(fabs(s) < 0.0001);
+}
+
+test "sin_pi_over_2" {
+    const s: f64 = sin(PI / 2.0);
+    // sin(PI/2) 应该接近 1
+    try expect(fabs(s - 1.0) < 0.0001);
+}
+
+test "sin_pi" {
+    const s: f64 = sin(PI);
+    // sin(PI) 应该接近 0
+    try expect(fabs(s) < 0.0001);
+}
+
+// ============================================================
+// sqrt 函数测试
+// ============================================================
+
+test "sqrt_four" {
+    const s: f64 = sqrt(4.0);
+    try expect(fabs(s - 2.0) < 0.0001);
+}
+
+test "sqrt_one" {
+    const s: f64 = sqrt(1.0);
+    try expect(fabs(s - 1.0) < 0.0001);
+}
+
+test "sqrt_zero" {
+    const s: f64 = sqrt(0.0);
+    try expect(fabs(s) < 0.0001);
+}
+
+// ============================================================
+// isinf 函数测试
+// ============================================================
+
+test "isinf_negative_infinity" {
+    // 创建一个很大的负数（应该不是无穷大）
+    const large: f64 = 1.0e100;
+    try assert_eq_i32(isinf(large), 0);
+}
+
+test "isinf_finite" {
+    const finite: f64 = 1.0;
+    try assert_eq_i32(isinf(finite), 0);
+}
+
+// ============================================================
+// fabs 函数测试
+// ============================================================
+
+test "fabs_positive" {
+    const a: f64 = fabs(5.0);
+    try expect(fabs(a - 5.0) < 0.0001);
+}
+
+test "fabs_negative" {
+    const a: f64 = fabs(-5.0);
+    try expect(fabs(a - 5.0) < 0.0001);
+}
+
+test "fabs_zero" {
+    const a: f64 = fabs(0.0);
+    try expect(fabs(a) < 0.0001);
+}

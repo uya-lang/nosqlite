@@ -1,0 +1,125 @@
+// 测试 std.json json_expect_i64/str/bool/f64 辅助（手写 from_json 用）
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.value.JsonStrView;
+use std.json.parser.parse;
+use std.json.encoder.json_object_find_index;
+use std.json.encoder.json_expect_i64;
+use std.json.encoder.json_expect_str;
+use std.json.encoder.json_expect_bool;
+use std.json.encoder.json_expect_f64;
+use std.json.errors;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+fn check_bool_f64(arena: &Arena) !i32 {
+    var buf: [byte: 24] = [];
+    buf[0] = 123;
+    buf[1] = 34;
+    buf[2] = 98;
+    buf[3] = 34;
+    buf[4] = 58;
+    buf[5] = 116;
+    buf[6] = 114;
+    buf[7] = 117;
+    buf[8] = 101;
+    buf[9] = 44;
+    buf[10] = 34;
+    buf[11] = 102;
+    buf[12] = 34;
+    buf[13] = 58;
+    buf[14] = 49;
+    buf[15] = 46;
+    buf[16] = 53;
+    buf[17] = 125;
+    const v: JsonValue = try parse(arena, &buf[0], 18);
+    match v {
+        .obj(o) => {
+            var kb: [byte: 1] = [];
+            kb[0] = 98;
+            var kf: [byte: 1] = [];
+            kf[0] = 102;
+            const bi: usize = try json_object_find_index(&o, &kb[0], 1);
+            const fi: usize = try json_object_find_index(&o, &kf[0], 1);
+            const b_val: bool = try json_expect_bool(&o.pairs[bi].value);
+            const f_val: f64 = try json_expect_f64(&o.pairs[fi].value);
+            if b_val != true { return error.WrongType; }
+            if f_val < 1.49 || f_val > 1.51 { return error.WrongType; }
+            return 0;
+        },
+        else => { return error.NotAnObject; },
+    }
+}
+
+export fn main() i32 {
+    var arena_buf: [byte: 8192] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 8192);
+
+    // {"i":42,"s":"hi","b":true,"f":1.5}
+    var buf: [byte: 64] = [];
+    buf[0] = 123;
+    buf[1] = 34;
+    buf[2] = 105;
+    buf[3] = 34;
+    buf[4] = 58;
+    buf[5] = 52;
+    buf[6] = 50;
+    buf[7] = 44;
+    buf[8] = 34;
+    buf[9] = 115;
+    buf[10] = 34;
+    buf[11] = 58;
+    buf[12] = 34;
+    buf[13] = 104;
+    buf[14] = 105;
+    buf[15] = 34;
+    buf[16] = 44;
+    buf[17] = 34;
+    buf[18] = 98;
+    buf[19] = 34;
+    buf[20] = 58;
+    buf[21] = 116;
+    buf[22] = 114;
+    buf[23] = 117;
+    buf[24] = 101;
+    buf[25] = 44;
+    buf[26] = 34;
+    buf[27] = 102;
+    buf[28] = 34;
+    buf[29] = 58;
+    buf[30] = 49;
+    buf[31] = 46;
+    buf[32] = 53;
+    buf[33] = 125;
+    const v: JsonValue = parse(&a, &buf[0], 34) catch { return 1; };
+    match v {
+        .obj(o) => {
+            var ki: [byte: 1] = [];
+            ki[0] = 105;
+            var ks: [byte: 1] = [];
+            ks[0] = 115;
+            const ii: usize = json_object_find_index(&o, &ki[0], 1) catch { return 2; };
+            const si: usize = json_object_find_index(&o, &ks[0], 1) catch { return 3; };
+            const i_val: i64 = json_expect_i64(&o.pairs[ii].value) catch { return 6; };
+            const s_val: JsonStrView = json_expect_str(&o.pairs[si].value) catch { return 7; };
+            if i_val != 42 { return 10; }
+            if s_val.len != 2 || s_val.ptr[0] != 104 || s_val.ptr[1] != 105 { return 11; }
+        },
+        else => { return 14; },
+    }
+    if check_bool_f64(&a) catch { return 19; } != 0 { return 20; }
+
+    // 类型不符：对数字 42 调用 json_expect_i64 后误用 json_expect_str 会 WrongType（用 i 的 value 当 str）
+    const v2: JsonValue = parse(&a, &buf[0], 34) catch { return 15; };
+    match v2 {
+        .obj(o) => {
+            var ki2: [byte: 1] = [];
+            ki2[0] = 105;
+            const idx: usize = json_object_find_index(&o, &ki2[0], 1) catch { return 16; };
+            json_expect_str(&o.pairs[idx].value) catch { return 0; };
+            return 17;
+        },
+        else => { return 18; },
+    }
+}

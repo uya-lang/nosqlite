@@ -1,0 +1,22 @@
+// 验证顶层函数可达性：未被调用、未被取地址、且不是显式 ABI surface 的函数应不发射。
+// export fn / export extern fn 仍作为 root 保留。
+
+fn dead_internal() i32 {
+    return 7;
+}
+
+export fn dead_exported() i32 {
+    return 8;
+}
+
+export extern fn kept_c_api() i32 {
+    return 123;
+}
+
+fn live_helper() i32 {
+    return kept_c_api() - 123;
+}
+
+export fn main() i32 {
+    return live_helper();
+}

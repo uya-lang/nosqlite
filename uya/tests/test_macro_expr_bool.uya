@@ -1,0 +1,111 @@
+// 测试宏：返回布尔表达式
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 返回 true
+mc const_true() expr {
+    @mc_code(@mc_ast(true));
+}
+
+// 返回 false
+mc const_false() expr {
+    @mc_code(@mc_ast(false));
+}
+
+// 返回比较表达式
+mc compare_expr() expr {
+    @mc_code(@mc_ast(10 > 5));
+}
+
+// 返回逻辑与表达式
+mc logical_and() expr {
+    @mc_code(@mc_ast(true && true));
+}
+
+// 返回逻辑或表达式
+mc logical_or() expr {
+    @mc_code(@mc_ast(false || true));
+}
+
+// 返回逻辑非表达式
+mc logical_not() expr {
+    @mc_code(@mc_ast(!false));
+}
+
+// 返回复杂逻辑表达式
+mc complex_logic() expr {
+    @mc_code(@mc_ast((10 > 5) && (3 < 8) || false));
+}
+
+// 返回相等比较
+mc equal_expr() expr {
+    @mc_code(@mc_ast(42 == 42));
+}
+
+// 返回不等比较
+mc not_equal_expr() expr {
+    @mc_code(@mc_ast(10 != 20));
+}
+
+fn test_const_true() !void {
+    const v1: bool = const_true();
+    try expect(v1);
+}
+
+fn test_const_false() !void {
+    const v2: bool = const_false();
+    try expect(!v2);
+}
+
+fn test_compare_expr() !void {
+    const v3: bool = compare_expr();
+    try expect(v3);
+}
+
+fn test_logical_and() !void {
+    const v4: bool = logical_and();
+    try expect(v4);
+}
+
+fn test_logical_or() !void {
+    const v5: bool = logical_or();
+    try expect(v5);
+}
+
+fn test_logical_not() !void {
+    const v6: bool = logical_not();
+    try expect(v6);
+}
+
+fn test_complex_logic() !void {
+    const v7: bool = complex_logic();
+    try expect(v7);
+}
+
+fn test_equal_expr() !void {
+    const v8: bool = equal_expr();
+    try expect(v8);
+}
+
+fn test_not_equal_expr() !void {
+    const v9: bool = not_equal_expr();
+    try expect(v9);
+}
+
+export fn main() i32 {
+    test_suite_begin("Macro Expr Bool Tests");
+    run_test("const true", test_const_true);
+    run_test("const false", test_const_false);
+    run_test("compare expr", test_compare_expr);
+    run_test("logical and", test_logical_and);
+    run_test("logical or", test_logical_or);
+    run_test("logical not", test_logical_not);
+    run_test("complex logic", test_complex_logic);
+    run_test("equal expr", test_equal_expr);
+    run_test("not equal expr", test_not_equal_expr);
+    return test_suite_end();
+}

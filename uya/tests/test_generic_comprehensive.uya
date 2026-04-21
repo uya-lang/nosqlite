@@ -1,0 +1,119 @@
+// 测试泛型 - 综合测试
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn identity<T>(x: T) T {
+    return x;
+}
+
+fn first<A, B>(a: A, b: B) A {
+    return a;
+}
+
+fn second<A, B>(a: A, b: B) B {
+    return b;
+}
+
+fn max<T: Ord>(a: T, b: T) T {
+    if a > b { return a; }
+    return b;
+}
+
+fn min<T: Ord>(a: T, b: T) T {
+    if a < b { return a; }
+    return b;
+}
+
+fn swap<T>(a: &T, b: &T) void {
+    const temp: T = *a;
+    *a = *b;
+    *b = temp;
+}
+
+struct Box<T> {
+    value: T,
+}
+
+struct Pair<K, V> {
+    key: K,
+    value: V,
+}
+
+struct Container<T: Default> {
+    data: T,
+    valid: bool,
+}
+
+fn test_identity() !void {
+    const id1: i32 = identity<i32>(42);
+    try assert_eq_i32(id1, 42);
+    
+    const id2: bool = identity<bool>(true);
+    try expect(id2);
+}
+
+fn test_multi_type_param() !void {
+    const f1: i32 = first<i32, i64>(10, 20);
+    try assert_eq_i32(f1, 10);
+    
+    const s1: i64 = second<i32, i64>(10, 20);
+    try expect(s1 == 20);
+}
+
+fn test_constrained() !void {
+    const m1: i32 = max<i32>(10, 20);
+    try assert_eq_i32(m1, 20);
+    
+    const m2: i32 = min<i32>(10, 20);
+    try assert_eq_i32(m2, 10);
+}
+
+fn test_swap() !void {
+    var a: i32 = 100;
+    var b: i32 = 200;
+    swap<i32>(&a, &b);
+    try assert_eq_i32(a, 200);
+    try assert_eq_i32(b, 100);
+}
+
+fn test_struct() !void {
+    const box1: Box<i32> = Box<i32>{ value: 999 };
+    try assert_eq_i32(box1.value, 999);
+    
+    const pair1: Pair<i32, bool> = Pair<i32, bool>{ key: 42, value: true };
+    try assert_eq_i32(pair1.key, 42);
+    try expect(pair1.value);
+}
+
+fn test_multi_instantiation() !void {
+    const i1: i32 = identity<i32>(1);
+    const i2: i64 = identity<i64>(2);
+    const i3: i8 = identity<i8>(3);
+    try assert_eq_i32(i1, 1);
+    try expect(i2 == 2);
+    try expect(i3 == 3);
+}
+
+fn test_nested() !void {
+    const nested: i32 = identity<i32>(identity<i32>(identity<i32>(42)));
+    try assert_eq_i32(nested, 42);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Comprehensive Tests");
+    
+    run_test("identity", test_identity);
+    run_test("multi type param", test_multi_type_param);
+    run_test("constrained", test_constrained);
+    run_test("swap", test_swap);
+    run_test("struct", test_struct);
+    run_test("multi instantiation", test_multi_instantiation);
+    run_test("nested", test_nested);
+    
+    return test_suite_end();
+}

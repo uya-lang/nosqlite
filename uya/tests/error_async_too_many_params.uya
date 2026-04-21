@@ -1,0 +1,21 @@
+// error_async_too_many_params.uya
+//
+// 预期：编译失败。当前 async 状态机参数捕获上限为 16，
+// 超出后会在 checker 阶段报错，避免 codegen 静默截断。
+
+use std.async;
+
+@async_fn
+fn too_many_params(
+    a0: i32, a1: i32, a2: i32, a3: i32, a4: i32, a5: i32, a6: i32, a7: i32,
+    a8: i32, a9: i32, a10: i32, a11: i32, a12: i32, a13: i32, a14: i32, a15: i32,
+    a16: i32
+) Future<!i32> {
+    _ = a0; _ = a1; _ = a2; _ = a3; _ = a4; _ = a5; _ = a6; _ = a7;
+    _ = a8; _ = a9; _ = a10; _ = a11; _ = a12; _ = a13; _ = a14; _ = a15;
+    _ = a16;
+    return 0;
+}
+
+test "expect_compile_fail" {
+}

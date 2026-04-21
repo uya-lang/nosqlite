@@ -1,0 +1,16 @@
+use std.async_channel.Channel;
+use std.async_channel.channel_new;
+use std.async.Future;
+use std.async.Poll;
+
+export fn main() i32 {
+    const ch: Channel<i32> = channel_new<i32>();
+    _ = ch;
+    const f_usize: Future<usize> = Future<usize>{ state: Poll<usize>.Pending({}) };
+    const f_i32: Future<i32> = Future<i32>{ state: Poll<i32>.Pending({}) };
+    const f_u32: Future<u32> = Future<u32>{ state: Poll<u32>.Pending({}) };
+    _ = f_usize;
+    _ = f_i32;
+    _ = f_u32;
+    return 0;
+}

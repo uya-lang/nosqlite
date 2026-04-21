@@ -1,0 +1,21 @@
+// error_async_await_in_return.uya
+// 预期：编译失败，@await 在 return 之后（unreachable code）
+
+use std.async;
+
+struct R : Future<!i32> {
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        _ = waker;
+        return Poll<!i32>.Ready(ok<i32>(1));
+    }
+}
+fn r() Future<!i32> { return R{}; }
+
+@async_fn
+fn await_after_return() Future<!i32> {
+    return 0;
+    const x: i32 = try @await r();  // unreachable
+    return x;
+}
+
+fn main() i32 { return 0; }

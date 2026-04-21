@@ -1,0 +1,37 @@
+// SIMD：8×i32 / 8×f32 通过两次 x4 助手 lowering（与 4× 同助手名）
+type Vec8i32 = @vector(i32, 8);
+type Vec8f32 = @vector(f32, 8);
+type Mask8 = @mask(8);
+
+export fn main() i32 {
+    const a: Vec8i32 = @vector.splat(2);
+    const b: Vec8i32 = @vector.splat(4);
+    const s: Vec8i32 = a + b;
+    const d: Vec8i32 = s - @vector.splat(0);
+    const n: Vec8i32 = -d;
+    if @vector.all(n == @vector.splat(-6)) == false {
+        return 5;
+    }
+    const o: Vec8i32 = d | @vector.splat(0);
+    const x: Vec8i32 = o ^ @vector.splat(0);
+    if @vector.all(x == @vector.splat(6)) == false {
+        return 1;
+    }
+    const mi: Mask8 = x < @vector.splat(7);
+    if @vector.all(mi) == false {
+        return 2;
+    }
+    const mj: Mask8 = x > @vector.splat(5);
+    if @vector.all(mj) == false {
+        return 3;
+    }
+    const u: Vec8f32 = @vector.splat(2.0f32);
+    const v: Vec8f32 = @vector.splat(0.5f32);
+    const w: Vec8f32 = u * v;
+    const z: Vec8f32 = w / @vector.splat(0.5f32);
+    const z2: Vec8f32 = -z;
+    if @vector.all(z2 < @vector.splat(0.0f32)) == false {
+        return 4;
+    }
+    return 0;
+}

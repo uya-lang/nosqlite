@@ -1,0 +1,78 @@
+// 测试 to_json 嵌套结构体编码（Point 内嵌于 Rect）
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.value.JsonStrView;
+use std.json.parser.parse;
+use std.json.encoder.to_json;
+use std.json.encoder.json_object_find_index;
+use std.json.encoder.json_expect_i64;
+use std.json.errors;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+struct Rect {
+    top_left: Point,
+    w: i64,
+    h: i64,
+}
+
+export fn main() i32 {
+    var arena_buf: [byte: 262144] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 262144);
+    const pt: Point = Point{ x: 1, y: 2 };
+    const rect: Rect = Rect{ top_left: pt, w: 10, h: 20 };
+    const slice: &[byte] = to_json<Rect>(&a, rect) catch { return 1; };
+
+    const parsed: JsonValue = parse(&a, slice.ptr, slice.len) catch { return 2; };
+    match parsed {
+        .obj(o) => {
+            if o.len != 3 { return 3; }
+            var top_left_key: [byte: 8] = [];
+            top_left_key[0] = 116;
+            top_left_key[1] = 111;
+            top_left_key[2] = 112;
+            top_left_key[3] = 95;
+            top_left_key[4] = 108;
+            top_left_key[5] = 101;
+            top_left_key[6] = 102;
+            top_left_key[7] = 116;
+            var w_key: [byte: 2] = [];
+            w_key[0] = 119;
+            w_key[1] = 0;
+            var h_key: [byte: 2] = [];
+            h_key[0] = 104;
+            h_key[1] = 0;
+            const tl_idx: usize = json_object_find_index(&o, &top_left_key[0], 8) catch { return 4; };
+            match o.pairs[tl_idx].value {
+                .obj(inner) => {
+                    if inner.len != 2 { return 5; }
+                    var x_key: [byte: 2] = [];
+                    x_key[0] = 120;
+                    x_key[1] = 0;
+                    var y_key: [byte: 2] = [];
+                    y_key[0] = 121;
+                    y_key[1] = 0;
+                    const x_idx: usize = json_object_find_index(&inner, &x_key[0], 1) catch { return 6; };
+                    const y_idx: usize = json_object_find_index(&inner, &y_key[0], 1) catch { return 7; };
+                    const x_val: i64 = json_expect_i64(&inner.pairs[x_idx].value) catch { return 8; };
+                    const y_val: i64 = json_expect_i64(&inner.pairs[y_idx].value) catch { return 9; };
+                    if x_val != 1 || y_val != 2 { return 10; }
+                },
+                else => { return 11; },
+            }
+            const w_idx: usize = json_object_find_index(&o, &w_key[0], 1) catch { return 12; };
+            const h_idx: usize = json_object_find_index(&o, &h_key[0], 1) catch { return 13; };
+            const w_val: i64 = json_expect_i64(&o.pairs[w_idx].value) catch { return 14; };
+            const h_val: i64 = json_expect_i64(&o.pairs[h_idx].value) catch { return 15; };
+            if w_val != 10 || h_val != 20 { return 16; }
+        },
+        else => { return 17; },
+    }
+    return 0;
+}

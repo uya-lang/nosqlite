@@ -1,0 +1,205 @@
+use std.runtime.entry;
+use std.async;
+use std.mqtt.async;
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+@async_fn
+fn mqtt_connect_frame_smoke(
+    reader: &MemAsyncReader,
+    rx: &byte,
+    rx_cap: usize
+) Future<!usize> {
+    if rx_cap < 4 {
+        return error.MqttBufferTooSmall;
+    }
+    const n: usize = try @await reader.read(rx, 4);
+    if n != 4 {
+        return error.MqttConnectionClosed;
+    }
+    const packet: MqttPacketView = try mqtt_parse_packet(rx[0: 4]);
+    const ack: MqttConnAck = try mqtt_packet_parse_connack(&packet);
+    return ack.return_code as usize;
+}
+
+struct FlipPendingUsize : Future<!usize> {
+    polled: i32,
+    value: usize,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!usize> {
+        _ = waker;
+        if self.polled == 0 {
+            self.polled = 1;
+            return Poll<!usize>.Pending({});
+        }
+        return Poll<!usize>.Ready(ok<usize>(self.value));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+fn flip_pending_usize(value: usize) Future<!usize> {
+    return FlipPendingUsize{
+        polled: 0,
+        value: value,
+    };
+}
+
+struct MockAsyncMqttClient : AsyncMqttClient {
+    subscribe_packet_id: u16,
+    subscribe_qos: byte,
+}
+
+MockAsyncMqttClient {
+    @async_fn
+    fn connect(self: &Self, tx: &byte, tx_cap: usize, rx: &byte, rx_cap: usize) Future<!MqttConnAck> {
+        _ = self;
+        if tx_cap > 0 {
+            tx[0] = 0x10 as byte;
+        }
+        if rx_cap < 4 {
+            return error.MqttBufferTooSmall;
+        }
+        rx[0] = 0x20 as byte;
+        rx[1] = 0x02 as byte;
+        rx[2] = 0x00 as byte;
+        rx[3] = 0x00 as byte;
+        const packet: MqttPacketView = try mqtt_parse_packet(rx[0: 4]);
+        return try mqtt_packet_parse_connack(&packet);
+    }
+
+    @async_fn
+    fn subscribe(self: &Self, topic: &const byte, topic_len: usize, tx: &byte, tx_cap: usize, rx: &byte, rx_cap: usize) Future<!MqttSubAck> {
+        _ = topic;
+        _ = topic_len;
+        _ = tx;
+        _ = tx_cap;
+        if rx_cap < 5 {
+            return error.MqttBufferTooSmall;
+        }
+        rx[0] = 0x90 as byte;
+        rx[1] = 0x03 as byte;
+        rx[2] = ((self.subscribe_packet_id >> 8) & (0xFF as u16)) as byte;
+        rx[3] = (self.subscribe_packet_id & (0xFF as u16)) as byte;
+        rx[4] = self.subscribe_qos;
+        const packet: MqttPacketView = try mqtt_parse_packet(rx[0: 5]);
+        return try mqtt_packet_parse_suback(&packet);
+    }
+
+    @async_fn
+    fn publish_qos0(self: &Self, topic: &const byte, topic_len: usize, payload: &const byte, payload_len: usize, tx: &byte, tx_cap: usize) Future<!usize> {
+        _ = self;
+        _ = topic;
+        _ = topic_len;
+        _ = payload;
+        if tx_cap > 0 {
+            tx[0] = 0x30 as byte;
+        }
+        const sent: usize = try @await flip_pending_usize(payload_len);
+        return sent;
+    }
+
+    @async_fn
+    fn read_packet(self: &Self, rx: &byte, rx_cap: usize) Future<!MqttPacketView> {
+        _ = self;
+        if rx_cap < 4 {
+            return error.MqttBufferTooSmall;
+        }
+        rx[0] = 0x20 as byte;
+        rx[1] = 0x02 as byte;
+        rx[2] = 0x00 as byte;
+        rx[3] = 0x00 as byte;
+        return try mqtt_parse_packet(rx[0: 4]);
+    }
+}
+
+fn test_mqtt_connect_frame_smoke() !void {
+    var connack: [byte: 4] = [0x20 as byte, 0x02 as byte, 0x00 as byte, 0x00 as byte];
+    var reader: MemAsyncReader = mem_async_reader_new(&connack[0], 4);
+    var rx: [byte: 8] = [0: 8];
+    var frame: @frame(mqtt_connect_frame_smoke);
+    defer { frame.stop(); }
+    frame.start(&reader, &rx[0], 8);
+
+    const w: Waker = Waker{};
+    const p: Poll<!usize> = frame.poll(&w);
+    match p {
+        .Ready(ok_val) => {
+            const rc: usize = ok_val catch { 127 as usize; };
+            try expect(rc == 0 as usize);
+        },
+        .Pending(_) => {
+            try expect(false);
+        },
+    };
+}
+
+fn test_mqtt_async_client_method() !void {
+    var client: MockAsyncMqttClient = MockAsyncMqttClient{
+        subscribe_packet_id: 7 as u16,
+        subscribe_qos: 0 as byte,
+    };
+    var tx: [byte: 32] = [0: 32];
+    var rx: [byte: 8] = [0: 8];
+
+    const connack: MqttConnAck = try block_on<MqttConnAck>(client.connect(&tx[0], 32, &rx[0], 8));
+    try expect(connack.accepted());
+
+    const suback: MqttSubAck = try block_on<MqttSubAck>(
+        client.subscribe("glasses/down" as &const byte, 12, &tx[0], 32, &rx[0], 8)
+    );
+    try expect(suback.accepted());
+    try expect(suback.packet_id == 7 as u16);
+
+    const sent: usize = try block_on<usize>(
+        client.publish_qos0("glasses/up" as &const byte, 10, "ok" as &const byte, 2, &tx[0], 32)
+    );
+    try expect(sent == 2 as usize);
+
+    const packet: MqttPacketView = try block_on<MqttPacketView>(client.read_packet(&rx[0], 8));
+    const ack: MqttConnAck = try mqtt_packet_parse_connack(&packet);
+    try expect(ack.accepted());
+}
+
+fn test_mqtt_async_client_interface() !void {
+    var client: MockAsyncMqttClient = MockAsyncMqttClient{
+        subscribe_packet_id: 11 as u16,
+        subscribe_qos: 0 as byte,
+    };
+    const iface: AsyncMqttClient = client;
+    var tx: [byte: 32] = [0: 32];
+    var rx: [byte: 8] = [0: 8];
+
+    const connack: MqttConnAck = try block_on<MqttConnAck>(iface.connect(&tx[0], 32, &rx[0], 8));
+    try expect(connack.accepted());
+
+    const suback: MqttSubAck = try block_on<MqttSubAck>(
+        iface.subscribe("glasses/down" as &const byte, 12, &tx[0], 32, &rx[0], 8)
+    );
+    try expect(suback.accepted());
+    try expect(suback.packet_id == 11 as u16);
+}
+
+fn test_mqtt_fd_client_new_steals_transport() !void {
+    const opts: MqttConnectOptions = MqttConnectOptions{
+        client_id: "cid" as &const byte,
+        client_id_len: 3,
+    };
+    var io: MqttFdTransport = mqtt_fd_transport_borrowed(123);
+    const client: MqttFdClient = mqtt_fd_client_new(&opts, &io);
+    try expect(io.borrow_fd() == (-1 as i32));
+    try expect(client.borrow_fd() == 123 as i32);
+}
+
+export fn main() i32 {
+    test_suite_begin("Std MQTT Async Tests");
+    run_test("mqtt connect frame smoke", test_mqtt_connect_frame_smoke);
+    run_test("mqtt async client method", test_mqtt_async_client_method);
+    run_test("mqtt async client interface", test_mqtt_async_client_interface);
+    run_test("mqtt fd client steals transport", test_mqtt_fd_client_new_steals_transport);
+    return test_suite_end();
+}

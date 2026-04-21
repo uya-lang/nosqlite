@@ -1,0 +1,13 @@
+// microapp 代码生成回归：@syscall 在 microapp 模式下必须重定向到 microcontainer host API
+
+export fn main() i32 {
+    const msg: *byte = "hello microapp syscall";
+    const result: !i64 = @syscall(1, msg as i64, 22);
+    const bytes_written: i64 = result catch {
+        return 1;
+    };
+    if bytes_written != 22 {
+        return 1;
+    }
+    return 0;
+}

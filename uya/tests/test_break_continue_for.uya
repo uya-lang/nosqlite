@@ -1,0 +1,147 @@
+// break 和 continue 在 for 循环中的测试程序
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_break_in_for_value() !void {
+    var arr1: [i32: 5] = [1, 2, 3, 4, 5];
+    var sum1: i32 = 0;
+    for arr1 |item| {
+        if item == 3 {
+            break;
+        }
+        sum1 = sum1 + item;
+    }
+    try assert_eq_i32(sum1, 3);  // 1 + 2 = 3
+}
+
+fn test_break_first_element() !void {
+    var arr2: [i32: 3] = [10, 20, 30];
+    var count1: i32 = 0;
+    for arr2 |_| {
+        count1 = count1 + 1;
+        break;
+    }
+    try assert_eq_i32(count1, 1);
+}
+
+fn test_continue_in_for_value() !void {
+    var arr3: [i32: 5] = [1, 2, 3, 4, 5];
+    var sum2: i32 = 0;
+    for arr3 |item| {
+        if item == 3 {
+            continue;
+        }
+        sum2 = sum2 + item;
+    }
+    try assert_eq_i32(sum2, 12);  // 1 + 2 + 4 + 5 = 12
+}
+
+fn test_skip_multiple() !void {
+    var arr4: [i32: 6] = [10, 20, 30, 40, 50, 60];
+    var sum3: i32 = 0;
+    for arr4 |item| {
+        if item == 20 || item == 40 {
+            continue;
+        }
+        sum3 = sum3 + item;
+    }
+    try assert_eq_i32(sum3, 150);  // 10 + 30 + 50 + 60 = 150
+}
+
+fn test_break_in_for_ref() !void {
+    var arr5: [i32: 5] = [1, 2, 3, 4, 5];
+    for arr5 |&item| {
+        if *item == 3 {
+            break;
+        }
+        *item = *item * 2;
+    }
+    try expect(arr5[0] == 2 && arr5[1] == 4 && arr5[2] == 3);
+}
+
+fn test_continue_in_for_ref() !void {
+    var arr6: [i32: 5] = [1, 2, 3, 4, 5];
+    for arr6 |&item| {
+        if *item == 3 {
+            continue;
+        }
+        *item = *item * 2;
+    }
+    try expect(arr6[0] == 2 && arr6[1] == 4 && arr6[2] == 3 && arr6[3] == 8 && arr6[4] == 10);
+}
+
+fn test_break_continue_combined() !void {
+    var arr7: [i32: 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    var sum4: i32 = 0;
+    for arr7 |item| {
+        if item == 8 {
+            break;
+        }
+        if item == 3 || item == 5 {
+            continue;
+        }
+        sum4 = sum4 + item;
+    }
+    try assert_eq_i32(sum4, 20);  // 1 + 2 + 4 + 6 + 7 = 20
+}
+
+fn test_nested_loop_break() !void {
+    var arr9: [i32: 3] = [1, 2, 3];
+    var arr10: [i32: 3] = [10, 20, 30];
+    var sum5: i32 = 0;
+    for arr9 |_| {
+        for arr10 |item2| {
+            if item2 == 20 {
+                break;
+            }
+            sum5 = sum5 + item2;
+        }
+    }
+    try assert_eq_i32(sum5, 30);  // 10 * 3 = 30
+}
+
+fn test_continue_first() !void {
+    var arr11: [i32: 3] = [1, 2, 3];
+    var sum6: i32 = 0;
+    for arr11 |item| {
+        if item == 1 {
+            continue;
+        }
+        sum6 = sum6 + item;
+    }
+    try assert_eq_i32(sum6, 5);  // 2 + 3 = 5
+}
+
+fn test_break_last() !void {
+    var arr12: [i32: 4] = [1, 2, 3, 4];
+    var sum7: i32 = 0;
+    for arr12 |item| {
+        sum7 = sum7 + item;
+        if item == 4 {
+            break;
+        }
+    }
+    try assert_eq_i32(sum7, 10);  // 1 + 2 + 3 + 4 = 10
+}
+
+export fn main() i32 {
+    test_suite_begin("Break Continue For Tests");
+    
+    run_test("break in for value", test_break_in_for_value);
+    run_test("break first element", test_break_first_element);
+    run_test("continue in for value", test_continue_in_for_value);
+    run_test("skip multiple", test_skip_multiple);
+    run_test("break in for ref", test_break_in_for_ref);
+    run_test("continue in for ref", test_continue_in_for_ref);
+    run_test("break continue combined", test_break_continue_combined);
+    run_test("nested loop break", test_nested_loop_break);
+    run_test("continue first", test_continue_first);
+    run_test("break last", test_break_last);
+    
+    return test_suite_end();
+}

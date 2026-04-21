@@ -1,0 +1,28 @@
+// lib/std/crypto/crc32.uya — CRC-32 校验和（IEEE 802.3 / ZIP）
+//
+// 模块路径：use std.crypto.crc32
+
+fn crc32_update_byte(crc: u32, b: byte) u32 {
+    var c: u32 = crc ^ (b as u32);
+    var i: i32 = 0;
+    while i < 8 {
+        if (c & 1u32) != 0 {
+            c = (c >> 1) ^ 0xedb88320u32;
+        } else {
+            c = c >> 1;
+        }
+        i = i + 1;
+    }
+    return c;
+}
+
+/// 计算 CRC-32（初值 `0xffffffff`，输出异或 `0xffffffff`）。
+export fn crc32_compute(data: &[byte]) u32 {
+    var crc: u32 = 0xffffffffu32;
+    var i: usize = 0;
+    while i < data.len {
+        crc = crc32_update_byte(crc, data.ptr[i]);
+        i = i + 1;
+    }
+    return crc ^ 0xffffffffu32;
+}

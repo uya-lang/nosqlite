@@ -1,0 +1,44 @@
+// @vector.select：按 @mask(N) 逐通道选真/假分支向量（掩码为真取第二参，否则第三参）
+// 覆盖 i32/u32/f32 ×4（C99 侧 uya_simd_*_select_*x4 快路径）
+type V4i = @vector(i32, 4);
+type V4u = @vector(u32, 4);
+type V4f = @vector(f32, 4);
+
+export fn main() i32 {
+    const a: V4i = @vector.splat(10);
+    const b: V4i = @vector.splat(20);
+    const m_lt: @mask(4) = a < b;
+    const r0: V4i = @vector.select(m_lt, a, b);
+    if @vector.all(r0 == a) == false {
+        return 1;
+    }
+    const m_ge: @mask(4) = a >= b;
+    const r1: V4i = @vector.select(m_ge, a, b);
+    if @vector.all(r1 == b) == false {
+        return 2;
+    }
+    const same: V4i = @vector.select(m_lt, r0, r0) + @vector.splat(0);
+    if @vector.all(same == r0) == false {
+        return 3;
+    }
+    const au: V4u = @vector.splat(3 as u32);
+    const bu: V4u = @vector.splat(7 as u32);
+    const mu: @mask(4) = au < bu;
+    const ru: V4u = @vector.select(mu, au, bu);
+    if @vector.all(ru == au) == false {
+        return 4;
+    }
+    const af: V4f = @vector.splat(1.0f32);
+    const bf: V4f = @vector.splat(4.0f32);
+    const mf: @mask(4) = af < bf;
+    const rf: V4f = @vector.select(mf, af, bf);
+    if @vector.all(rf == af) == false {
+        return 5;
+    }
+    const mf2: @mask(4) = af >= bf;
+    const rf2: V4f = @vector.select(mf2, af, bf);
+    if @vector.all(rf2 == bf) == false {
+        return 6;
+    }
+    return 0;
+}

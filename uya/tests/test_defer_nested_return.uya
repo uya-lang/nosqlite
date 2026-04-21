@@ -1,0 +1,53 @@
+use std.testing.assert_eq_i32;
+use std.testing.run_test;
+
+error Boom;
+
+var nested_return_flag: i32 = 0;
+var nested_try_flag: i32 = 0;
+
+fn fail_now() !i32 {
+    return error.Boom;
+}
+
+fn nested_return_defer() i32 {
+    defer { nested_return_flag = 1; }
+    if true {
+        return 7;
+    }
+    return 9;
+}
+
+fn nested_try_defer() !i32 {
+    defer { nested_try_flag = 1; }
+    if true {
+        const value: i32 = try fail_now();
+        return value;
+    }
+    return 0;
+}
+
+fn test_nested_return_defer() !void {
+    nested_return_flag = 0;
+    try assert_eq_i32(nested_return_defer(), 7);
+    try assert_eq_i32(nested_return_flag, 1);
+}
+
+fn test_nested_try_defer() !void {
+    nested_try_flag = 0;
+    const value: !i32 = nested_try_defer();
+    _ = value catch |err| {
+        try assert_eq_i32((@error_id(err) as! i32).value, (@error_id(error.Boom) as! i32).value);
+        try assert_eq_i32(nested_try_flag, 1);
+        return;
+    };
+    try assert_eq_i32(0, 1);
+}
+
+test "nested_return_runs_outer_defer" {
+    run_test("nested_return_runs_outer_defer", test_nested_return_defer);
+}
+
+test "nested_try_error_runs_outer_defer" {
+    run_test("nested_try_error_runs_outer_defer", test_nested_try_defer);
+}

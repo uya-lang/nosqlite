@@ -1,0 +1,152 @@
+// test_asm_atomic.uya - @asm 原子操作测试
+// 测试原子操作类型检查和内存屏障
+
+// ===== 测试原子类型 =====
+
+// 测试原子整数类型
+test "asm atomic i32" {
+    var counter: atomic i32 = 0;
+    var value: i32 = counter;  // 读取原子值
+    @asm {
+        "nop" (value, -> value);
+    }
+}
+
+// 测试原子 i64 类型
+test "asm atomic i64" {
+    var counter: atomic i64 = 0;
+    var value: i64 = counter;  // 读取原子值
+    @asm {
+        "nop" (value, -> value);
+    }
+}
+
+// ===== 测试内存屏障 =====
+
+// 测试内存屏障指令
+test "asm memory barrier" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    } clobbers = ["memory"];
+}
+
+// 测试读内存屏障
+test "asm read barrier" {
+    var x: i32 = 0;
+    var y: i32 = 0;
+    @asm {
+        "nop" (x, -> y);
+    } clobbers = ["memory"];
+}
+
+// 测试写内存屏障
+test "asm write barrier" {
+    var x: i32 = 42;
+    @asm {
+        "nop" (x);
+    } clobbers = ["memory"];
+}
+
+// ===== 测试原子操作语义 =====
+
+// 测试原子读
+test "asm atomic read" {
+    var value: atomic i32 = 42;
+    var result: i32 = 0;
+    @asm {
+        "nop" (&value, -> result);
+    }
+}
+
+// 测试原子写
+test "asm atomic write" {
+    var value: atomic i32 = 0;
+    var new_val: i32 = 42;
+    @asm {
+        "nop" (new_val);
+    } clobbers = ["memory"];
+}
+
+// 测试原子交换
+test "asm atomic swap" {
+    var value: atomic i32 = 10;
+    var new_val: i32 = 20;
+    var old_val: i32 = 0;
+    @asm {
+        "nop" (&value, new_val, -> old_val);
+    } clobbers = ["memory"];
+}
+
+// ===== 测试原子指针 =====
+
+// 测试指针类型（不是原子指针）
+test "asm pointer type" {
+    var arr: [i32: 4] = [1, 2, 3, 4];
+    var ptr: &i32 = &arr[0];
+    var result: i32 = 0;
+    @asm {
+        "nop" (ptr, -> result);
+    }
+}
+
+// ===== 测试复杂原子操作 =====
+
+// 测试比较并交换
+test "asm compare and swap" {
+    var value: atomic i32 = 10;
+    var expected: i32 = 10;
+    var new_val: i32 = 20;
+    var result: i32 = 0;
+    @asm {
+        "nop" (&value, expected, new_val, -> result);
+    } clobbers = ["memory"];
+}
+
+// 测试原子加法
+test "asm atomic add" {
+    var counter: atomic i32 = 0;
+    var increment: i32 = 1;
+    var old_value: i32 = 0;
+    @asm {
+        "nop" (&counter, increment, -> old_value);
+    } clobbers = ["memory"];
+}
+
+// 测试原子减法
+test "asm atomic sub" {
+    var counter: atomic i32 = 10;
+    var decrement: i32 = 1;
+    var old_value: i32 = 0;
+    @asm {
+        "nop" (&counter, decrement, -> old_value);
+    } clobbers = ["memory"];
+}
+
+// ===== 测试内存序 =====
+
+// 测试顺序一致性
+test "asm sequential consistency" {
+    var x: atomic i32 = 0;
+    var y: i32 = 0;
+    @asm {
+        "nop" (&x, -> y);
+    } clobbers = ["memory"];
+}
+
+// 测试释放语义
+test "asm release semantics" {
+    var x: atomic i32 = 42;
+    @asm {
+        "nop" ();
+    } clobbers = ["memory"];
+}
+
+// 测试获取语义
+test "asm acquire semantics" {
+    var x: atomic i32 = 0;
+    var y: i32 = 0;
+    @asm {
+        "nop" (&x, -> y);
+    } clobbers = ["memory"];
+}

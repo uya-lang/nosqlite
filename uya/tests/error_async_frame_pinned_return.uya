@@ -1,0 +1,19 @@
+// error_async_frame_pinned_return.uya
+//
+// 预期：编译失败。不能按值返回 pinned 的 @frame 类型。
+
+use std.async;
+
+@async_fn
+fn inner_async() Future<!i32> {
+    return 1;
+}
+
+@async_fn
+fn producer() Future<!@frame(inner_async)> {
+    var a: @frame(inner_async);
+    return a;  // 错误：按值返回 pinned 类型
+}
+
+test "expect_compile_fail" {
+}

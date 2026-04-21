@@ -1,0 +1,9 @@
+// 向量饱和运算仅支持有符号整数元素类型的 @vector(T, N)
+type Vec4u32 = @vector(u32, 4);
+
+export fn main() i32 {
+    const a: Vec4u32 = @vector.splat(100);
+    const b: Vec4u32 = @vector.splat(200);
+    const c: Vec4u32 = a +| b;
+    return 0;
+}

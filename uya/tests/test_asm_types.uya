@@ -1,0 +1,102 @@
+// test_asm_types.uya - @asm 类型系统测试
+// 使用简单的 nop 指令避免汇编错误
+
+// 测试 i8 类型
+test "asm i8 type" {
+    var x: i8 = 0;
+    var y: i8 = 10;
+    @asm {
+        "nop" (y, -> x);
+    }
+}
+
+// 测试 i16 类型
+test "asm i16 type" {
+    var x: i16 = 0;
+    var y: i16 = 1000;
+    @asm {
+        "nop" (y, -> x);
+    }
+}
+
+// 测试 i32 类型
+test "asm i32 type" {
+    var x: i32 = 0;
+    var y: i32 = 100000;
+    @asm {
+        "nop" (y, -> x);
+    }
+}
+
+// 测试 i64 类型
+test "asm i64 type" {
+    var x: i64 = 0;
+    var y: i64 = 10000000000;
+    @asm {
+        "nop" (y, -> x);
+    }
+}
+
+// 测试 u8 类型
+test "asm u8 type" {
+    var x: u8 = 0;
+    var y: u8 = 200;
+    @asm {
+        "nop" (y, -> x);
+    }
+}
+
+// 测试 u16 类型
+test "asm u16 type" {
+    var x: u16 = 0;
+    var y: u16 = 50000;
+    @asm {
+        "nop" (y, -> x);
+    }
+}
+
+// 测试 u32 类型
+test "asm u32 type" {
+    var x: u32 = 0;
+    var y: u32 = 4000000000;
+    @asm {
+        "nop" (y, -> x);
+    }
+}
+
+// 测试 u64 类型
+test "asm u64 type" {
+    var x: u64 = 0;
+    var y: u64 = 18000000000000000000;
+    @asm {
+        "nop" (y, -> x);
+    }
+}
+
+// 测试 usize 类型
+test "asm usize type" {
+    var x: usize = 0;
+    var y: usize = 1000;
+    @asm {
+        "nop" (y, -> x);
+    }
+}
+
+// 测试指针类型输入
+test "asm pointer input" {
+    var arr: [i32: 4] = [1, 2, 3, 4];
+    var ptr: &i32 = &arr[0];
+    var value: i32 = 0;
+    @asm {
+        "nop" (ptr, -> value);
+    }
+}
+
+// 测试布尔类型（作为整数输入）
+test "asm bool input" {
+    var flag: bool = true;
+    var result: i32 = 0;
+    @asm {
+        "nop" (flag as i32, -> result);
+    }
+}

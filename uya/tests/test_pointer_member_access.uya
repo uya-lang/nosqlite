@@ -1,0 +1,80 @@
+// 测试程序：验证指针类型的成员访问
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Rectangle {
+    top_left: Point,
+    bottom_right: Point,
+}
+
+fn test_pointer_param(rect: &Rectangle) !void {
+    try assert_eq_i32(rect.top_left.x, 0);
+    try assert_eq_i32(rect.top_left.y, 0);
+    try assert_eq_i32(rect.bottom_right.x, 10);
+    try assert_eq_i32(rect.bottom_right.y, 20);
+
+    rect.top_left.x = 5;
+    rect.top_left.y = 5;
+    rect.bottom_right.x = 15;
+    rect.bottom_right.y = 25;
+
+    try assert_eq_i32(rect.top_left.x, 5);
+    try assert_eq_i32(rect.top_left.y, 5);
+    try assert_eq_i32(rect.bottom_right.x, 15);
+    try assert_eq_i32(rect.bottom_right.y, 25);
+}
+
+fn test_nested_pointer(point: &Point) !void {
+    try assert_eq_i32(point.x, 0);
+    try assert_eq_i32(point.y, 0);
+
+    point.x = 100;
+    point.y = 200;
+
+    try assert_eq_i32(point.x, 100);
+    try assert_eq_i32(point.y, 200);
+}
+
+struct Container {
+    point: &Point,
+}
+
+fn test_struct_with_pointer_field(container: &Container) !void {
+    try assert_eq_i32(container.point.x, 0);
+    try assert_eq_i32(container.point.y, 0);
+
+    container.point.x = 50;
+    container.point.y = 60;
+
+    try assert_eq_i32(container.point.x, 50);
+    try assert_eq_i32(container.point.y, 60);
+}
+
+// 测试包装器
+var g_rect: Rectangle = Rectangle{ top_left: Point{ x: 0, y: 0 }, bottom_right: Point{ x: 10, y: 20 } };
+var g_point: Point = Point{ x: 0, y: 0 };
+var g_container_point: Point = Point{ x: 0, y: 0 };
+var g_container: Container = Container{ point: &g_container_point };
+
+test "pointer param" {
+    try test_pointer_param(&g_rect);
+    try assert_eq_i32(g_rect.top_left.x, 5);
+    try assert_eq_i32(g_rect.bottom_right.x, 15);
+}
+
+test "nested pointer" {
+    try test_nested_pointer(&g_point);
+    try assert_eq_i32(g_point.x, 100);
+    try assert_eq_i32(g_point.y, 200);
+}
+
+test "struct with pointer field" {
+    try test_struct_with_pointer_field(&g_container);
+    try assert_eq_i32(g_container_point.x, 50);
+}

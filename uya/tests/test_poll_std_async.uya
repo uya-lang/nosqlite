@@ -1,0 +1,25 @@
+// test_poll_std_async.uya - 验证 std.async 提供泛型 Poll<T> 类型
+// 设计见 docs/std_async_design.md 阶段 1。
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+test "poll_i32_ready" {
+    const p: Poll<i32> = Poll<i32>.Ready(42);
+    var result: i32 = 0;
+    match p {
+        .Ready(x) => { result = x; },
+        .Pending(_) => { result = 0 - 1; },
+    };
+    try assert_eq_i32(result, 42);
+}
+
+test "poll_i32_pending" {
+    const p: Poll<i32> = Poll<i32>.Pending();
+    var result: i32 = 0;
+    match p {
+        .Ready(_) => { result = 1; },
+        .Pending(_) => { result = 0; },
+    };
+    try assert_eq_i32(result, 0);
+}

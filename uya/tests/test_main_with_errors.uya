@@ -1,0 +1,32 @@
+// 测试 main 函数中的错误处理
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+
+error DivisionByZero;
+error NotFound;
+
+fn divide(a: i32, b: i32) !i32 {
+    if (b == 0) {
+        return error.DivisionByZero;
+    }
+    return a / b;
+}
+
+test "test_try_divide" {
+    const x: i32 = try divide(10, 2);
+    try assert_eq_i32(x, 5);
+}
+
+test "test_catch_divide" {
+    const y: i32 = divide(10, 0) catch { 0; };
+    try assert_eq_i32(y, 0);
+}
+
+test "test_catch_with_error" {
+    const z: i32 = divide(8, 4) catch |e| {
+        // 这个分支不会执行，因为 8/4 成功
+        0;
+    };
+    try assert_eq_i32(z, 2);
+}

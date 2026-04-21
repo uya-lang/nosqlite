@@ -1,0 +1,55 @@
+// 测试 std.json 解析：字符串字面量及转义 \" \\ \n \r \t
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.parser.parse;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 4096] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 4096);
+
+    // 简单字符串 "abc"  -> 34,97,98,99,34
+    var buf: [byte: 32] = [];
+    buf[0] = 34;
+    buf[1] = 97;
+    buf[2] = 98;
+    buf[3] = 99;
+    buf[4] = 34;
+    const v1: JsonValue = parse(&a, &buf[0], 5) catch { return 1; };
+    match v1 {
+        .str(s) => {
+            if s.len != 3 { return 2; }
+            if s.ptr[0] != 97 || s.ptr[1] != 98 || s.ptr[2] != 99 { return 3; }
+        },
+        else => { return 4; },
+    }
+
+    // 带转义 "a\nb" -> 34,97,92,110,98,34（视图为原始 a,\n 两字符被跳过后的逻辑长度由实现决定；此处校验视图含 a,\n,b 的原始字节）
+    buf[0] = 34;
+    buf[1] = 97;
+    buf[2] = 92;
+    buf[3] = 110;
+    buf[4] = 98;
+    buf[5] = 34;
+    const v2: JsonValue = parse(&a, &buf[0], 6) catch { return 5; };
+    match v2 {
+        .str(s) => {
+            if s.len != 4 { return 6; }
+            if s.ptr[0] != 97 || s.ptr[1] != 92 || s.ptr[2] != 110 || s.ptr[3] != 98 { return 7; }
+        },
+        else => { return 8; },
+    }
+
+    // 空字符串 ""
+    buf[0] = 34;
+    buf[1] = 34;
+    const v3: JsonValue = parse(&a, &buf[0], 2) catch { return 9; };
+    match v3 {
+        .str(s) => { if s.len != 0 { return 10; } },
+        else => { return 11; },
+    }
+
+    return 0;
+}

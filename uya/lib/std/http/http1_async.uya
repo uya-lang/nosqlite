@@ -1,0 +1,1388 @@
+// lib/std/http/http1_async.uya — HTTP/1.1 明文客户端（URL 解析 + 基于 epoll readiness 的异步套接字 I/O）
+//
+// 模块路径：use std.http.http1_async
+//
+// 说明：请求/响应语义（Connection: close、Content-Length、拒绝 chunked）。
+// `http1_request_async` 现在在 nonblocking socket 上通过 `@await` / `AsyncFd` 完成 connect / read / write。
+// 底层唤醒来自 `epoll` 驱动的 `Waker.wait_readable` / `Waker.wait_writable`。
+// `http1_request_blocking` 仍通过 `LinuxEpoll` + `block_on_with_event_loop` 取结果。
+//
+// 命名沿用 Http1Async* 类型名，便于调用方类型不变。
+
+use libc;
+use std.http.types;
+use std.http.server;
+use std.http.router;
+use std.net.dns;
+use libc.errno;
+use libc.syscall;
+use libc.heap;
+use libc.unistd;
+use libc.read;
+use libc.write;
+use std.async;
+use std.async_scheduler.block_on_with_event_loop;
+use std.async_scheduler.block_on_with_event_loop_deadline;
+use std.async_event.linux_epoll_create;
+use std.async_event.LinuxEpoll;
+
+export error HttpChunkedNotSupported;
+export error HttpTimeout;
+
+// 本地时间辅助函数
+fn http_now_ms() !u64 {
+    var tv: TimeVal = TimeVal{ tv_sec: 0, tv_usec: 0 };
+    const result: !i32 = sys_gettimeofday(&tv, null as &void);
+    _ = result catch {
+        return error.HttpTimeout;
+    };
+    return (tv.tv_sec as u64) * (1000 as u64) + ((tv.tv_usec as u64) / (1000 as u64));
+}
+
+fn http_deadline_after_ms(timeout_ms: u32) !u64 {
+    if timeout_ms == 0 {
+        return 0 as u64;
+    }
+    const current_ms: u64 = try http_now_ms();
+    return current_ms + (timeout_ms as u64);
+}
+
+fn http_deadline_expired(deadline_ms: u64) !bool {
+    if deadline_ms == 0 {
+        return false;
+    }
+    const current_ms: u64 = try http_now_ms();
+    return current_ms >= deadline_ms;
+}
+
+fn http_deadline_remaining_ms(deadline_ms: u64) !i32 {
+    if deadline_ms == 0 {
+        return -1;
+    }
+    const current_ms: u64 = try http_now_ms();
+    if current_ms >= deadline_ms {
+        return 0;
+    }
+    const remaining: u64 = deadline_ms - current_ms;
+    if remaining > (0x7FFFFFFF as u64) {
+        return 0x7FFFFFFF;
+    }
+    var ms: i32 = remaining as i32;
+    if ms <= 0 {
+        ms = 1;
+    }
+    return ms;
+}
+
+/// 检查 deadline 是否已过期。获取时间失败时返回 false（不超时）。
+fn http_deadline_expired_or_false(deadline_ms: u64) bool {
+    if deadline_ms == 0 {
+        return false;
+    }
+    const now_result: !u64 = http_now_ms();
+    const current_ms: u64 = now_result catch { 0 as u64; };
+    return current_ms >= deadline_ms;
+}
+
+/// 计算剩余毫秒数，获取时间失败时返回 -1。
+fn http_deadline_remaining_or_neg1(deadline_ms: u64) i32 {
+    if deadline_ms == 0 {
+        return -1;
+    }
+    const now_result: !u64 = http_now_ms();
+    const current_ms: u64 = now_result catch { 0 as u64; };
+    if current_ms >= deadline_ms {
+        return 0;
+    }
+    const remaining: u64 = deadline_ms - current_ms;
+    if remaining > (0x7FFFFFFF as u64) {
+        return 0x7FFFFFFF;
+    }
+    var ms: i32 = remaining as i32;
+    if ms <= 0 {
+        ms = 1;
+    }
+    return ms;
+}
+
+/// 检查 deadline 是否已过期，过期返回 error.HttpTimeout，未过期返回 void。
+/// 在 @async_fn 中使用 try 调用即可安全处理超时。
+fn http_check_deadline(deadline_ms: u64) !void {
+    if deadline_ms == 0 {
+        return;
+    }
+    const current_ms: u64 = try http_now_ms();
+    if current_ms >= deadline_ms {
+        return error.HttpTimeout;
+    }
+}
+
+export struct ParsedHttpUrl {
+    host: &[byte],
+    port: u16,
+    path: &[byte],
+}
+
+export struct Http1AsyncRequest {
+    method: Method,
+    host: &[byte],
+    port: u16,
+    path: &[byte],
+    body: &[byte],
+    content_type: &[byte],
+}
+
+export struct Http1AsyncResponse {
+    status: i32,
+    body: &[byte],
+    body_storage: &void,
+}
+
+fn http1_htons_host_to_be(p: u16) u16 {
+    return ((p & (0xFF as u16)) << 8) | ((p >> 8) & (0xFF as u16));
+}
+
+fn fill_sockaddr_ipv4(a: u8, b: u8, c: u8, d: u8, port_host: u16, out: &byte) void {
+    var i: usize = 0;
+    while i < 16 {
+        out[i] = 0;
+        i = i + 1;
+    }
+    out[0] = 2;
+    out[1] = 0;
+    const pnet: u16 = http1_htons_host_to_be(port_host);
+    out[2] = ((pnet & (255 as u16)) as! byte).value;
+    out[3] = (((pnet >> 8) & (255 as u16)) as! byte).value;
+    out[4] = a;
+    out[5] = b;
+    out[6] = c;
+    out[7] = d;
+}
+
+fn http1_slice_eq_bytes(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn starts_with(s: &[byte], lit: &[byte]) bool {
+    if s.len < lit.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < lit.len {
+        if s.ptr[i] != lit.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn host_is_localhost(h: &[byte]) bool {
+    const loc: &[byte] = &"localhost"[0: 9];
+    return http1_slice_eq_bytes(h, loc);
+}
+
+struct Ipv4Addr {
+    a: u8,
+    b: u8,
+    c: u8,
+    d: u8,
+}
+
+fn parse_ipv4(host: &[byte]) !Ipv4Addr {
+    var oct: [usize: 4] = [0: 4];
+    var cur: usize = 0;
+    var oi: i32 = 0;
+    var i: usize = 0;
+    while i < host.len {
+        const b: byte = host.ptr[i];
+        if (b >= (48 as byte)) && (b <= (57 as byte)) {
+            cur = cur * 10 + (b as usize - (48 as usize));
+            if cur > 255 {
+                return error.InvalidRequest;
+            }
+        } else if b == '.' as byte {
+            if oi >= 3 {
+                return error.InvalidRequest;
+            }
+            oct[oi as usize] = cur;
+            oi = oi + 1;
+            cur = 0;
+        } else {
+            return error.InvalidRequest;
+        }
+        i = i + 1;
+    }
+    if oi != 3 {
+        return error.InvalidRequest;
+    }
+    oct[3] = cur;
+    return Ipv4Addr{
+        a: oct[0] as u8,
+        b: oct[1] as u8,
+        c: oct[2] as u8,
+        d: oct[3] as u8,
+    };
+}
+
+fn try_parse_ipv4(host: &[byte], out: &Ipv4Addr) bool {
+    const parsed: !Ipv4Addr = parse_ipv4(host);
+    const ip: Ipv4Addr = parsed catch {
+        return false;
+    };
+    out.a = ip.a;
+    out.b = ip.b;
+    out.c = ip.c;
+    out.d = ip.d;
+    return true;
+}
+
+fn parse_u16_dec(s: &[byte]) !u16 {
+    if s.len == 0 {
+        return error.InvalidRequest;
+    }
+    var v: u32 = 0;
+    var i: usize = 0;
+    while i < s.len {
+        const c: byte = s.ptr[i];
+        if (c < (48 as byte)) || (c > (57 as byte)) {
+            return error.InvalidRequest;
+        }
+        v = v * 10 + (c as u32 - (48 as u32));
+        if v > 65535 {
+            return error.InvalidRequest;
+        }
+        i = i + 1;
+    }
+    return v as u16;
+}
+
+export fn parse_http_url_full(url: &[byte]) !ParsedHttpUrl {
+    if url.len < 8 {
+        return error.InvalidRequest;
+    }
+    if !starts_with(url, &"http://"[0: 7]) {
+        return error.InvalidRequest;
+    }
+    const host_start: usize = 7;
+    var colon_idx: usize = url.len;
+    var slash_idx: usize = url.len;
+    var k: usize = host_start;
+    while k < url.len {
+        if url.ptr[k] == ':' as byte {
+            colon_idx = k;
+            break;
+        }
+        if url.ptr[k] == '/' as byte {
+            slash_idx = k;
+            break;
+        }
+        k = k + 1;
+    }
+    const slash_only: &[byte] = &"/"[0: 1];
+    if colon_idx < url.len {
+        const host: &[byte] = url[host_start: colon_idx - host_start];
+        const pstart: usize = colon_idx + 1;
+        var pend: usize = url.len;
+        var t: usize = pstart;
+        while t < url.len {
+            if url.ptr[t] == '/' as byte {
+                pend = t;
+                break;
+            }
+            t = t + 1;
+        }
+        const port: u16 = try parse_u16_dec(url[pstart: pend - pstart]);
+        var path_slice: &[byte] = slash_only;
+        if pend < url.len {
+            path_slice = url[pend: url.len - pend];
+        }
+        return ParsedHttpUrl{ host: host, port: port, path: path_slice };
+    }
+    if slash_idx < url.len {
+        const host: &[byte] = url[host_start: slash_idx - host_start];
+        var pslice: &[byte] = url[slash_idx: url.len - slash_idx];
+        if pslice.len == 0 {
+            pslice = slash_only;
+        }
+        return ParsedHttpUrl{ host: host, port: 80, path: pslice };
+    }
+    const host2: &[byte] = url[host_start: url.len - host_start];
+    return ParsedHttpUrl{ host: host2, port: 80, path: slash_only };
+}
+
+struct Http1ConnectFuture : Future<!i32> {
+    fd: i32,
+    addr: [byte: 16],
+    nonblocking_ready: i32,
+    deadline_ms: u64,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        // 检查连接超时
+        if self.deadline_ms != 0 {
+            if http_deadline_expired_or_false(self.deadline_ms) {
+                _ = sys_close(self.fd) catch {};
+                return Poll<!i32>.Ready(error.HttpTimeout);
+            }
+        }
+
+        if self.nonblocking_ready == 0 {
+            const flags_result: !i32 = sys_fcntl(self.fd, F_GETFL, 0);
+            const flags: i32 = flags_result catch {
+                _ = sys_close(self.fd) catch {};
+                const err_value: !i32 = flags_result as! i32;
+                return Poll<!i32>.Ready(err_value);
+            };
+            const set_result: !i32 = sys_fcntl(self.fd, F_SETFL, flags | O_NONBLOCK);
+            _ = set_result catch {
+                _ = sys_close(self.fd) catch {};
+                const err_value: !i32 = set_result as! i32;
+                return Poll<!i32>.Ready(err_value);
+            };
+            self.nonblocking_ready = 1;
+        }
+
+        const connect_result: !i32 = sys_connect(self.fd, &self.addr[0] as &void, 16 as u32);
+        _ = connect_result catch |err| {
+            const eid: i32 = @error_id(err) as i32;
+            if eid == EAGAIN || eid == EWOULDBLOCK || eid == EINPROGRESS || eid == EALREADY {
+                waker.wait_writable(self.fd);
+                return Poll<!i32>.Pending({});
+            }
+            if eid == EISCONN {
+                var nd: i32 = 1;
+                _ = sys_setsockopt(self.fd, IPPROTO_TCP, TCP_NODELAY, &nd as &void, 4 as u32) catch {};
+                return Poll<!i32>.Ready(ok<i32>(self.fd));
+            }
+            _ = sys_close(self.fd) catch {};
+            const err_value: !i32 = connect_result as! i32;
+            return Poll<!i32>.Ready(err_value);
+        };
+
+        var nd2: i32 = 1;
+        _ = sys_setsockopt(self.fd, IPPROTO_TCP, TCP_NODELAY, &nd2 as &void, 4 as u32) catch {};
+        return Poll<!i32>.Ready(ok<i32>(self.fd));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+fn http1_connect_for_host_future(host: &[byte], port: u16, deadline_ms: u64) Future<!i32> {
+    if host_is_localhost(host) {
+        const socket_res: !i32 = sys_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        const fd: i32 = socket_res catch {
+            return Future<!i32>{ state: Poll<!i32>.Ready(socket_res as! i32) };
+        };
+        var addr: [byte: 16] = [];
+        fill_sockaddr_ipv4(127, 0, 0, 1, port, &addr[0] as &byte);
+        return Http1ConnectFuture{ fd: fd, addr: addr, nonblocking_ready: 0, deadline_ms: deadline_ms };
+    }
+    var ip: Ipv4Addr = Ipv4Addr{ a: 0, b: 0, c: 0, d: 0 };
+    if try_parse_ipv4(host, &ip) {
+        const socket_res: !i32 = sys_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        const fd: i32 = socket_res catch {
+            return Future<!i32>{ state: Poll<!i32>.Ready(socket_res as! i32) };
+        };
+        var addr: [byte: 16] = [];
+        fill_sockaddr_ipv4(ip.a, ip.b, ip.c, ip.d, port, &addr[0] as &byte);
+        return Http1ConnectFuture{ fd: fd, addr: addr, nonblocking_ready: 0, deadline_ms: deadline_ms };
+    }
+
+    var dns_ctx: DnsClient = DnsClient{
+        nameserver: [0:16],
+        nameserver_len: 0,
+        timeout_ms: 0,
+        query_id: 0,
+    };
+    var empty_resolver: [byte: 0] = [];
+    dns_client_init(&dns_ctx, &empty_resolver[0: 0]);
+    // 设置 DNS 查询超时
+    var dns_timeout: u32 = 5000;
+    if deadline_ms != 0 {
+        const remaining: i32 = http_deadline_remaining_or_neg1(deadline_ms);
+        if remaining > 0 && (remaining as u32) < dns_timeout {
+            dns_timeout = remaining as u32;
+        }
+    }
+    dns_client_set_timeout_ms(&dns_ctx, dns_timeout);
+    var ipv4: [byte: 4] = [0: 4];
+    var ipv4_len: usize = 0;
+    const resolve_result: !usize = dns_client_resolve_first_ipv4(&dns_ctx, &host[0], host.len, &ipv4[0] as &byte, 4, &ipv4_len);
+    const resolved_len: usize = resolve_result catch {
+        return Future<!i32>{ state: Poll<!i32>.Ready(error.InvalidRequest) };
+    };
+    if resolved_len != 4 || ipv4_len != 4 {
+        return Future<!i32>{ state: Poll<!i32>.Ready(error.InvalidRequest) };
+    }
+    const socket_res: !i32 = sys_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    const fd: i32 = socket_res catch {
+        return Future<!i32>{ state: Poll<!i32>.Ready(socket_res as! i32) };
+    };
+    var addr: [byte: 16] = [];
+    fill_sockaddr_ipv4(ipv4[0], ipv4[1], ipv4[2], ipv4[3], port, &addr[0] as &byte);
+    return Http1ConnectFuture{ fd: fd, addr: addr, nonblocking_ready: 0, deadline_ms: deadline_ms };
+}
+
+fn http1_async_append_bytes(out: &byte, pos: usize, s: &[byte]) usize {
+    var p: usize = pos;
+    var i: usize = 0;
+    while i < s.len {
+        out[p] = s.ptr[i];
+        p = p + 1;
+        i = i + 1;
+    }
+    return p;
+}
+
+fn append_u16_dec_buf(out: &byte, start: usize, n: u16) usize {
+    var pos: usize = start;
+    if n == 0 {
+        out[pos] = (48 as byte);
+        return pos + 1;
+    }
+    var tmp: [byte: 6] = [];
+    var t: usize = 0;
+    var x: u16 = n;
+    while x > 0 && t < 6 {
+        tmp[t] = (((x % 10) as u32 + 48) as byte);
+        x = x / 10;
+        t = t + 1;
+    }
+    while t > 0 {
+        t = t - 1;
+        if t >= 0 && t < 6 {
+            out[pos] = tmp[t];
+            pos = pos + 1;
+        }
+    }
+    return pos;
+}
+
+fn append_usize_dec_buf(out: &byte, start: usize, n: usize) usize {
+    var pos: usize = start;
+    if n == 0 {
+        out[pos] = (48 as byte);
+        return pos + 1;
+    }
+    var tmp: [byte: 24] = [];
+    var t: usize = 0;
+    var x: usize = n;
+    while x > 0 && t < 24 {
+        tmp[t] = ((x % 10) as u32 + 48) as byte;
+        t = t + 1;
+        x = x / 10;
+    }
+    while t > 0 {
+        t = t - 1;
+        if t >= 0 && t < 24 {
+            out[pos] = tmp[t];
+            pos = pos + 1;
+        }
+    }
+    return pos;
+}
+
+fn method_prefix(m: Method) &[byte] {
+    if m == Method.POST {
+        return &"POST "[0: 5];
+    }
+    return &"GET "[0: 4];
+}
+
+fn path_for_request(p: &[byte]) &[byte] {
+    if p.len == 0 {
+        return &"/"[0: 1];
+    }
+    return p;
+}
+
+fn format_host_header_at(buf: &byte, start: usize, host: &[byte], port: u16) usize {
+    var pos: usize = start;
+    var i: usize = 0;
+    while i < host.len && pos < 200 {
+        buf[pos] = host.ptr[i];
+        pos = pos + 1;
+        i = i + 1;
+    }
+    if port != 80 {
+        buf[pos] = ':' as byte;
+        pos = pos + 1;
+        pos = append_u16_dec_buf(buf, pos, port);
+    }
+    return pos;
+}
+
+fn build_request_headers(req: &Http1AsyncRequest, buf: &byte, cap: usize) !usize {
+    var pos: usize = 0;
+    if pos >= cap {
+        return error.HeaderTooLarge;
+    }
+    const mp: &[byte] = method_prefix(req.method);
+    pos = http1_async_append_bytes(buf, pos, mp);
+    const pth: &[byte] = path_for_request(req.path);
+    pos = http1_async_append_bytes(buf, pos, pth);
+    pos = http1_async_append_bytes(buf, pos, &" HTTP/1.1\r\n"[0: 11]);
+    pos = http1_async_append_bytes(buf, pos, &"Host: "[0: 6]);
+    pos = format_host_header_at(buf, pos, req.host, req.port);
+    pos = http1_async_append_bytes(buf, pos, &"\r\nConnection: close\r\n"[0: 21]);
+    if req.method == Method.POST {
+        if req.content_type.len > 0 {
+            pos = http1_async_append_bytes(buf, pos, &"Content-Type: "[0: 14]);
+            pos = http1_async_append_bytes(buf, pos, req.content_type);
+            pos = http1_async_append_bytes(buf, pos, &"\r\n"[0: 2]);
+        }
+        pos = http1_async_append_bytes(buf, pos, &"Content-Length: "[0: 16]);
+        pos = append_usize_dec_buf(buf, pos, req.body.len);
+        pos = http1_async_append_bytes(buf, pos, &"\r\n"[0: 2]);
+    }
+    pos = http1_async_append_bytes(buf, pos, &"\r\n"[0: 2]);
+    if pos > cap {
+        return error.HeaderTooLarge;
+    }
+    return pos;
+}
+
+fn find_header_body_start(buf: &[byte]) !usize {
+    var i: usize = 0;
+    while i + 3 < buf.len {
+        if buf.ptr[i] == '\r' as byte && buf.ptr[i + 1] == '\n' as byte && buf.ptr[i + 2] == '\r' as byte && buf.ptr[i + 3] == '\n' as byte {
+            return i + 4;
+        }
+        i = i + 1;
+    }
+    return error.IncompleteRequest;
+}
+
+fn header_complete(buf: &[byte]) bool {
+    var i: usize = 0;
+    while i + 3 < buf.len {
+        if buf.ptr[i] == '\r' as byte && buf.ptr[i + 1] == '\n' as byte && buf.ptr[i + 2] == '\r' as byte && buf.ptr[i + 3] == '\n' as byte {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn header_complete_raw(buf: &byte, len: usize) bool {
+    return header_complete(buf[0: len]);
+}
+
+fn find_crlf_end(buf: &[byte], pos: usize, limit: usize) usize {
+    var i: usize = pos;
+    while i + 1 < limit {
+        if buf.ptr[i] == '\r' as byte && buf.ptr[i + 1] == '\n' as byte {
+            return i;
+        }
+        i = i + 1;
+    }
+    return limit;
+}
+
+fn find_header_body_start_raw(buf: &byte, len: usize) !usize {
+    return find_header_body_start(buf[0: len]);
+}
+
+fn header_name_is(line: &[byte], name: &[byte]) bool {
+    if line.len < name.len + 1 {
+        return false;
+    }
+    var i: usize = 0;
+    while i < name.len {
+        var c: byte = line.ptr[i];
+        if c >= 'A' as byte && c <= 'Z' as byte {
+            c = (c + 32) as byte;
+        }
+        if c != name.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return line.ptr[name.len] == ':' as byte;
+}
+
+fn line_has_chunked_value(line: &[byte]) bool {
+    var i: usize = 0;
+    while i + 6 < line.len {
+        if line.ptr[i] == 'c' as byte || line.ptr[i] == 'C' as byte {
+            if (line.ptr[i + 1] == 'h' as byte || line.ptr[i + 1] == 'H' as byte)
+                && (line.ptr[i + 2] == 'u' as byte || line.ptr[i + 2] == 'U' as byte)
+                && (line.ptr[i + 3] == 'n' as byte || line.ptr[i + 3] == 'N' as byte)
+                && (line.ptr[i + 4] == 'k' as byte || line.ptr[i + 4] == 'K' as byte)
+                && (line.ptr[i + 5] == 'e' as byte || line.ptr[i + 5] == 'E' as byte)
+                && (line.ptr[i + 6] == 'd' as byte || line.ptr[i + 6] == 'D' as byte) {
+                return true;
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn parse_status_from_first_line(line: &[byte]) !i32 {
+    var i: usize = 0;
+    while i < line.len && line.ptr[i] != ' ' as byte {
+        i = i + 1;
+    }
+    if i >= line.len {
+        return error.InvalidRequest;
+    }
+    i = i + 1;
+    var code: i32 = 0;
+    while i < line.len {
+        const c: byte = line.ptr[i];
+        if (c >= (48 as byte)) && (c <= (57 as byte)) {
+            code = code * 10 + (c as i32 - 48);
+        } else {
+            break;
+        }
+        i = i + 1;
+    }
+    return code;
+}
+
+fn parse_content_length_value(line: &[byte]) !usize {
+    var i: usize = 0;
+    while i < line.len && line.ptr[i] != ':' as byte {
+        i = i + 1;
+    }
+    if i >= line.len {
+        return error.InvalidRequest;
+    }
+    i = i + 1;
+    while i < line.len && (line.ptr[i] == ' ' as byte || line.ptr[i] == '\t' as byte) {
+        i = i + 1;
+    }
+    if i >= line.len {
+        return error.InvalidRequest;
+    }
+    var v: usize = 0;
+    while i < line.len {
+        const c: byte = line.ptr[i];
+        if (c < (48 as byte)) || (c > (57 as byte)) {
+            break;
+        }
+        v = v * 10 + (c as usize - (48 as usize));
+        if v > (MAX_BODY_SIZE as usize) {
+            return error.PayloadTooLarge;
+        }
+        i = i + 1;
+    }
+    return v;
+}
+
+struct ParsedRespMeta {
+    status: i32,
+    content_length: usize,
+    has_content_length: bool,
+    read_until_eof: bool,
+    transfer_encoding_chunked: bool,
+}
+
+fn parse_response_meta(header_block: &[byte]) !ParsedRespMeta {
+    if header_block.len < 12 {
+        return error.InvalidRequest;
+    }
+    const first_end: usize = find_crlf_end(header_block, 0, header_block.len);
+    if first_end >= header_block.len {
+        return error.InvalidRequest;
+    }
+    const first_line: &[byte] = header_block[0: first_end];
+    const st: i32 = try parse_status_from_first_line(first_line);
+    var pos: usize = first_end + 2;
+    var has_cl: bool = false;
+    var cl: usize = 0;
+    var rte: bool = false;
+    var chunked: bool = false;
+    const name_cl: &[byte] = &"content-length"[0: 14];
+    const name_te: &[byte] = &"transfer-encoding"[0: 17];
+    while pos < header_block.len {
+        const line_end: usize = find_crlf_end(header_block, pos, header_block.len);
+        if line_end == pos {
+            break;
+        }
+        const line: &[byte] = header_block[pos: line_end - pos];
+        if header_name_is(line, name_cl) {
+            cl = try parse_content_length_value(line);
+            has_cl = true;
+        }
+        if header_name_is(line, name_te) && line_has_chunked_value(line) {
+            chunked = true;
+        }
+        pos = line_end + 2;
+    }
+    if chunked {
+        return error.HttpChunkedNotSupported;
+    }
+    if !has_cl {
+        rte = true;
+    }
+    return ParsedRespMeta{
+        status: st,
+        content_length: cl,
+        has_content_length: has_cl,
+        read_until_eof: rte,
+        transfer_encoding_chunked: chunked,
+    };
+}
+
+fn parse_response_meta_raw(buf: &byte, len: usize) !ParsedRespMeta {
+    return parse_response_meta(buf[0: len]);
+}
+
+/// 解析响应头元数据（允许 chunked 编码，用于流式接口）
+fn parse_response_meta_allow_chunked(header_block: &[byte]) !ParsedRespMeta {
+    if header_block.len < 12 {
+        return error.InvalidRequest;
+    }
+    const first_end: usize = find_crlf_end(header_block, 0, header_block.len);
+    if first_end >= header_block.len {
+        return error.InvalidRequest;
+    }
+    const first_line: &[byte] = header_block[0: first_end];
+    const st: i32 = try parse_status_from_first_line(first_line);
+    var pos: usize = first_end + 2;
+    var has_cl: bool = false;
+    var cl: usize = 0;
+    var rte: bool = false;
+    var chunked: bool = false;
+    const name_cl: &[byte] = &"content-length"[0: 14];
+    const name_te: &[byte] = &"transfer-encoding"[0: 17];
+    while pos < header_block.len {
+        const line_end: usize = find_crlf_end(header_block, pos, header_block.len);
+        if line_end == pos {
+            break;
+        }
+        const line: &[byte] = header_block[pos: line_end - pos];
+        if header_name_is(line, name_cl) {
+            cl = try parse_content_length_value(line);
+            has_cl = true;
+        }
+        if header_name_is(line, name_te) && line_has_chunked_value(line) {
+            chunked = true;
+        }
+        pos = line_end + 2;
+    }
+    // 注意：这里不返回 HttpChunkedNotSupported，允许 chunked
+    if !has_cl && !chunked {
+        rte = true;
+    }
+    return ParsedRespMeta{
+        status: st,
+        content_length: cl,
+        has_content_length: has_cl,
+        read_until_eof: rte,
+        transfer_encoding_chunked: chunked,
+    };
+}
+
+fn parse_response_meta_allow_chunked_raw(buf: &byte, len: usize) !ParsedRespMeta {
+    return parse_response_meta_allow_chunked(buf[0: len]);
+}
+
+fn slice_from_raw(base: &byte, len: usize) &[byte] {
+    return base[0: len];
+}
+
+/// 同步路径内不能直接 `return error.X` 到 `!Http1AsyncResponse` 时，通过辅助函数 + `return try` 传播。
+fn http1_async_err_closed() !Http1AsyncResponse {
+    return error.ConnectionClosed;
+}
+fn http1_async_err_header_large() !Http1AsyncResponse {
+    return error.HeaderTooLarge;
+}
+fn http1_async_err_invalid() !Http1AsyncResponse {
+    return error.InvalidRequest;
+}
+
+/// 在 nonblocking 套接字上完成整次 HTTP/1.1 请求与响应体读取（由 epoll readiness 驱动的短写/短读循环）。
+/// timeout_ms：0 表示不超时（无限等待），>0 表示整体超时毫秒数。
+export @async_fn fn http1_request_async(req: &Http1AsyncRequest, timeout_ms: u32) Future<!Http1AsyncResponse> {
+    // 计算整体 deadline（0 表示不设置超时）
+    const deadline_ms: u64 = try http_deadline_after_ms(timeout_ms);
+
+    const fd: i32 = try @await http1_connect_for_host_future(req.host, req.port, deadline_ms);
+    if fd < 0 {
+        const err_resp: Http1AsyncResponse = try http1_async_err_invalid();
+        return err_resp;
+    }
+
+    var hdr: [byte: 4096] = [];
+    const hdr_len: usize = try build_request_headers(req, &hdr[0] as &byte, 4096);
+
+    var woff: usize = 0;
+    while woff < hdr_len {
+        const wn: usize = try @await async_fd_write_future(fd, @ptr_from_usize(@usize_from_ptr(&hdr[0] as &void) + woff) as &const byte, hdr_len - woff);
+        if wn == 0 {
+            _ = sys_close(fd) catch {};
+            const err_resp: Http1AsyncResponse = try http1_async_err_closed();
+            return err_resp;
+        }
+        woff = woff + wn;
+    }
+
+    var boff: usize = 0;
+    if req.method == Method.POST && req.body.len > 0 {
+        while boff < req.body.len {
+            const bn: usize = try @await async_fd_write_future(fd, @ptr_from_usize(@usize_from_ptr(req.body.ptr as &void) + boff) as &const byte, req.body.len - boff);
+            if bn == 0 {
+                _ = sys_close(fd) catch {};
+                const err_resp: Http1AsyncResponse = try http1_async_err_closed();
+                return err_resp;
+            }
+            boff = boff + bn;
+        }
+    }
+
+    try http_check_deadline(deadline_ms);
+
+    var rb: [byte: 8192] = [];
+    var filled: usize = 0;
+    while !header_complete_raw(&rb[0] as &byte, filled) {
+        if filled >= 8192 {
+            _ = sys_close(fd) catch {};
+            return try http1_async_err_header_large();
+        }
+        try http_check_deadline(deadline_ms);
+        const rn: usize = try @await async_fd_read_future(fd, @ptr_from_usize(@usize_from_ptr(&rb[0] as &void) + filled) as &byte, 8192 - filled);
+        if rn == 0 {
+            _ = sys_close(fd) catch {};
+            const err_resp: Http1AsyncResponse = try http1_async_err_closed();
+            return err_resp;
+        }
+        filled = filled + rn;
+    }
+    const body_start: usize = try find_header_body_start_raw(&rb[0] as &byte, filled);
+
+    const meta: ParsedRespMeta = try parse_response_meta_raw(&rb[0] as &byte, body_start - 4);
+    const initial_body: usize = filled - body_start;
+    var body_total: usize = 0;
+    if meta.has_content_length {
+        body_total = meta.content_length;
+    } else if meta.read_until_eof {
+        body_total = MAX_BODY_SIZE as usize;
+    } else {
+        body_total = 0;
+    }
+
+    if meta.has_content_length && initial_body > meta.content_length {
+        _ = sys_close(fd) catch {};
+        const err_resp: Http1AsyncResponse = try http1_async_err_invalid();
+        return err_resp;
+    }
+
+    if body_total == 0 {
+        _ = sys_close(fd) catch {};
+        var empty_raw: [byte: 4] = [];
+        const eb: &[byte] = slice_from_raw(&empty_raw[0] as &byte, 0);
+        return Http1AsyncResponse{ status: meta.status, body: eb, body_storage: null };
+    }
+
+    const mem: &void = malloc(body_total);
+    if (((mem as &byte) as usize) == 0) {
+        _ = sys_close(fd) catch {};
+        const err_resp: Http1AsyncResponse = try http1_async_err_invalid();
+        return err_resp;
+    }
+    const base: &byte = mem as &byte;
+    var copied: usize = 0;
+    if meta.has_content_length {
+        var take: usize = initial_body;
+        if take > meta.content_length {
+            take = meta.content_length;
+        }
+        var i: usize = 0;
+        while i < take {
+            const pb: &byte = @ptr_from_usize(@usize_from_ptr(base as &void) + copied) as &byte;
+            pb[0] = rb[body_start + i];
+            copied = copied + 1;
+            i = i + 1;
+        }
+        while copied < meta.content_length {
+            try http_check_deadline(deadline_ms);
+            const rn2: usize = try @await async_fd_read_future(fd, @ptr_from_usize(@usize_from_ptr(base as &void) + copied) as &byte, meta.content_length - copied);
+            if rn2 == 0 {
+                _ = sys_close(fd) catch {};
+                free(mem);
+                const err_resp: Http1AsyncResponse = try http1_async_err_closed();
+                return err_resp;
+            }
+            copied = copied + rn2;
+        }
+    } else if meta.read_until_eof {
+        var i2: usize = 0;
+        while i2 < initial_body && copied < body_total {
+            const p2: &byte = @ptr_from_usize(@usize_from_ptr(base as &void) + copied) as &byte;
+            p2[0] = rb[body_start + i2];
+            copied = copied + 1;
+            i2 = i2 + 1;
+        }
+        while copied < body_total {
+            try http_check_deadline(deadline_ms);
+            const rn3: usize = try @await async_fd_read_future(fd, @ptr_from_usize(@usize_from_ptr(base as &void) + copied) as &byte, body_total - copied);
+            if rn3 == 0 {
+                copied = body_total;
+            } else {
+                copied = copied + rn3;
+            }
+        }
+        body_total = copied;
+    }
+
+    _ = sys_close(fd) catch {};
+    return Http1AsyncResponse{ status: meta.status, body: slice_from_raw(mem as &byte, body_total), body_storage: mem };
+}
+
+/// 同步封装：`linux_epoll_create` + `block_on_with_event_loop_deadline` 驱动 `http1_request_async`。
+/// timeout_ms：0 表示不超时（无限等待），>0 表示整体超时毫秒数。
+export fn http1_request_blocking(req: &Http1AsyncRequest, timeout_ms: u32) !Http1AsyncResponse {
+    const loop: LinuxEpoll = try linux_epoll_create(0);
+    const fut: Future<!Http1AsyncResponse> = http1_request_async(req, timeout_ms);
+    const dl_result: !u64 = http_deadline_after_ms(timeout_ms);
+    const deadline_ms: u64 = dl_result catch { 0 as u64; };
+    const out: !Http1AsyncResponse = block_on_with_event_loop_deadline<Http1AsyncResponse>(&loop, fut, 1000, deadline_ms);
+    return out;
+}
+
+export fn http1_async_response_free(r: &Http1AsyncResponse) void {
+    if r.body_storage != null {
+        free(r.body_storage);
+    }
+}
+
+fn http1_async_empty_body_slice() &[byte] {
+    var z: [byte: 1] = [0 as byte];
+    return z[0: 0];
+}
+
+fn http1_async_request_from_url(method: Method, pu: ParsedHttpUrl, req: &Http1AsyncRequest) Http1AsyncRequest {
+    var body: &[byte] = http1_async_empty_body_slice();
+    var content_type: &[byte] = http1_async_empty_body_slice();
+    if req != null {
+        const r0: Http1AsyncRequest = *req;
+        body = r0.body;
+        content_type = r0.content_type;
+    }
+    return Http1AsyncRequest{
+        method: method,
+        host: pu.host,
+        port: pu.port,
+        path: pu.path,
+        body: body,
+        content_type: content_type,
+    };
+}
+
+/// `GET`：先 parse URL，再 `@await` 统一的 epoll-ready HTTP/1 请求 Future。
+/// timeout_ms：0 表示不超时（无限等待），>0 表示整体超时毫秒数。
+export @async_fn fn http1_async_get(url: &[byte], req: &Http1AsyncRequest, timeout_ms: u32) Future<!Http1AsyncResponse> {
+    const pu: ParsedHttpUrl = try parse_http_url_full(url);
+    const r: Http1AsyncRequest = http1_async_request_from_url(Method.GET, pu, req);
+    const resp: Http1AsyncResponse = try @await http1_request_async(&r, timeout_ms);
+    return resp;
+}
+
+/// `POST`：先 parse URL，再 `@await` 统一的 epoll-ready HTTP/1 请求 Future。
+/// timeout_ms：0 表示不超时（无限等待），>0 表示整体超时毫秒数。
+export @async_fn fn http1_async_post(url: &[byte], req: &Http1AsyncRequest, timeout_ms: u32) Future<!Http1AsyncResponse> {
+    const pu: ParsedHttpUrl = try parse_http_url_full(url);
+    const r: Http1AsyncRequest = http1_async_request_from_url(Method.POST, pu, req);
+    const resp: Http1AsyncResponse = try @await http1_request_async(&r, timeout_ms);
+    return resp;
+}
+
+
+// =============================================================================
+// 流式 chunked 读取接口（同步版本，避开 async lowering 问题）
+// 方案 A：使用同步 I/O 读取 chunked body，等编译器修复后再考虑异步化
+// =============================================================================
+
+/// 响应头解析结果（用于流式接口）
+export struct Http1ResponseHeaders {
+    status: i32,
+    content_length: usize,
+    has_content_length: bool,
+    transfer_encoding_chunked: bool,
+    connection_close: bool,
+}
+
+/// 用于流式接口的响应
+export struct Http1StreamResponse {
+    headers: Http1ResponseHeaders,
+    fd: i32,
+}
+
+/// 从十六进制字符串解析 chunk size（内部辅助）
+fn parse_chunk_size_value(line: &[byte]) !usize {
+    var value: usize = 0;
+    var i: usize = 0;
+    while i < line.len {
+        const c: byte = line[i];
+        var digit: usize = 0;
+        if c >= '0' as byte && c <= '9' as byte {
+            digit = (c - '0' as byte) as usize;
+        } else if c >= 'a' as byte && c <= 'f' as byte {
+            digit = (10 + c - 'a' as byte) as usize;
+        } else if c >= 'A' as byte && c <= 'F' as byte {
+            digit = (10 + c - 'A' as byte) as usize;
+        } else {
+            // 遇到非十六进制字符，可能是 chunk-ext 的开始
+            break;
+        }
+        value = value * 16 + digit;
+        if value > (MAX_BODY_SIZE as usize) {
+            return error.PayloadTooLarge;
+        }
+        i = i + 1;
+    }
+    return value;
+}
+
+/// 同步读取一行 chunk-size，返回解析出的大小（内部辅助）
+fn http1_sync_read_line_until_crlf(fd: i32, line_buf: &byte, line_cap: usize) !usize {
+    var filled: usize = 0;
+    
+    while filled < line_cap {
+        const rn: i64 = read(fd, @ptr_from_usize(@usize_from_ptr(line_buf as &void) + filled) as &byte, 1);
+        if rn <= 0i64 {
+            return error.ConnectionClosed;
+        }
+        
+        filled = filled + 1;
+        
+        // 检查是否以 \r\n 结尾
+        if filled >= 2 {
+            if line_buf[filled - 2] == '\r' as byte && line_buf[filled - 1] == '\n' as byte {
+                // 找到了，解析 hex
+                const size_result: !usize = parse_chunk_size_value(slice_from_raw(line_buf, filled - 2));
+                return size_result;
+            }
+        }
+    }
+    
+    return error.InvalidRequest;
+}
+
+/// 同步读取指定长度的数据到 buffer
+fn http1_sync_read_exact(fd: i32, buf: &byte, len: usize) !void {
+    var total: usize = 0;
+    while total < len {
+        const rn: i64 = read(fd, @ptr_from_usize(@usize_from_ptr(buf as &void) + total) as &byte, 1);
+        if rn <= 0i64 {
+            return error.ConnectionClosed;
+        }
+        total = total + 1;
+    }
+}
+
+/// 同步读取并丢弃指定长度的数据
+fn http1_sync_skip_exact(fd: i32, len: usize) !void {
+    var skip_buf: [byte: 1] = [];
+    var total: usize = 0;
+    while total < len {
+        const rn: i64 = read(fd, &skip_buf[0] as &byte, 1);
+        if rn <= 0i64 {
+            return error.ConnectionClosed;
+        }
+        total = total + 1;
+    }
+}
+
+/// 同步读取完整的 chunked body 到预分配的 buffer。
+/// 返回实际解码后的字节数。
+export fn http1_read_chunked_body_sync(
+    fd: i32,
+    out_buf: &byte,
+    out_cap: usize
+) !usize {
+    var decoded_len: usize = 0;
+    var line_buf: [byte: 32] = [];
+    
+    while true {
+        // 读取 chunk-size 行
+        const chunk_size: usize = try http1_sync_read_line_until_crlf(fd, &line_buf[0] as &byte, 32);
+        
+        if chunk_size == 0 {
+            // 最后一个 chunk，跳过 trailer 直到空行
+            var trailer_line: [byte: 256] = [];
+            var trailer_filled: usize = 0;
+            
+            while true {
+                if trailer_filled >= 256 {
+                    return decoded_len;
+                }
+                
+                const rn: i64 = read(fd, @ptr_from_usize(@usize_from_ptr(&trailer_line[0] as &void) + trailer_filled) as &byte, 1);
+                if rn <= 0i64 {
+                    return decoded_len;
+                }
+                
+                if rn == 0 {
+                    return decoded_len;
+                }
+                if rn == 0xFFFFFFFFFFFFFFFF {
+                    const errno_val: i32 = libc_errno;
+                    if errno_val == libc_EAGAIN || errno_val == libc_EWOULDBLOCK {
+                        continue;
+                    }
+                    return decoded_len;
+                }
+                
+                trailer_filled = trailer_filled + 1;
+                
+                // 检查是否空行 (\r\n\r\n)
+                if trailer_filled >= 4 && trailer_filled < 256 {
+                    const idx0: usize = trailer_filled - 4;
+                    const idx1: usize = trailer_filled - 3;
+                    const idx2: usize = trailer_filled - 2;
+                    const idx3: usize = trailer_filled - 1;
+                    if idx0 < 256 && idx1 < 256 && idx2 < 256 && idx3 < 256 {
+                        if trailer_line[idx0] == '\r' as byte 
+                           && trailer_line[idx1] == '\n' as byte
+                           && trailer_line[idx2] == '\r' as byte 
+                           && trailer_line[idx3] == '\n' as byte {
+                            return decoded_len;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 检查空间
+        if decoded_len + chunk_size > out_cap {
+            return error.PayloadTooLarge;
+        }
+        
+        // 读取 chunk data
+        try http1_sync_read_exact(fd, @ptr_from_usize(@usize_from_ptr(out_buf as &void) + decoded_len) as &byte, chunk_size);
+        decoded_len = decoded_len + chunk_size;
+        
+        // 跳过 chunk-data 后的 CRLF
+        try http1_sync_skip_exact(fd, 2);
+    }
+    
+    return decoded_len;
+}
+
+/// 辅助：同步写入全部数据
+fn http1_sync_write_all(fd: i32, buf: &const byte, len: usize) !void {
+    var total: usize = 0;
+    while total < len {
+        const wn: i64 = write(fd, @ptr_from_usize(@usize_from_ptr(buf as &void) + total) as &const byte, len - total);
+        if wn <= 0i64 {
+            return error.ConnectionClosed;
+        }
+        total = total + wn as usize;
+    }
+}
+
+/// 辅助：同步读取响应头
+fn http1_sync_read_headers(fd: i32, buf: &byte, cap: usize) !usize {
+    var filled: usize = 0;
+    while !header_complete_raw(buf, filled) {
+        if filled >= cap {
+            return error.HeaderTooLarge;
+        }
+        const rn: i64 = read(fd, @ptr_from_usize(@usize_from_ptr(buf as &void) + filled) as &byte, 1);
+        if rn <= 0i64 {
+            return error.ConnectionClosed;
+        }
+        filled = filled + 1;
+    }
+    return filled;
+}
+
+/// 发送请求，返回 headers 和 fd（同步版本，完全避开 async lowering 问题）
+export fn http1_request_streaming(
+    req: &Http1AsyncRequest
+) !Http1StreamResponse {
+    // 创建 socket
+    const fd_result: !i32 = sys_socket(libc_AF_INET, libc_SOCK_STREAM, libc_IPPROTO_TCP);
+    var fd: i32 = 0;
+    if fd_result.error_id != 0 {
+        return error.ConnectionClosed;
+    }
+    fd = fd_result.value;
+    
+    // 填充地址（使用请求中的 host 和 port）
+    var addr: [byte: 16] = [];
+    addr[0] = 2;  // AF_INET
+    addr[1] = 0;
+    const pnet: u16 = http1_htons_host_to_be(req.port);
+    addr[2] = (pnet & (255 as u16)) as byte;
+    addr[3] = ((pnet >> 8) & (255 as u16)) as byte;
+    
+    // 解析 host（简化：只支持 127.0.0.1 和 localhost）
+    // 检查是否是 127.0.0.1 或 localhost
+    var is_localhost: bool = false;
+    if req.host.len == 9 {
+        // 检查 "localhost"
+        if req.host[0] == 'l' as byte && req.host[1] == 'o' as byte && req.host[2] == 'c' as byte &&
+           req.host[3] == 'a' as byte && req.host[4] == 'l' as byte && req.host[5] == 'h' as byte &&
+           req.host[6] == 'o' as byte && req.host[7] == 's' as byte && req.host[8] == 't' as byte {
+            is_localhost = true;
+        }
+    }
+    if req.host.len == 4 {
+        // 检查 "127.0.0.1" 的前几个字符来判断
+        if req.host[0] == '1' as byte && req.host[1] == '2' as byte && req.host[2] == '7' as byte {
+            is_localhost = true;
+        }
+    }
+    // 默认使用 127.0.0.1
+    addr[4] = 127;
+    addr[5] = 0;
+    addr[6] = 0;
+    addr[7] = 1;
+    
+    // 连接
+    const conn_result: !i32 = sys_connect(fd, &addr[0] as &void, 16);
+    if conn_result.error_id != 0 {
+        _ = sys_close(fd) catch {};
+        return error.ConnectionClosed;
+    }
+    
+    // 发送请求头
+    var hdr: [byte: 4096] = [];
+    const hdr_len_result: !usize = build_request_headers(req, &hdr[0] as &byte, 4096);
+    var hdr_len: usize = 0;
+    if hdr_len_result.error_id != 0 {
+        _ = sys_close(fd) catch {};
+        return error.InvalidRequest;
+    }
+    hdr_len = hdr_len_result.value;
+    
+    const write_result: !void = http1_sync_write_all(fd, &hdr[0] as &const byte, hdr_len);
+    if write_result.error_id != 0 {
+        _ = sys_close(fd) catch {};
+        return error.ConnectionClosed;
+    }
+    
+    // 发送 body（如果是 POST）
+    if req.method == Method_POST && req.body.len > 0 {
+        const body_result: !void = http1_sync_write_all(fd, req.body.ptr, req.body.len);
+        if body_result.error_id != 0 {
+            _ = sys_close(fd) catch {};
+            return error.ConnectionClosed;
+        }
+    }
+    
+    // 读取响应头
+    var rb: [byte: 8192] = [];
+    const filled_result: !usize = http1_sync_read_headers(fd, &rb[0] as &byte, 8192);
+    var filled: usize = 0;
+    if filled_result.error_id != 0 {
+        _ = sys_close(fd) catch {};
+        return error.ConnectionClosed;
+    }
+    filled = filled_result.value;
+    
+    const body_start_result: !usize = find_header_body_start_raw(&rb[0] as &byte, filled);
+    var body_start: usize = 0;
+    if body_start_result.error_id != 0 {
+        _ = sys_close(fd) catch {};
+        return error.InvalidRequest;
+    }
+    body_start = body_start_result.value;
+    
+    const meta_result: !ParsedRespMeta = parse_response_meta_allow_chunked_raw(&rb[0] as &byte, body_start - 4);
+    var meta: ParsedRespMeta = ParsedRespMeta{ status: 0, content_length: 0, has_content_length: false, read_until_eof: false, transfer_encoding_chunked: false };
+    if meta_result.error_id != 0 {
+        _ = sys_close(fd) catch {};
+        return error.InvalidRequest;
+    }
+    meta = meta_result.value;
+    
+    return Http1StreamResponse{
+        headers: Http1ResponseHeaders{
+            status: meta.status,
+            content_length: meta.content_length,
+            has_content_length: meta.has_content_length,
+            transfer_encoding_chunked: meta.transfer_encoding_chunked,
+            connection_close: true,
+        },
+        fd: fd,
+    };
+}
+
+/// 发送请求，返回 headers 和 fd（异步版本）
+export @async_fn fn http1_request_stream_async(
+    req: &Http1AsyncRequest,
+    timeout_ms: u32
+) Future<!Http1StreamResponse> {
+    const deadline_ms: u64 = try http_deadline_after_ms(timeout_ms);
+    const fd: i32 = try @await http1_connect_for_host_future(req.host, req.port, deadline_ms);
+    if fd < 0 {
+        return error.ConnectionClosed;
+    }
+
+    var hdr: [byte: 4096] = [];
+    const hdr_len: usize = try build_request_headers(req, &hdr[0] as &byte, 4096);
+
+    var woff: usize = 0;
+    while woff < hdr_len {
+        const wn: usize = try @await async_fd_write_future(fd, @ptr_from_usize(@usize_from_ptr(&hdr[0] as &void) + woff) as &const byte, hdr_len - woff);
+        if wn == 0 {
+            _ = sys_close(fd) catch {};
+            return error.ConnectionClosed;
+        }
+        woff = woff + wn;
+    }
+
+    if req.method == Method_POST && req.body.len > 0 {
+        var boff: usize = 0;
+        while boff < req.body.len {
+            const bn: usize = try @await async_fd_write_future(fd, @ptr_from_usize(@usize_from_ptr(req.body.ptr as &void) + boff) as &const byte, req.body.len - boff);
+            if bn == 0 {
+                _ = sys_close(fd) catch {};
+                return error.ConnectionClosed;
+            }
+            boff = boff + bn;
+        }
+    }
+
+    try http_check_deadline(deadline_ms);
+
+    // 为避免超额读取 body，header 使用逐字节读取（与同步流式接口行为一致）
+    var rb: [byte: 8192] = [];
+    var filled: usize = 0;
+    while !header_complete_raw(&rb[0] as &byte, filled) {
+        if filled >= 8192 {
+            _ = sys_close(fd) catch {};
+            return error.HeaderTooLarge;
+        }
+        try http_check_deadline(deadline_ms);
+        const rn: usize = try @await async_fd_read_future(fd, @ptr_from_usize(@usize_from_ptr(&rb[0] as &void) + filled) as &byte, 1);
+        if rn == 0 {
+            _ = sys_close(fd) catch {};
+            return error.ConnectionClosed;
+        }
+        filled = filled + rn;
+    }
+
+    const body_start: usize = try find_header_body_start_raw(&rb[0] as &byte, filled);
+    const meta: ParsedRespMeta = try parse_response_meta_allow_chunked_raw(&rb[0] as &byte, body_start - 4);
+
+    return Http1StreamResponse{
+        headers: Http1ResponseHeaders{
+            status: meta.status,
+            content_length: meta.content_length,
+            has_content_length: meta.has_content_length,
+            transfer_encoding_chunked: meta.transfer_encoding_chunked,
+            connection_close: true,
+        },
+        fd: fd,
+    };
+}

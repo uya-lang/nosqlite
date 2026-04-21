@@ -1,0 +1,40 @@
+// test_std_runtime.uya - 测试新的 std.runtime 模块
+use std.runtime.entry;
+// 测试运行时支持函数（替代 bridge.c）
+
+use std.runtime.get_argc;
+use std.runtime.get_argv;
+use std.runtime.ptr_diff;
+
+export fn main() i32 {
+    // 测试 1: get_argc - 获取命令行参数数量
+    const argc: i32 = get_argc();
+    if argc < 1 {
+        return 1;  // 至少应该有程序名
+    }
+    
+    // 测试 2: get_argv - 获取命令行参数
+    // 注意：简化实现返回 null，这里只测试函数存在
+    const argv0: &byte = get_argv(0);
+    // 简化实现返回 null，所以不检查
+    
+    // 测试 3: ptr_diff - 指针差计算
+    var arr: [i32: 10] = [];
+    const ptr1: &i32 = &arr[0];
+    const ptr2: &i32 = &arr[5];
+    const diff: i32 = ptr_diff(ptr1 as &byte, ptr2 as &byte);
+    const expected_diff: i32 = 0 - ((@size_of(i32) * 5) as i32);  // 负数，因为 ptr1 < ptr2
+    if diff != expected_diff {
+        return 3;  // 指针差计算错误
+    }
+    
+    // 测试 4: 指针差为正数的情况
+    const diff2: i32 = ptr_diff(ptr2 as &byte, ptr1 as &byte);
+    const expected_diff2: i32 = @size_of(i32) * 5;
+    if diff2 != expected_diff2 {
+        return 4;  // 指针差计算错误
+    }
+    
+    return 0;
+}
+

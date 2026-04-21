@@ -1,0 +1,65 @@
+// 测试 for 循环的迭代器支持
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+error IterEnd;
+
+interface IIteratorI32 {
+    fn next(self: &Self) !void;
+    fn value(self: &Self) i32;
+}
+
+struct RangeIterator : IIteratorI32 {
+    current: i32,
+    end_val: i32,
+    started: i32
+}
+
+RangeIterator {
+    fn next(self: &Self) !void {
+        if self.started == 0 {
+            self.started = 1;
+        } else {
+            self.current = self.current + 1;
+        }
+        if self.current >= self.end_val {
+            return error.IterEnd;
+        }
+    }
+    
+    fn value(self: &Self) i32 {
+        return self.current;
+    }
+}
+
+fn make_range(start: i32, end_val: i32) RangeIterator {
+    return RangeIterator{ current: start, end_val: end_val, started: 0 };
+}
+
+test "test_manual_iteration" {
+    var iter: RangeIterator = make_range(0, 5);
+    var sum: i32 = 0;
+    
+    while true {
+        const result: void = iter.next() catch {
+            break;
+        };
+        const v: i32 = iter.value();
+        sum = sum + v;
+    }
+    
+    try assert_eq_i32(sum, 10);  // 0+1+2+3+4 = 10
+}
+
+test "test_for_loop_iteration" {
+    var iter: RangeIterator = make_range(0, 5);
+    var sum: i32 = 0;
+    
+    for iter |v| {
+        sum = sum + v;
+    }
+    
+    try assert_eq_i32(sum, 10);
+}

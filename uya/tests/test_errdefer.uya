@@ -1,0 +1,29 @@
+// 测试 errdefer：仅错误返回时 LIFO 执行
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+error E;
+
+fn f() !i32 {
+    var x: i32 = 0;
+    errdefer { x = 2; }
+    defer { x = x + 1; }
+    return error.E;  // 错误返回：先 errdefer (x=2)，再 defer (x=2+1=3)
+}
+
+fn test_errdefer() !void {
+    const r: i32 = f() catch { 0; };
+    try expect(r == 0);
+}
+
+export fn main() i32 {
+    test_suite_begin("Errdefer Tests");
+    
+    run_test("errdefer", test_errdefer);
+    
+    return test_suite_end();
+}

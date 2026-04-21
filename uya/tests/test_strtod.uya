@@ -1,0 +1,60 @@
+// test_strtod.uya - 测试 strtod 函数对大数的处理
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use libc.strtod;
+use libc.fabs;
+use libc.isinf;
+
+// ============================================================
+// strtod 测试
+// ============================================================
+
+test "strtod_zero" {
+    const result: f64 = strtod("0.0", null);
+    try expect(fabs(result) < 0.0001);
+}
+
+test "strtod_integer" {
+    const result: f64 = strtod("123", null);
+    try expect(fabs(result - 123.0) < 0.0001);
+}
+
+test "strtod_negative" {
+    const result: f64 = strtod("-42.5", null);
+    try expect(fabs(result + 42.5) < 0.0001);
+}
+
+test "strtod_scientific" {
+    const result: f64 = strtod("1.5e2", null);
+    // 1.5e2 = 150.0
+    try expect(fabs(result - 150.0) < 0.001);
+}
+
+test "strtod_large_exponent" {
+    const result: f64 = strtod("1.0e100", null);
+    // 1.0e100 是一个大数，但不应该是无穷大
+    try assert_eq_i32(isinf(result), 0);
+    // 检查数量级：log10(1.0e100) ≈ 100
+    // 结果应该在 1e99 到 1e101 之间
+    try expect(result > 1.0e99);
+}
+
+test "strtod_very_large_exponent" {
+    // 10^400 远超 DBL_MAX，应该产生无穷大
+    const result: f64 = strtod("1.0e400", null);
+    try assert_eq_i32(isinf(result), 1);
+}
+
+test "strtod_small_exponent" {
+    const result: f64 = strtod("1.0e-10", null);
+    // 1.0e-10 是一个小正数
+    try expect(result > 0.0);
+    try expect(result < 1.0e-9);
+}
+
+test "strtod_very_small_exponent" {
+    // 10^-400 应该产生 0
+    const result: f64 = strtod("1.0e-400", null);
+    try expect(result == 0.0);
+}

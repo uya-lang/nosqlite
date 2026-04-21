@@ -1,0 +1,14 @@
+// 全局变量测试程序
+
+use std.testing.assert_eq_i32;
+
+var global_value: i32 = 100;
+
+fn read_global() i32 {
+    return global_value;
+}
+
+test "global read" {
+    const value: i32 = read_global();
+    try assert_eq_i32(value, 100);
+}

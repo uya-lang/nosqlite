@@ -1,0 +1,229 @@
+// test_pthread_api.uya - pthread 公共 API 回归测试
+
+use std.runtime.entry;
+use libc.pthread;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.test_pass;
+use std.testing.test_fail;
+use std.testing.expect;
+
+var _cancel_started: atomic i32 = 0;
+
+fn api_thread_start(arg: &void) &void {
+    pthread_exit(arg);
+    return null;
+}
+
+fn api_cancel_thread(arg: &void) &void {
+    _ = arg;
+    _cancel_started = 1;
+    while true {
+        pthread_testcancel();
+        _ = pthread_yield();
+    }
+    return null;
+}
+
+var _once_hits: i32 = 0;
+fn api_once_init(arg: &void) &void {
+    _ = arg;
+    _once_hits = _once_hits + 1;
+    return null;
+}
+
+fn test_pthread_self_equal_api() !void {
+    const me: pthread_t = pthread_self();
+    try expect(pthread_equal(me, me) != 0);
+}
+
+fn test_pthread_once_api() !void {
+    _once_hits = 0;
+    var once: pthread_once_t = pthread_once_t{ state: 0 };
+    pthread_once(&once, &api_once_init as &void);
+    pthread_once(&once, &api_once_init as &void);
+    try expect(_once_hits == 1);
+}
+
+fn test_pthread_attr_api() !void {
+    var attr: pthread_attr_t = pthread_attr_t{};
+    try expect(pthread_attr_init(&attr) == 0);
+
+    var stacksize: usize = 0;
+    try expect(pthread_attr_getstacksize(&attr, &stacksize) == 0);
+    try expect(stacksize > 0);
+
+    try expect(pthread_attr_setstacksize(&attr, 1024 * 1024) == 0);
+    try expect(pthread_attr_getstacksize(&attr, &stacksize) == 0);
+    try expect(stacksize == 1024 * 1024);
+
+    var detachstate: i32 = 0;
+    try expect(pthread_attr_getdetachstate(&attr, &detachstate) == 0);
+    try expect(detachstate == PTHREAD_CREATE_JOINABLE);
+
+    try expect(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0);
+    try expect(pthread_attr_getdetachstate(&attr, &detachstate) == 0);
+    try expect(detachstate == PTHREAD_CREATE_DETACHED);
+
+    try expect(pthread_attr_setstacksize(&attr, 4096) == 22);
+    try expect(pthread_attr_setdetachstate(&attr, 2) == 22);
+    try expect(pthread_attr_destroy(&attr) == 0);
+}
+
+fn test_pthread_create_join_api() !void {
+    var attr: pthread_attr_t = pthread_attr_t{};
+    try expect(pthread_attr_init(&attr) == 0);
+
+    var th: pthread_t = pthread_t{};
+    var marker: i32 = 7;
+    const arg: &void = (&marker) as &void;
+    try expect(pthread_create(&th, &attr, &api_thread_start as &void, arg) == 0);
+
+    var result: &void = null;
+    try expect(pthread_join(&th, &result) == 0);
+    try expect(result == arg);
+    try expect(pthread_attr_destroy(&attr) == 0);
+}
+
+fn test_pthread_detach_api() !void {
+    var attr: pthread_attr_t = pthread_attr_t{};
+    try expect(pthread_attr_init(&attr) == 0);
+    try expect(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0);
+
+    var th: pthread_t = pthread_t{};
+    try expect(pthread_create(&th, &attr, &api_thread_start as &void, null) == 0);
+    try expect(pthread_join(&th, null as & &void) == 22);
+
+    try expect(pthread_attr_destroy(&attr) == 0);
+}
+
+fn test_pthread_mutex_api() !void {
+    var attr: pthread_mutexattr_t = pthread_mutexattr_t{ type: 0 };
+    try expect(pthread_mutexattr_init(&attr) == 0);
+
+    try expect(pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) == 0);
+    var mutex: pthread_mutex_t = pthread_mutex_t{};
+    try expect(pthread_mutex_init(&mutex, &attr) == 0);
+    try expect(pthread_mutex_lock(&mutex) == 0);
+    try expect(pthread_mutex_lock(&mutex) == 0);
+    try expect(pthread_mutex_unlock(&mutex) == 0);
+    try expect(pthread_mutex_unlock(&mutex) == 0);
+
+    try expect(pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK) == 0);
+    try expect(pthread_mutex_destroy(&mutex) == 0);
+    try expect(pthread_mutex_init(&mutex, &attr) == 0);
+    try expect(pthread_mutex_lock(&mutex) == 0);
+    try expect(pthread_mutex_trylock(&mutex) == 16);
+    try expect(pthread_mutex_unlock(&mutex) == 0);
+    try expect(pthread_mutex_destroy(&mutex) == 0);
+    try expect(pthread_mutexattr_destroy(&attr) == 0);
+}
+
+fn test_pthread_condattr_api() !void {
+    var attr: pthread_condattr_t = pthread_condattr_t{ clock: 0 };
+    try expect(pthread_condattr_init(&attr) == 0);
+
+    var clock: i32 = 0;
+    try expect(pthread_condattr_getclock(&attr, &clock) == 0);
+    try expect(clock == CLOCK_REALTIME);
+
+    try expect(pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) == 0);
+    try expect(pthread_condattr_getclock(&attr, &clock) == 0);
+    try expect(clock == CLOCK_MONOTONIC);
+    try expect(pthread_condattr_setclock(&attr, 2) == 22);
+    try expect(pthread_condattr_destroy(&attr) == 0);
+}
+
+fn test_pthread_key_api() !void {
+    var key: pthread_key_t = pthread_key_t{};
+    try expect(pthread_key_create(&key, null) == 0);
+
+    const value: i32 = 123;
+    try expect(pthread_setspecific(key, (&value) as &void) == 0);
+
+    const got: &void = pthread_getspecific(key);
+    try expect(got != null);
+    const got_ptr: &i32 = got as &i32;
+    try expect(got_ptr[0] == 123);
+
+    try expect(pthread_key_delete(&key) == 0);
+}
+
+fn test_pthread_cancel_api() !void {
+    _cancel_started = 0;
+
+    var th: pthread_t = pthread_t{};
+    try expect(pthread_create(&th, null as &const pthread_attr_t, &api_cancel_thread as &void, null) == 0);
+
+    while _cancel_started == 0 {
+        _ = pthread_yield();
+    }
+
+    try expect(pthread_cancel(&th) == 0);
+
+    var result: &void = null;
+    try expect(pthread_join(&th, &result) == 0);
+    try expect(result == PTHREAD_CANCELED);
+
+    pthread_testcancel();
+}
+
+export fn main() i32 {
+    test_suite_begin("pthread_api");
+
+    test_pthread_self_equal_api() catch {
+        test_fail("pthread_self_equal_api");
+        return test_suite_end();
+    };
+    test_pass("pthread_self_equal_api");
+
+    test_pthread_once_api() catch {
+        test_fail("pthread_once_api");
+        return test_suite_end();
+    };
+    test_pass("pthread_once_api");
+
+    test_pthread_attr_api() catch {
+        test_fail("pthread_attr_api");
+        return test_suite_end();
+    };
+    test_pass("pthread_attr_api");
+
+    test_pthread_create_join_api() catch {
+        test_fail("pthread_create_join_api");
+        return test_suite_end();
+    };
+    test_pass("pthread_create_join_api");
+
+    test_pthread_detach_api() catch {
+        test_fail("pthread_detach_api");
+        return test_suite_end();
+    };
+    test_pass("pthread_detach_api");
+
+    test_pthread_mutex_api() catch {
+        test_fail("pthread_mutex_api");
+        return test_suite_end();
+    };
+    test_pass("pthread_mutex_api");
+
+    test_pthread_condattr_api() catch {
+        test_fail("pthread_condattr_api");
+        return test_suite_end();
+    };
+    test_pass("pthread_condattr_api");
+
+    test_pthread_key_api() catch {
+        test_fail("pthread_key_api");
+        return test_suite_end();
+    };
+    test_pass("pthread_key_api");
+
+    test_pthread_cancel_api() catch {
+        test_fail("pthread_cancel_api");
+        return test_suite_end();
+    };
+    test_pass("pthread_cancel_api");
+
+    return test_suite_end();
+}

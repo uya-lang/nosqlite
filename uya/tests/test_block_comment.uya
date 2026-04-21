@@ -1,0 +1,56 @@
+// 测试块注释（规范 uya.md §1）
+
+use std.testing.expect;
+
+/* 单行块注释 */
+
+test "single line block comment" {
+    /* 函数内块注释 */
+    const a: i32 = 10; /* 行尾块注释 */
+    try expect(a == 10);
+}
+
+test "multi line block comment" {
+    /*
+        多行块注释
+        可以跨越多行
+    */
+    const b: i32 = 20;
+    try expect(b == 20);
+}
+
+test "nested block comment" {
+    /* 嵌套块注释 - 级别1
+        /* 嵌套块注释 - 级别2 */
+        继续级别1
+    */
+    const c: i32 = 30;
+    try expect(c == 30);
+}
+
+test "deep nested block comment" {
+    /* 深层嵌套
+        /* 级别2
+            /* 级别3 */
+            继续级别2
+        */
+        继续级别1
+    */
+    const d: i32 = 40;
+    try expect(d == 40);
+}
+
+test "mixed comments" {
+    // 混合单行和块注释
+    /* 块 */ const e: i32 = 50; // 单行
+    try expect(e == 50);
+}
+
+test "comment sum" {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    const c: i32 = 30;
+    const d: i32 = 40;
+    const e: i32 = 50;
+    try expect(a + b + c + d + e == 150);
+}

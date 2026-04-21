@@ -1,0 +1,74 @@
+// 测试 std.json 解析：空数组、[1,2]、嵌套数组
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.value.JsonArray;
+use std.json.parser.parse;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 8192] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 8192);
+
+    // [] 空数组
+    var buf: [byte: 8] = [];
+    buf[0] = 91;
+    buf[1] = 93;
+    const v_empty: JsonValue = parse(&a, &buf[0], 2) catch { return 1; };
+    match v_empty {
+        .arr(arr) => {
+            if arr.len != 0 { return 2; }
+        },
+        else => { return 3; },
+    }
+
+    // [1, 2, 3]
+    buf[0] = 91;
+    buf[1] = 49;
+    buf[2] = 44;
+    buf[3] = 50;
+    buf[4] = 44;
+    buf[5] = 51;
+    buf[6] = 93;
+    const v_arr: JsonValue = parse(&a, &buf[0], 7) catch { return 4; };
+    match v_arr {
+        .arr(arr) => {
+            if arr.len != 3 { return 5; }
+            if arr.items == null { return 6; }
+            match arr.items[0] {
+                .int_val(x) => { if x != 1 { return 7; } },
+                else => { return 8; },
+            }
+            match arr.items[1] {
+                .int_val(x) => { if x != 2 { return 9; } },
+                else => { return 10; },
+            }
+            match arr.items[2] {
+                .int_val(x) => { if x != 3 { return 11; } },
+                else => { return 12; },
+            }
+        },
+        else => { return 13; },
+    }
+
+    // [[]] 嵌套：外层数组含一个空数组
+    buf[0] = 91;
+    buf[1] = 91;
+    buf[2] = 93;
+    buf[3] = 93;
+    const v_nested: JsonValue = parse(&a, &buf[0], 4) catch { return 14; };
+    match v_nested {
+        .arr(outer) => {
+            if outer.len != 1 { return 15; }
+            if outer.items == null { return 16; }
+            match outer.items[0] {
+                .arr(inner) => { if inner.len != 0 { return 17; } },
+                else => { return 18; },
+            }
+        },
+        else => { return 19; },
+    }
+
+    return 0;
+}

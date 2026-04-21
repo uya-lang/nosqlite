@@ -1,0 +1,197 @@
+// 结构体指针作为返回值测试程序
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Node {
+    value: i32,
+    next: &Node,
+}
+
+struct Inner {
+    data: i32,
+}
+
+struct Outer {
+    inner: Inner,
+    count: i32,
+}
+
+var global_point: Point = Point{ x: 0, y: 0 };
+var global_node: Node = Node{ value: 0, next: null };
+var global_array: [i32: 5] = [10, 20, 30, 40, 50];
+var global_byte_array: [byte: 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+var global_point_array: [Point: 3] = [
+    Point{ x: 100, y: 200 },
+    Point{ x: 300, y: 400 },
+    Point{ x: 500, y: 600 },
+];
+var global_point_array2: [Point: 5] = [
+    Point{ x: 1, y: 2 },
+    Point{ x: 3, y: 4 },
+    Point{ x: 5, y: 6 },
+    Point{ x: 7, y: 8 },
+    Point{ x: 9, y: 10 },
+];
+var global_outer_array: [Outer: 3] = [
+    Outer{ inner: Inner{ data: 100 }, count: 1 },
+    Outer{ inner: Inner{ data: 200 }, count: 2 },
+    Outer{ inner: Inner{ data: 300 }, count: 3 },
+];
+var global_node_array: [Node: 3] = [
+    Node{ value: 10, next: null },
+    Node{ value: 20, next: null },
+    Node{ value: 30, next: null },
+];
+var global_point_array3: [Point: 3] = [
+    Point{ x: 100, y: 200 },
+    Point{ x: 300, y: 400 },
+    Point{ x: 500, y: 600 },
+];
+
+fn get_global_point() &Point { return &global_point; }
+fn get_global_node() &Node { return &global_node; }
+fn get_point_pointer(p: &Point) &Point { return p; }
+fn get_node_pointer(n: &Node) &Node { return n; }
+fn get_outer_pointer(o: &Outer) &Outer { return o; }
+fn get_inner_pointer_from_outer(o: &Outer) &Inner { return &o.inner; }
+fn get_point_x_pointer(p: &Point) &i32 { return &p.x; }
+fn get_point_y_pointer(p: &Point) &i32 { return &p.y; }
+fn get_point_from_node(n: &Node) &Point {
+    global_point.x = n.value;
+    global_point.y = n.value * 2;
+    return &global_point;
+}
+fn get_array_first_element() &i32 { return &global_array[0]; }
+fn get_byte_array_first_element() &byte { return &global_byte_array[0]; }
+fn get_struct_array_first_element() &Point { return &global_point_array[0]; }
+fn get_array_element_by_index(index: i32) &i32 { 
+    if index >= 0 && index < 5 {
+        return &global_array[index]; 
+    }
+    return null;
+}
+fn get_struct_array_element_by_index(index: i32) &Point { 
+    if index >= 0 && index < 5 {
+        return &global_point_array2[index]; 
+    }
+    return null;
+}
+fn get_nested_struct_array_first_element() &Outer { return &global_outer_array[0]; }
+fn get_node_array_first_element() &Node { return &global_node_array[0]; }
+fn get_struct_array_element_and_modify() &Point {
+    global_point_array3[0].x = 111;
+    global_point_array3[0].y = 222;
+    return &global_point_array3[0];
+}
+fn get_x(p: &Point) i32 { return p.x; }
+fn get_point_x_from_ptr(p: &Point) i32 { return p.x; }
+fn get_value_from_ptr(p: &i32) i32 { return *p; }
+
+test "test_global_struct_pointer" {
+    global_point.x = 100;
+    global_point.y = 200;
+    var ptr: &Point = get_global_point();
+    try assert_eq_i32(ptr.x, 100);
+    try assert_eq_i32(ptr.y, 200);
+    
+    ptr.x = 300;
+    ptr.y = 400;
+    try assert_eq_i32(global_point.x, 300);
+    try assert_eq_i32(global_point.y, 400);
+}
+
+test "test_local_struct_pointer" {
+    var local_point: Point = Point{ x: 10, y: 20 };
+    var ptr: &Point = get_point_pointer(&local_point);
+    try assert_eq_i32(ptr.x, 10);
+    try assert_eq_i32(ptr.y, 20);
+    
+    ptr.x = 50;
+    ptr.y = 60;
+    try assert_eq_i32(local_point.x, 50);
+    try assert_eq_i32(local_point.y, 60);
+}
+
+test "test_nested_struct_pointer" {
+    var outer: Outer = Outer{ inner: Inner{ data: 500 }, count: 10 };
+    var outer_ptr: &Outer = get_outer_pointer(&outer);
+    try assert_eq_i32(outer_ptr.inner.data, 500);
+    try assert_eq_i32(outer_ptr.count, 10);
+    
+    var inner_ptr: &Inner = get_inner_pointer_from_outer(&outer);
+    try assert_eq_i32(inner_ptr.data, 500);
+}
+
+test "test_field_pointer" {
+    var point: Point = Point{ x: 1000, y: 2000 };
+    var x_ptr: &i32 = get_point_x_pointer(&point);
+    var y_ptr: &i32 = get_point_y_pointer(&point);
+    
+    try assert_eq_i32(*x_ptr, 1000);
+    try assert_eq_i32(*y_ptr, 2000);
+    
+    *x_ptr = 3000;
+    *y_ptr = 4000;
+    try assert_eq_i32(point.x, 3000);
+    try assert_eq_i32(point.y, 4000);
+}
+
+test "test_array_first_element" {
+    var arr_ptr: &i32 = get_array_first_element();
+    try assert_eq_i32(*arr_ptr, 10);
+    
+    *arr_ptr = 999;
+    try assert_eq_i32(*arr_ptr, 999);
+}
+
+test "test_struct_array_first_element" {
+    var ptr: &Point = get_struct_array_first_element();
+    try assert_eq_i32(ptr.x, 100);
+    try assert_eq_i32(ptr.y, 200);
+    
+    ptr.x = 777;
+    ptr.y = 888;
+    try assert_eq_i32(ptr.x, 777);
+    try assert_eq_i32(ptr.y, 888);
+}
+
+test "test_array_element_by_index" {
+    var elem_ptr: &i32 = get_array_element_by_index(2);
+    try assert_eq_i32(*elem_ptr, 30);
+}
+
+test "test_struct_array_by_index" {
+    var ptr: &Point = get_struct_array_element_by_index(2);
+    try assert_eq_i32(ptr.x, 5);
+    try assert_eq_i32(ptr.y, 6);
+}
+
+test "test_pointer_comparison" {
+    global_point.x = 300;
+    global_point.y = 400;
+    
+    var ptr1: &Point = get_global_point();
+    var ptr2: &Point = get_global_point();
+    try assert_eq_i32(ptr1 == ptr2, true);
+    
+    var point1: Point = Point{ x: 1, y: 2 };
+    var point2: Point = Point{ x: 1, y: 2 };
+    var ptr3: &Point = get_point_pointer(&point1);
+    var ptr4: &Point = get_point_pointer(&point2);
+    try assert_eq_i32(ptr3 == ptr4, false);
+}
+
+test "test_pointer_deref" {
+    var point: Point = Point{ x: 999, y: 888 };
+    var ptr: &Point = get_point_pointer(&point);
+    var point_copy: Point = *ptr;
+    try assert_eq_i32(point_copy.x, 999);
+    try assert_eq_i32(point_copy.y, 888);
+}

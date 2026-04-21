@@ -1,0 +1,184 @@
+// test_string.uya - string 模块测试
+use std.runtime.entry;
+// 使用 lib/std/testing.uya 测试框架
+
+use libc.strlen;
+use libc.strcmp;
+use libc.strncmp;
+use libc.strcasecmp;
+use libc.strncasecmp;
+use libc.strdup;
+use libc.strcpy;
+use libc.strcat;
+use libc.strncat;
+use libc.strchr;
+use libc.strrchr;
+use libc.strstr;
+use libc.strcspn;
+use libc.strspn;
+use libc.strpbrk;
+use libc.free;
+
+// 导入测试框架
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_u64;
+use std.testing.expect;
+use std.testing.expect_not_null;
+use std.testing.expect_null;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// ============================================================
+// strlen 测试
+// ============================================================
+
+fn test_strlen() !void {
+    try assert_eq_u64(strlen("hello\0" as *const byte), 5);
+    try assert_eq_u64(strlen("\0" as *const byte), 0);
+    try assert_eq_u64(strlen("a\0" as *const byte), 1);
+}
+
+// ============================================================
+// strcmp/strncmp 测试
+// ============================================================
+
+fn test_strcmp() !void {
+    try assert_eq_i32(strcmp("abc\0" as *const byte, "abc\0" as *const byte), 0);
+    try expect(strcmp("abc\0" as *const byte, "abd\0" as *const byte) < 0);
+    try expect(strcmp("abd\0" as *const byte, "abc\0" as *const byte) > 0);
+}
+
+fn test_strncmp() !void {
+    try assert_eq_i32(strncmp("abcd\0" as *const byte, "abce\0" as *const byte, 3), 0);
+    try expect(strncmp("abcd\0" as *const byte, "abce\0" as *const byte, 4) < 0);
+}
+
+// ============================================================
+// strcasecmp 测试
+// ============================================================
+
+fn test_strcasecmp() !void {
+    try assert_eq_i32(strcasecmp("ABC\0" as *const byte, "abc\0" as *const byte), 0);
+    try assert_eq_i32(strcasecmp("AbC\0" as *const byte, "aBc\0" as *const byte), 0);
+}
+
+fn test_strncasecmp() !void {
+    try assert_eq_i32(strncasecmp("ABCD\0" as *const byte, "abce\0" as *const byte, 3), 0);
+}
+
+// ============================================================
+// strdup 测试
+// ============================================================
+
+fn test_strdup() !void {
+    const dup: *byte = strdup("hello\0" as *const byte);
+    try expect_not_null(dup as &byte);
+    
+    defer {
+        free(dup);
+    }
+    
+    try assert_eq_i32(strcmp(dup, "hello\0" as *const byte), 0);
+}
+
+// ============================================================
+// strcpy/strcat 测试
+// ============================================================
+
+fn test_strcpy() !void {
+    var buf: [byte: 32] = [];
+    strcpy(&buf[0] as *byte, "hello\0" as *const byte);
+    try assert_eq_i32(strcmp(&buf[0] as *const byte, "hello\0" as *const byte), 0);
+}
+
+fn test_strcat() !void {
+    var buf: [byte: 32] = [];
+    strcpy(&buf[0] as *byte, "hello\0" as *const byte);
+    strcat(&buf[0] as *byte, " world\0" as *const byte);
+    try assert_eq_i32(strcmp(&buf[0] as *const byte, "hello world\0" as *const byte), 0);
+}
+
+// ============================================================
+// strchr/strrchr/strstr 测试
+// ============================================================
+
+fn test_strchr() !void {
+    const s: *const byte = "hello world\0" as *const byte;
+    
+    const p1: *byte = strchr(s, 119);  // 'w'
+    try expect_not_null(p1 as &byte);
+    
+    const p2: *byte = strchr(s, 122);  // 'z' - 不存在
+    try expect_null(p2 as &byte);
+}
+
+fn test_strrchr() !void {
+    const s: *const byte = "hello world\0" as *const byte;
+    
+    const p: *byte = strrchr(s, 108);  // 'l'
+    try expect_not_null(p as &byte);
+}
+
+fn test_strstr() !void {
+    const s: *const byte = "hello world\0" as *const byte;
+    
+    const p1: *byte = strstr(s, "world\0" as *const byte);
+    try expect_not_null(p1 as &byte);
+    
+    const p2: *byte = strstr(s, "xyz\0" as *const byte);
+    try expect_null(p2 as &byte);
+}
+
+// ============================================================
+// strcspn/strspn 测试
+// ============================================================
+
+fn test_strcspn() !void {
+    const s: usize = strcspn("hello world\0" as *const byte, " \0" as *const byte);
+    try assert_eq_u64(s, 5);
+}
+
+fn test_strspn() !void {
+    const s: usize = strspn("   hello\0" as *const byte, " \0" as *const byte);
+    try assert_eq_u64(s, 3);
+}
+
+// ============================================================
+// strpbrk 测试
+// ============================================================
+
+fn test_strpbrk() !void {
+    const s: *const byte = "hello world\0" as *const byte;
+    
+    const p1: *byte = strpbrk(s, "aeiou\0" as *const byte);
+    try expect_not_null(p1 as &byte);
+    
+    const p2: *byte = strpbrk(s, "xyz\0" as *const byte);
+    try expect_null(p2 as &byte);
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    test_suite_begin("libc.string");
+
+    run_test("strlen", test_strlen);
+    run_test("strcmp", test_strcmp);
+    run_test("strncmp", test_strncmp);
+    run_test("strcasecmp", test_strcasecmp);
+    run_test("strncasecmp", test_strncasecmp);
+    run_test("strdup", test_strdup);
+    run_test("strcpy", test_strcpy);
+    run_test("strcat", test_strcat);
+    run_test("strchr", test_strchr);
+    run_test("strrchr", test_strrchr);
+    run_test("strstr", test_strstr);
+    run_test("strcspn", test_strcspn);
+    run_test("strspn", test_strspn);
+    run_test("strpbrk", test_strpbrk);
+
+    return test_suite_end();
+}

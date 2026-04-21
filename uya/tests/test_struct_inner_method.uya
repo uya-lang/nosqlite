@@ -1,0 +1,27 @@
+// 结构体内定义方法（方法与字段写在一起）
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+  x: f32,
+  y: f32,
+  fn distance(self: &Self) f32 {
+    return self.x + self.y;
+  }
+}
+
+fn test_inner_method() !void {
+  const p: Point = Point{ x: 2.0, y: 3.0 };
+  const d: f32 = p.distance();
+  try expect(d >= 4.9 && d <= 5.1);
+}
+
+export fn main() i32 {
+  test_suite_begin("Struct Inner Method Tests");
+  run_test("inner method", test_inner_method);
+  return test_suite_end();
+}

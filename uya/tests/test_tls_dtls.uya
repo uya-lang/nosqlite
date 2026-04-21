@@ -1,0 +1,92 @@
+// test_tls_dtls.uya - DTLS 记录层与握手占位单元/集成测试
+// 阶段 4.5：dtls_record 封装/解析、dtls_handshake mock 往返
+
+use std.runtime.entry;
+use tls.common;
+use tls.ssl.dtls_record;
+use tls.ssl.dtls_handshake;
+
+fn test_dtls_record_roundtrip() i32 {
+    var ctx: DtlsRecordCtx = DtlsRecordCtx{ epoch: 0, write_seq: 0, read_seq: 0, version: 0 };
+    dtls_record_ctx_init(&ctx, DTLS_VERSION_1_2);
+    var plain: [byte: 8] = [0x44, 0x54, 0x4c, 0x53, 0x21, 0x0a, 0, 0];
+    const plain_len: usize = 6;
+    var out: [byte: 64] = [0:64];
+    var out_len: usize = 0;
+    dtls_record_encrypt(&ctx, TLS_RECORD_APPLICATION_DATA, &plain[0], plain_len, &out[0], 64, &out_len) catch {
+        return 1;
+    };
+    if out_len != DTLS_RECORD_HEADER_LEN + plain_len {
+        return 2;
+    }
+    if out[1] != 0xfe || out[2] != 0xfd {
+        return 3;
+    }
+    var plain2: [byte: 16] = [0:16];
+    var plain2_len: usize = 0;
+    var consumed: usize = 0;
+    dtls_record_decrypt(&ctx, &out[0], out_len, &plain2[0], 16, &plain2_len, &consumed) catch {
+        return 4;
+    };
+    if plain2_len != plain_len || consumed != out_len {
+        return 5;
+    }
+    var i: usize = 0;
+    while i < plain_len {
+        if plain2[i] != plain[i] {
+            return 6;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn test_dtls_handshake_mock_roundtrip() i32 {
+    var client: DtlsHandshakeCtx = DtlsHandshakeCtx{ state: 0, role: 0 };
+    var server: DtlsHandshakeCtx = DtlsHandshakeCtx{ state: 0, role: 0 };
+    dtls_handshake_ctx_init(&client, DHS_ROLE_CLIENT);
+    dtls_handshake_ctx_init(&server, DHS_ROLE_SERVER);
+
+    var buf: [byte: 256] = [0:256];
+    var len: usize = 0;
+    if dtls_handshake_client_start(&client, &buf[0], 256, &len) != DHS_STATUS_NEED_SEND {
+        return 1;
+    }
+    if len != 5 || buf[0] != 0x0d {
+        return 2;
+    }
+
+    var snd: [byte: 256] = [0:256];
+    var snd_len: usize = 0;
+    if dtls_handshake_server_step(&server, &buf[0], len, &snd[0], 256, &snd_len) != DHS_STATUS_NEED_SEND {
+        return 3;
+    }
+    if snd_len != 5 || snd[0] != 0x0d || snd[1] != 0x01 {
+        return 4;
+    }
+
+    if dtls_handshake_client_step(&client, &snd[0], snd_len, &buf[0], 256, &len) != DHS_STATUS_DONE {
+        return 5;
+    }
+    if !dtls_handshake_is_done(&client) {
+        return 6;
+    }
+
+    if dtls_handshake_server_step(&server, &buf[0], 1, &snd[0], 256, &snd_len) != DHS_STATUS_DONE {
+        return 7;
+    }
+    if !dtls_handshake_is_done(&server) {
+        return 8;
+    }
+    return 0;
+}
+
+export fn main() i32 {
+    if test_dtls_record_roundtrip() != 0 {
+        return 1;
+    }
+    if test_dtls_handshake_mock_roundtrip() != 0 {
+        return 2;
+    }
+    return 0;
+}

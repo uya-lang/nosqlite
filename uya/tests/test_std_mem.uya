@@ -1,0 +1,77 @@
+// test_std_mem.uya - 测试新的 std.mem 模块
+use std.runtime.entry;
+// 测试内存操作函数
+
+use std.mem.memcpy;
+use std.mem.memset;
+use std.mem.memmove;
+use std.mem.memcmp;
+use std.mem.memchr;
+
+export fn main() i32 {
+    // 测试 1: memcpy - 内存复制
+    var src: [byte: 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    var dst: [byte: 10] = [];
+    _ = memcpy(&dst[0], &src[0], 10);  // 不检查返回值，通过验证内存内容确认
+    // 验证复制结果
+    var i: usize = 0;
+    while i < 10 {
+        if dst[i] != src[i] {
+            return 2;  // 复制内容不匹配
+        }
+        i = i + 1;
+    }
+    
+    // 测试 2: memset - 内存设置
+    var buf: [byte: 10] = [];
+    _ = memset(&buf[0], 0x42, 10);  // 不检查返回值，通过验证内存内容确认
+    // 验证设置结果
+    i = 0;
+    while i < 10 {
+        if buf[i] != 0x42 {
+            return 4;  // 设置内容不匹配
+        }
+        i = i + 1;
+    }
+    
+    // 测试 3: memmove - 内存移动（重叠区域）
+    var arr: [byte: 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    _ = memmove(&arr[2], &arr[0], 5);  // 不检查返回值，通过验证内存内容确认
+    // 验证移动结果：arr[2..7] 应该是 [0, 1, 2, 3, 4]
+    if arr[2] != 0 || arr[3] != 1 || arr[4] != 2 || arr[5] != 3 || arr[6] != 4 {
+        return 6;  // 移动内容不匹配
+    }
+    
+    // 测试 4: memcmp - 内存比较
+    var arr1: [byte: 5] = [1, 2, 3, 4, 5];
+    var arr2: [byte: 5] = [1, 2, 3, 4, 5];
+    var arr3: [byte: 5] = [1, 2, 3, 4, 6];
+    const cmp1: i32 = memcmp(&arr1[0], &arr2[0], 5);
+    const cmp2: i32 = memcmp(&arr1[0], &arr3[0], 5);
+    if cmp1 != 0 {
+        return 7;  // 相同内存应该返回 0
+    }
+    if cmp2 >= 0 {
+        return 8;  // arr1 < arr3，应该返回负数
+    }
+    
+    // 测试 5: memchr - 查找字符
+    var haystack: [byte: 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    const found: &byte = memchr(&haystack[0], 5, 10);
+    if found == null {
+        return 9;  // 应该找到字符 5
+    }
+    // 验证找到的值是否正确（通过地址差验证位置）
+    const found_addr: usize = @usize_from_ptr(found as &void);
+    const expected_addr: usize = @usize_from_ptr(&haystack[5] as &void);
+    if found_addr != expected_addr {
+        return 10;  // 找到的位置不正确
+    }
+    const not_found: &byte = memchr(&haystack[0], 99, 10);
+    if not_found != null {
+        return 11;  // 不应该找到字符 99
+    }
+    
+    return 0;
+}
+

@@ -1,0 +1,48 @@
+// 接口组合测试程序
+
+use std.testing.assert_eq_i32;
+
+interface IReader {
+    fn read(self: &Self) i32;
+}
+
+interface IWriter {
+    fn write(self: &Self, value: i32) void;
+}
+
+interface IReadWriter {
+    IReader;
+    IWriter;
+    fn flush(self: &Self) i32;
+}
+
+struct Buffer : IReadWriter {
+    data: i32,
+    flushed: i32,
+}
+
+Buffer {
+    fn read(self: &Self) i32 {
+        return self.data;
+    }
+    
+    fn write(self: &Self, value: i32) void {
+    }
+    
+    fn flush(self: &Self) i32 {
+        return self.flushed;
+    }
+}
+
+fn test_read_writer(rw: IReadWriter) i32 {
+    const val: i32 = rw.read();
+    rw.write(100);
+    const f: i32 = rw.flush();
+    return val + f;
+}
+
+test "interface compose" {
+    var buf: Buffer = Buffer{ data: 42, flushed: 10 };
+    const result1: i32 = test_read_writer(buf);
+    try assert_eq_i32(result1, 52);
+}

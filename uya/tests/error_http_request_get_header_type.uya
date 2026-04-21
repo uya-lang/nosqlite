@@ -1,0 +1,23 @@
+// 预期编译失败：request_get_header 须传入 (req, name) 两个参数
+
+use std.http.types;
+
+fn main() i32 {
+    var raw: [byte: 4] = [];
+    const empty: &[byte] = raw[0: 0];
+    var req: Request = Request{
+        method: Method.GET,
+        http11: true,
+        path: [],
+        path_len: 0,
+        path_params: [],
+        path_param_count: 0,
+        query: [],
+        query_count: 0,
+        headers: [],
+        header_count: 0,
+        body: empty,
+    };
+    _ = request_get_header(&req);
+    return 0;
+}

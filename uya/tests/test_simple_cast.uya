@@ -1,0 +1,31 @@
+// 简单测试 FFI 指针转换
+use std.runtime.entry;
+struct Item {
+    val: i32,
+}
+
+// 外部函数
+extern fn proc(item: *Item) i32;
+extern fn print(s: *byte) i32;
+
+export fn main() i32 {
+    var itm: Item = Item{ val: 42 };
+    var ptr: &Item = &itm;
+    
+    // 测试 &T as *T 转换
+    var ffi_ptr: *Item = ptr as *Item;
+    
+    const r1: i32 = proc(ffi_ptr);
+    if r1 != 4 {
+        return 1;
+    }
+    const r2: i32 = proc(&itm as *Item);  // 直接转换
+    if r2 != 4 {
+        return 1;
+    }
+    const r3: i32 = print("Test!");
+    if r3 != 1 {
+        return 1;
+    }
+    return 0;  // 程序成功执行
+}

@@ -1,0 +1,48 @@
+// 测试 union 变体类型的泛型方法
+use std.runtime.entry;
+// 验证类型到变体映射是否工作
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 定义 union
+union NodeData {
+    number: NumberData,
+    text: TextData,
+}
+
+struct NumberData {
+    value: i32,
+}
+
+struct TextData {
+    content: &byte,
+}
+
+// 包装结构体，带泛型方法
+struct Node {
+    data: NodeData,
+    
+    // 泛型方法：将 data 转换为特定变体类型
+    fn cast<T>(self: &Self) !&T {
+        return match self.data {
+            .number(n) => &n,
+            .text(t) => &t,
+            else => error.UnkownType,
+        };
+    }
+}
+
+fn test_cast_number() !void {
+    const node: Node = Node{ data: NodeData.number(NumberData{ value: 42 }) };
+    const num: &NumberData = try node.cast<NumberData>();
+    try assert_eq_i32(num.value, 42);
+}
+
+export fn main() i32 {
+    test_suite_begin("Union Variant Generic Method Tests");
+    run_test("cast number", test_cast_number);
+    return test_suite_end();
+}

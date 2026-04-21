@@ -1,0 +1,89 @@
+// test_syscall_mem.uya - syscall 层内存管理测试
+// 测试 sys_mmap, sys_munmap
+
+use libc.sys_mmap;
+use libc.sys_mprotect;
+use libc.sys_munmap;
+use libc.PROT_READ;
+use libc.PROT_WRITE;
+use libc.MAP_PRIVATE;
+use libc.MAP_ANONYMOUS;
+use libc.strlen;
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+test "sys_mmap_anonymous" {
+    // 映射匿名内存
+    const size: usize = 4096;  // 一页
+    const addr: &void = try sys_mmap(
+        null as &void,      // 让内核选择地址
+        size,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,                 // 无文件描述符
+        0                   // 无偏移
+    );
+    
+    // 验证映射成功（addr 不应该是 MAP_FAILED）
+    // 在 Linux 上 MAP_FAILED 是 (void*)-1，即 0xffffffffffffffff
+    const failed_addr: usize = 0xffffffffffffffff;
+    if addr as usize == failed_addr {
+        // 映射失败，可能是权限问题
+        return;
+    }
+    
+    // 写入数据验证映射可用
+    var ptr: &byte = addr as &byte;
+    ptr[0] = 42;
+    
+    // 解除映射
+    const result: i32 = try sys_munmap(addr, size);
+    // result 应该是 0 表示成功，-1 表示失败
+}
+
+test "sys_mmap_write_protect" {
+    const size: usize = 4096;
+    const addr: &void = try sys_mmap(
+        null as &void,
+        size,
+        PROT_READ,  // 只读映射
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0
+    );
+    
+    const failed_addr: usize = 0xffffffffffffffff;
+    if addr as usize == failed_addr {
+        return;
+    }
+    
+    // 解除映射
+    _ = try sys_munmap(addr, size);
+}
+
+test "sys_munmap_null_addr" {
+    // 测试解除映射空地址（应该失败但不崩溃）
+    const result: i32 = try sys_munmap(null as &void, 4096);
+    // result 通常是 -1（EINVAL），但我们不验证具体值
+}
+
+test "sys_mprotect_read_only" {
+    const size: usize = 4096;
+    const addr: &void = try sys_mmap(
+        null as &void,
+        size,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0
+    );
+    const ptr: &byte = addr as &byte;
+    ptr[0] = 7 as byte;
+    const result: i32 = try sys_mprotect(addr as *void, size, PROT_READ);
+    try assert_eq_i32(result, 0);
+    _ = try sys_munmap(addr as *void, size);
+}

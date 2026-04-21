@@ -1,0 +1,20 @@
+// test_async_future_interface_box.uya
+// 目标：Future<T>（interface）在 C99 侧应为 vtable+data，并能从实现该接口的 struct 值装箱后调用 poll。
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+test "future_interface_box_and_poll" {
+    // struct init 产生一个实现 Future<i32> 的值（std.async 里 export struct Future<T> : Future<T>）
+    // 这里类型标注为 Future<i32>（interface），要求 codegen 自动装箱为 interface storage。
+    const f: Future<i32> = Future<i32>{ state: Poll<i32>.Ready(7) };
+    const w: Waker = Waker{};
+    const p: Poll<i32> = f.poll(&w);
+    var result: i32 = 0 - 1;
+    match p {
+        .Ready(_) => { result = 7; },
+        .Pending(_) => { result = 0 - 2; },
+    };
+    try assert_eq_i32(result, 7);
+}
+

@@ -1,0 +1,273 @@
+// test_vprintf.uya - 测试 vprintf 系列函数
+// 验证：
+// 1. vfprintf - 格式化输出到 FILE 流
+// 2. vprintf - 格式化输出到 stdout
+// 3. vsprintf - 格式化到字符串
+// 4. vsnprintf - 格式化到字符串（带长度限制）
+
+use std.testing.expect;
+use libc.stdout;
+use libc.vfprintf;
+use libc.vprintf;
+use libc.vsprintf;
+use libc.vsnprintf;
+
+// ============================================================
+// Phase 1: vfprintf 基础测试
+// ============================================================
+
+test "vfprintf_basic" {
+    // 测试 vfprintf 写入文件 - 正确传递可变参数
+    const result: i32 = _test_vfprintf_wrapper("%s", "hello");
+    try expect(result >= 5);  // "hello" 至少 5 字符
+}
+
+fn _test_vfprintf_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    const result: i32 = vfprintf(stdout, format, ap);
+    
+    @va_end(&ap);
+    return result;
+}
+
+test "vfprintf_multiple_args" {
+    const result: i32 = _test_vfprintf_multi_wrapper("%d %s %d", 42, "test", 99);
+    try expect(result >= 10);  // "42 test 99" 至少 10 字符
+}
+
+fn _test_vfprintf_multi_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    const result: i32 = vfprintf(stdout, format, ap);
+    
+    @va_end(&ap);
+    return result;
+}
+
+// ============================================================
+// Phase 2: vprintf 测试
+// ============================================================
+
+test "vprintf_basic" {
+    const result: i32 = _test_vprintf_wrapper("value=%d\n", 42);
+    try expect(result >= 8);  // "value=42\n" 至少 8 字符
+}
+
+fn _test_vprintf_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    const result: i32 = vprintf(format, ap);
+    
+    @va_end(&ap);
+    return result;
+}
+
+// ============================================================
+// Phase 3: vsprintf 测试
+// ============================================================
+
+test "vsprintf_basic" {
+    const result: i32 = _test_vsprintf_wrapper("num=%d str=%s", 42, "hello");
+    try expect(result >= 14);  // "num=42 str=hello" 至少 14 字符
+}
+
+fn _test_vsprintf_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    var buf: [byte: 128] = [];
+    const result: i32 = vsprintf(&buf[0], format, ap);
+    
+    @va_end(&ap);
+    
+    // 验证结果
+    try expect(result >= 14);
+    try expect(buf[0] == 110);  // 'n'
+    try expect(buf[1] == 117);  // 'u'
+    try expect(buf[2] == 109);  // 'm'
+    
+    return result;
+}
+
+test "vsprintf_empty" {
+    const result: i32 = _test_vsprintf_empty_wrapper("");
+    try expect(result == 0);
+}
+
+fn _test_vsprintf_empty_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    var buf: [byte: 64] = [];
+    const result: i32 = vsprintf(&buf[0], format, ap);
+    
+    @va_end(&ap);
+    
+    try expect(buf[0] == 0);
+    return result;
+}
+
+// ============================================================
+// Phase 4: vsnprintf 测试
+// ============================================================
+
+test "vsnprintf_basic" {
+    const result: i32 = _test_vsnprintf_wrapper("num=%d", 42);
+    try expect(result >= 5);  // "num=42" 至少 5 字符
+}
+
+fn _test_vsnprintf_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    var buf: [byte: 16] = [];
+    const result: i32 = vsnprintf(&buf[0], 16, format, ap);
+    
+    @va_end(&ap);
+    
+    // 验证结果
+    try expect(buf[0] == 110);  // 'n'
+    try expect(buf[4] == 52);   // '4'
+    try expect(buf[5] == 50);   // '2'
+    
+    return result;
+}
+
+test "vsnprintf_truncate" {
+    const result: i32 = _test_vsnprintf_truncate_wrapper("longstring");
+    // 即使截断，返回值也应该是原本需要的长度
+    try expect(result >= 10);  // "longstring" 需要 10 字符
+}
+
+fn _test_vsnprintf_truncate_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    var buf: [byte: 8] = [];
+    const result: i32 = vsnprintf(&buf[0], 8, format, ap);
+    
+    @va_end(&ap);
+    
+    // 验证被截断
+    try expect(buf[7] == 0);  // 最后应该是 null 终止符
+    
+    return result;
+}
+
+// ============================================================
+// Phase 5: 格式说明符测试
+// ============================================================
+
+test "vfprintf_format_d" {
+    const result: i32 = _test_vfprintf_d_wrapper("%d %d %d", 42, -10, 0);
+    try expect(result >= 6);  // "42 -10 0" 至少 6 字符
+}
+
+fn _test_vfprintf_d_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    const result: i32 = vfprintf(stdout, format, ap);
+    
+    @va_end(&ap);
+    return result;
+}
+
+test "vfprintf_format_s" {
+    const result: i32 = _test_vfprintf_s_wrapper("%s %s", "hello", "world");
+    try expect(result >= 10);  // "hello world" 至少 10 字符
+}
+
+fn _test_vfprintf_s_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    const result: i32 = vfprintf(stdout, format, ap);
+    
+    @va_end(&ap);
+    return result;
+}
+
+test "vfprintf_format_x" {
+    const result: i32 = _test_vfprintf_x_wrapper("%x %x", 255, 16);
+    try expect(result >= 5);  // "ff 10" 至少 5 字符
+}
+
+fn _test_vfprintf_x_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    const result: i32 = vfprintf(stdout, format, ap);
+    
+    @va_end(&ap);
+    return result;
+}
+
+test "vfprintf_format_c" {
+    const result: i32 = _test_vfprintf_c_wrapper("%c %c", 65, 66);
+    try expect(result >= 3);  // "A B" 至少 3 字符
+}
+
+fn _test_vfprintf_c_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    const result: i32 = vfprintf(stdout, format, ap);
+    
+    @va_end(&ap);
+    return result;
+}
+
+test "vfprintf_format_percent" {
+    const result: i32 = _test_vfprintf_percent_wrapper("%%");
+    try expect(result >= 1);  // "%" 至少 1 字符
+}
+
+fn _test_vfprintf_percent_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    const result: i32 = vfprintf(stdout, format, ap);
+    
+    @va_end(&ap);
+    return result;
+}
+
+// ============================================================
+// Phase 6: 边界情况测试
+// ============================================================
+
+test "vsprintf_null_string" {
+    const result: i32 = _test_vsprintf_null_wrapper("test");
+    try expect(result >= 4);  // "test" 至少 4 字符
+}
+
+fn _test_vsprintf_null_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    var buf: [byte: 64] = [];
+    const result: i32 = vsprintf(&buf[0], format, ap);
+    
+    @va_end(&ap);
+    return result;
+}
+
+test "vfprintf_large_number" {
+    const result: i32 = _test_vfprintf_large_wrapper("%d", 2147483647);
+    try expect(result >= 10);  // "2147483647" 至少 10 字符
+}
+
+fn _test_vfprintf_large_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    const result: i32 = vfprintf(stdout, format, ap);
+    
+    @va_end(&ap);
+    return result;
+}

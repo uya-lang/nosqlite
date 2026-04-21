@@ -1,0 +1,38 @@
+// 嵌套控制流测试
+use std.runtime.entry;
+// 测试嵌套的if/while语句
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_nested_if_while() !void {
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    
+    while i < 3 {
+        var j: i32 = 0;
+        while j < 2 {
+            if i > j {
+                sum = sum + 1;
+            } else {
+                sum = sum + 2;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    
+    // i=0: j=0时sum+2, j=1时sum+2 → sum += 4
+    // i=1: j=0时sum+1, j=1时sum+2 → sum += 3
+    // i=2: j=0时sum+1, j=1时sum+1 → sum += 2
+    // 总共: 4 + 3 + 2 = 9
+    try assert_eq_i32(sum, 9);
+}
+
+export fn main() i32 {
+    test_suite_begin("Nested Control Tests");
+    run_test("nested if while", test_nested_if_while);
+    return test_suite_end();
+}

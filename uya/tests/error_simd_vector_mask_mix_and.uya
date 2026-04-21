@@ -1,0 +1,10 @@
+// @vector 与 @mask 不能混用按位 &
+type Vec4i32 = @vector(i32, 4);
+type Mask4 = @mask(4);
+
+export fn main() i32 {
+    const v: Vec4i32 = @vector.splat(1);
+    const m: Mask4 = v == v;
+    const x: Vec4i32 = v & m;
+    return 0;
+}

@@ -1,0 +1,85 @@
+// 回归：手写 Future.poll 中，Ready(error) 分支若先根据副作用切 stage，
+// 后续必须能继续 fallthrough 到下一 stage；不能被 catch/Ready 路径吃掉状态更新。
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+error Truncated;
+error Unsupported;
+
+struct InnerReadyErr : Future<!usize> {
+    truncated: &i32,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!usize> {
+        _ = waker;
+        self.truncated[0] = 1;
+        return Poll<!usize>.Ready(error.Truncated);
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+struct TransportLikeFuture : Future<!usize> {
+    stage: i32,
+    truncated: &i32,
+    inner: InnerReadyErr,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!usize> {
+        if self.stage == 0 {
+            const udp_poll: Poll<!usize> = self.inner.poll(waker);
+            match udp_poll {
+                .Pending(_) => {
+                    const p: Poll<!usize> = Poll<!usize>.Pending({});
+                    return p;
+                },
+                .Ready(udp_result) => {
+                    // 这条路径模拟 DNS transport 中“UDP 标记 truncated 后切到 TCP”。
+                    if self.truncated[0] != 0 {
+                        self.truncated[0] = 0;
+                        self.stage = 1;
+                    } else {
+                        const udp_n: usize = udp_result catch |err| {
+                            _ = err;
+                            const p: Poll<!usize> = Poll<!usize>.Ready(udp_result);
+                            return p;
+                        };
+                        return async_poll_ready_ok_usize(udp_n);
+                    }
+                },
+            };
+        }
+        if self.stage == 1 {
+            return async_poll_ready_ok_usize(7);
+        }
+        return Poll<!usize>.Ready(error.Unsupported);
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+test "transport_like_ready_error_can_fallthrough_to_next_stage" {
+    var truncated: i32 = 0;
+    var fut: TransportLikeFuture = TransportLikeFuture{
+        stage: 0,
+        truncated: &truncated,
+        inner: InnerReadyErr{ truncated: &truncated },
+    };
+    const w: Waker = Waker{};
+    const p: Poll<!usize> = fut.poll(&w);
+    var got: i32 = -1;
+    match p {
+        .Pending(_) => {
+            got = -2;
+        },
+        .Ready(result) => {
+            got = ((result catch { 0 as usize; }) as! i32).value;
+        },
+    };
+    try assert_eq_i32(got, 7);
+    try assert_eq_i32(truncated, 0);
+    try assert_eq_i32(fut.stage, 1);
+}

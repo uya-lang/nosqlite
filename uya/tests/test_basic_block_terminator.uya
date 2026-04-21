@@ -1,0 +1,46 @@
+// 测试基本块 terminator
+use std.runtime.entry;
+// 验证所有函数的基本块都有正确的 terminator
+
+struct Result {
+    value: i32,
+    success: bool,
+}
+
+fn test_with_return() i32 {
+    return 42;
+}
+
+fn test_with_if(x: i32) i32 {
+    if x > 0 {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+fn test_with_while() i32 {
+    var i: i32 = 0;
+    while i < 10 {
+        i = i + 1;
+    }
+    return i;
+}
+
+fn test_struct_return() Result {
+    return Result{ value: 100, success: true };
+}
+
+export fn main() i32 {
+    const r1: i32 = test_with_return();
+    const r2: i32 = test_with_if(5);
+    const r3: i32 = test_with_while();
+    const r4: Result = test_struct_return();
+    
+    if r1 != 42 || r2 != 1 || r3 != 10 || r4.value != 100 || r4.success != true {
+        return 1;
+    }
+    
+    return 0;
+}
+

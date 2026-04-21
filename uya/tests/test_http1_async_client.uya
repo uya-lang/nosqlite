@@ -1,0 +1,642 @@
+// test_http1_async_client.uya — `http1_async_get` / `http1_async_post` async 测试。
+// 保留坏 URL 冒烟；另外补了回环端到端测试，覆盖 HTTP 客户端 + async lowering。
+
+use std.http.types;
+use std.http.router;
+use std.http.server;
+use std.http.http1_async;
+use std.async;
+use std.async_scheduler;
+use std.async_event;
+use libc.unistd;
+use libc.syscall;
+use std.testing.assert_eq_i32;
+
+fn response_has_subslice(hay: &[byte], needle: &[byte]) bool {
+    if needle.len == 0 || hay.len < needle.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i + needle.len <= hay.len {
+        var j: usize = 0;
+        var ok: bool = true;
+        while j < needle.len {
+            if hay.ptr[i + j] != needle.ptr[j] {
+                ok = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if ok {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn slice_eq_bytes(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn write_stderr_msg(msg: &[byte]) void {
+    _ = sys_write(2, msg.ptr, msg.len);
+}
+
+fn write_err_kind(prefix: &[byte], err_id: u32) void {
+    write_stderr_msg(prefix);
+    if err_id == @error_id(error.InvalidRequest) {
+        write_stderr_msg(&"InvalidRequest"[0: 14]);
+    } else if err_id == @error_id(error.ConnectionClosed) {
+        write_stderr_msg(&"ConnectionClosed"[0: 16]);
+    } else if err_id == @error_id(error.HeaderTooLarge) {
+        write_stderr_msg(&"HeaderTooLarge"[0: 14]);
+    } else if err_id == @error_id(error.PayloadTooLarge) {
+        write_stderr_msg(&"PayloadTooLarge"[0: 15]);
+    } else if err_id == @error_id(error.ReadWouldBlock) {
+        write_stderr_msg(&"ReadWouldBlock"[0: 14]);
+    } else if err_id == @error_id(error.HttpChunkedNotSupported) {
+        write_stderr_msg(&"HttpChunkedNotSupported"[0: 23]);
+    } else if err_id == @error_id(error.EventLoopSlotsFull) {
+        write_stderr_msg(&"EventLoopSlotsFull"[0: 18]);
+    } else if err_id == @error_id(error.TaskQueueFull) {
+        write_stderr_msg(&"TaskQueueFull"[0: 13]);
+    } else {
+        write_stderr_msg(&"other"[0: 5]);
+    }
+}
+
+fn write_u16_dec_msg(prefix: &[byte], value: u16) void {
+    var buf: [byte: 16] = [];
+    write_stderr_msg(prefix);
+    const end: usize = client_append_u16_dec_buf(&buf[0] as &byte, 0, value);
+    write_stderr_msg(buf[0: end]);
+}
+
+fn http_loopback_tests_supported() bool {
+    const probe: !i32 = sys_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    const fd: i32 = probe catch {
+        return false;
+    };
+    _ = sys_close(fd);
+    return true;
+}
+
+// 与 lib/std/http/http1_async.uya 中同名辅助函数区分，避免多 TU 链接时符号重复
+fn client_append_u16_dec_buf(out: &byte, start: usize, n: u16) usize {
+    var pos: usize = start;
+    if n == 0 {
+        out[pos] = (48 as byte);
+        return pos + 1;
+    }
+    var tmp: [byte: 6] = [];
+    var t: usize = 0;
+    var x: u16 = n;
+    while x > 0 && t < 6 {
+        tmp[t] = (((x % 10) as u32 + 48) as byte);
+        x = x / 10;
+        t = t + 1;
+    }
+    while t > 0 {
+        t = t - 1;
+        if t >= 0 && t < 6 {
+            out[pos] = tmp[t];
+            pos = pos + 1;
+        }
+    }
+    return pos;
+}
+
+fn fill_loopback_url(out: &byte, out_len: usize, port: u16, path: &[byte]) usize {
+    var pos: usize = 0;
+    const head: &[byte] = &"http://127.0.0.1:"[0: 17];
+    var i: usize = 0;
+    while i < head.len {
+        if pos >= out_len {
+            return pos;
+        }
+        out[pos] = head.ptr[i];
+        pos = pos + 1;
+        i = i + 1;
+    }
+    pos = client_append_u16_dec_buf(out, pos, port);
+    i = 0;
+    while i < path.len {
+        if pos >= out_len {
+            return pos;
+        }
+        out[pos] = path.ptr[i];
+        pos = pos + 1;
+        i = i + 1;
+    }
+    return pos;
+}
+
+fn fill_localhost_url(out: &byte, out_len: usize, port: u16, path: &[byte]) usize {
+    var pos: usize = 0;
+    const head: &[byte] = &"http://localhost:"[0: 17];
+    var i: usize = 0;
+    while i < head.len {
+        if pos >= out_len {
+            return pos;
+        }
+        out[pos] = head.ptr[i];
+        pos = pos + 1;
+        i = i + 1;
+    }
+    pos = client_append_u16_dec_buf(out, pos, port);
+    i = 0;
+    while i < path.len {
+        if pos >= out_len {
+            return pos;
+        }
+        out[pos] = path.ptr[i];
+        pos = pos + 1;
+        i = i + 1;
+    }
+    return pos;
+}
+
+fn listen_loopback_server() !HttpServer {
+    write_stderr_msg(&"listen:socket\n"[0: 14]);
+    const fd: i32 = try sys_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    var one: i32 = 1;
+    write_stderr_msg(&"listen:setsockopt\n"[0: 18]);
+    _ = try sys_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one as &void, 4 as u32);
+    var addr: [byte: 16] = [];
+    write_stderr_msg(&"listen:addr\n"[0: 12]);
+    fill_sockaddr_loopback_16(0, &addr[0] as &byte);
+    write_stderr_msg(&"listen:bind\n"[0: 12]);
+    _ = try sys_bind(fd, &addr[0] as &void, 16 as u32);
+    write_stderr_msg(&"listen:listen\n"[0: 14]);
+    _ = try sys_listen(fd, 128);
+    var alen: u32 = 16;
+    var out: [byte: 16] = [];
+    write_stderr_msg(&"listen:getsockname\n"[0: 19]);
+    _ = try sys_getsockname(fd, &out[0] as &void, &alen);
+    const port: u16 = read_port_from_sockaddr_16(&out[0] as &byte);
+    return HttpServer{ listen_fd: fd, port: port };
+}
+
+fn wait_child_ok(pid: i32) void {
+    var st: i32 = 0;
+    _ = sys_waitpid(pid, &st, 0);
+    const code: i32 = (st >> 8) & 0xff;
+    if (st & 0xff) != 0 {
+        write_stderr_msg(&"wait_child_ok:signal="[0: 21]);
+        write_stderr_msg(&"other"[0: 5]);
+        write_stderr_msg(&"\n"[0: 1]);
+        sys_exit(98);
+    }
+    if code != 0 {
+        write_stderr_msg(&"wait_child_ok:exit="[0: 19]);
+        if code == 11 {
+            write_stderr_msg(&"client:get:epoll"[0: 16]);
+        } else if code == 12 {
+            write_stderr_msg(&"client:get:block_on"[0: 19]);
+        } else if code == 13 {
+            write_stderr_msg(&"client:get:status"[0: 17]);
+        } else if code == 14 {
+            write_stderr_msg(&"client:get:body"[0: 15]);
+        } else if code == 21 {
+            write_stderr_msg(&"client:post:epoll"[0: 17]);
+        } else if code == 22 {
+            write_stderr_msg(&"client:post:block_on"[0: 20]);
+        } else if code == 23 {
+            write_stderr_msg(&"client:post:status"[0: 18]);
+        } else if code == 24 {
+            write_stderr_msg(&"client:post:body"[0: 16]);
+        } else if code == 31 {
+            write_stderr_msg(&"client:chunked:epoll"[0: 20]);
+        } else if code == 32 {
+            write_stderr_msg(&"client:chunked:block_on"[0: 23]);
+        } else if code == 33 {
+            write_stderr_msg(&"client:chunked:status"[0: 21]);
+        } else if code == 34 {
+            write_stderr_msg(&"client:chunked:body"[0: 19]);
+        } else {
+            write_stderr_msg(&"other"[0: 5]);
+        }
+        write_stderr_msg(&"\n"[0: 1]);
+        sys_exit(99);
+    }
+}
+
+fn run_async_get_client(port: u16) void {
+    const url_buf_cap: usize = 64;
+    var url_buf: [byte: 64] = [];
+    const path: &[byte] = &"/hello"[0: 6];
+    const url_len: usize = fill_loopback_url(&url_buf[0] as &byte, url_buf_cap, port, path);
+    const url: &[byte] = url_buf[0: url_len];
+
+    const loop: LinuxEpoll = linux_epoll_create(0) catch {
+        write_stderr_msg(&"client:get:epoll\n"[0: 17]);
+        sys_exit(11);
+        return;
+    };
+    const fut: Future<!Http1AsyncResponse> = http1_async_get(url, null, 5000);
+    const out: !Http1AsyncResponse = block_on_with_event_loop<Http1AsyncResponse>(&loop, fut, 1000);
+    const resp: Http1AsyncResponse = out catch |err| {
+        write_stderr_msg(&"client:get:block_on\n"[0: 20]);
+        write_err_kind(&"client:get:block_on err="[0: 24], @error_id(err));
+        write_stderr_msg(&"\n"[0: 1]);
+        sys_exit(12);
+        return;
+    };
+    if resp.status != 200 {
+        write_stderr_msg(&"client:get:status\n"[0: 18]);
+        write_u16_dec_msg(&"client:get:status value="[0: 24], resp.status as u16);
+        write_stderr_msg(&"\n"[0: 1]);
+        http1_async_response_free(&resp);
+        sys_exit(13);
+    }
+    if !response_has_subslice(resp.body, &"get-ok"[0: 6]) {
+        write_stderr_msg(&"client:get:body\n"[0: 16]);
+        http1_async_response_free(&resp);
+        sys_exit(14);
+    }
+    http1_async_response_free(&resp);
+    sys_exit(0);
+}
+
+fn run_async_get_localhost_client(port: u16) void {
+    const url_buf_cap: usize = 64;
+    var url_buf: [byte: 64] = [];
+    const path: &[byte] = &"/hello"[0: 6];
+    const url_len: usize = fill_localhost_url(&url_buf[0] as &byte, url_buf_cap, port, path);
+    const url: &[byte] = url_buf[0: url_len];
+
+    const loop: LinuxEpoll = linux_epoll_create(0) catch {
+        write_stderr_msg(&"client:get:epoll\n"[0: 17]);
+        sys_exit(15);
+        return;
+    };
+    const fut: Future<!Http1AsyncResponse> = http1_async_get(url, null, 5000);
+    const out: !Http1AsyncResponse = block_on_with_event_loop<Http1AsyncResponse>(&loop, fut, 1000);
+    const resp: Http1AsyncResponse = out catch |err| {
+        write_stderr_msg(&"client:get:block_on\n"[0: 20]);
+        write_err_kind(&"client:get:block_on err="[0: 24], @error_id(err));
+        write_stderr_msg(&"\n"[0: 1]);
+        sys_exit(16);
+        return;
+    };
+    if resp.status != 200 {
+        write_stderr_msg(&"client:get:status\n"[0: 18]);
+        http1_async_response_free(&resp);
+        sys_exit(17);
+    }
+    if !response_has_subslice(resp.body, &"get-ok"[0: 6]) {
+        write_stderr_msg(&"client:get:body\n"[0: 16]);
+        http1_async_response_free(&resp);
+        sys_exit(18);
+    }
+    http1_async_response_free(&resp);
+    sys_exit(0);
+}
+
+fn run_async_post_client(port: u16) void {
+    const url_buf_cap: usize = 64;
+    var url_buf: [byte: 64] = [];
+    const path: &[byte] = &"/submit"[0: 7];
+    const url_len: usize = fill_loopback_url(&url_buf[0] as &byte, url_buf_cap, port, path);
+    const url: &[byte] = url_buf[0: url_len];
+
+    var payload: [byte: 8] = [0: 8];
+    const hello: &[byte] = &"hello"[0: 5];
+    var k: usize = 0;
+    while k < hello.len {
+        payload[k] = hello.ptr[k];
+        k = k + 1;
+    }
+    const body_sl: &[byte] = payload[0: 5];
+    const ct: &[byte] = &"text/plain"[0: 10];
+    var z: [byte: 1] = [0 as byte];
+    const empty: &[byte] = z[0: 0];
+    var req_ov: Http1AsyncRequest = Http1AsyncRequest{
+        method: Method.POST,
+        host: empty,
+        port: 0,
+        path: empty,
+        body: body_sl,
+        content_type: ct,
+    };
+
+    const loop: LinuxEpoll = linux_epoll_create(0) catch {
+        write_stderr_msg(&"client:post:epoll\n"[0: 18]);
+        sys_exit(21);
+        return;
+    };
+    const fut: Future<!Http1AsyncResponse> = http1_async_post(url, &req_ov, 5000);
+    const out: !Http1AsyncResponse = block_on_with_event_loop<Http1AsyncResponse>(&loop, fut, 1000);
+    const resp: Http1AsyncResponse = out catch |err| {
+        write_stderr_msg(&"client:post:block_on\n"[0: 21]);
+        write_err_kind(&"client:post:block_on err="[0: 25], @error_id(err));
+        write_stderr_msg(&"\n"[0: 1]);
+        sys_exit(22);
+        return;
+    };
+    if resp.status != 201 {
+        write_stderr_msg(&"client:post:status\n"[0: 19]);
+        write_u16_dec_msg(&"client:post:status value="[0: 25], resp.status as u16);
+        write_stderr_msg(&"\n"[0: 1]);
+        http1_async_response_free(&resp);
+        sys_exit(23);
+    }
+    if !response_has_subslice(resp.body, &"post-ok"[0: 7]) {
+        write_stderr_msg(&"client:post:body\n"[0: 17]);
+        http1_async_response_free(&resp);
+        sys_exit(24);
+    }
+    http1_async_response_free(&resp);
+    sys_exit(0);
+}
+
+fn run_async_chunked_get_client(port: u16) void {
+    // 使用流式接口读取 chunked 响应
+    const url_buf_cap: usize = 64;
+    var url_buf: [byte: 64] = [];
+    const path: &[byte] = &"/chunked"[0: 8];
+    const url_len: usize = fill_loopback_url(&url_buf[0] as &byte, url_buf_cap, port, path);
+    const url: &[byte] = url_buf[0: url_len];
+    
+    const pu: ParsedHttpUrl = parse_http_url_full(url) catch {
+        write_stderr_msg(&"client:chunked:parse_url\n"[0: 25]);
+        sys_exit(31);
+        return;
+    };
+    const req: Http1AsyncRequest = http1_async_request_from_url(Method.GET, pu, null);
+    
+    // 使用异步流式接口发送请求并获取 headers
+    const loop_result: !LinuxEpoll = linux_epoll_create(0);
+    const loop: LinuxEpoll = loop_result catch {
+        write_stderr_msg(&"client:chunked:epoll_create\n"[0: 28]);
+        sys_exit(32);
+        return;
+    };
+    const stream_fut: Future<!Http1StreamResponse> = http1_request_stream_async(&req, 0);
+    const stream_result: !Http1StreamResponse = block_on_with_event_loop_deadline<Http1StreamResponse>(&loop, stream_fut, 1000, 0);
+    const stream_resp: Http1StreamResponse = stream_result catch |err| {
+        write_stderr_msg(&"client:chunked:stream_req\n"[0: 26]);
+        write_err_kind(&"client:chunked:stream_req err="[0: 30], @error_id(err));
+        write_stderr_msg(&" host="[0: 6]);
+        _ = sys_write(2, req.host.ptr, req.host.len);
+        write_stderr_msg(&" port="[0: 6]);
+        const port_str: [byte: 8] = [];
+        const port_len: usize = client_append_u16_dec_buf(&port_str[0] as &byte, 0, req.port);
+        _ = sys_write(2, &port_str[0], port_len);
+        write_stderr_msg(&"\n"[0: 1]);
+        sys_exit(32);
+        return;
+    };
+    
+    if stream_resp.headers.status != 200 {
+        write_stderr_msg(&"client:chunked:status\n"[0: 22]);
+        write_u16_dec_msg(&"client:chunked:status value="[0: 28], stream_resp.headers.status as u16);
+        write_stderr_msg(&"\n"[0: 1]);
+        _ = sys_close(stream_resp.fd) catch {};
+        sys_exit(33);
+    }
+    
+    if !stream_resp.headers.transfer_encoding_chunked {
+        write_stderr_msg(&"client:chunked:not_chunked\n"[0: 26]);
+        _ = sys_close(stream_resp.fd) catch {};
+        sys_exit(33);
+    }
+    
+    // 使用异步接口读取完整 chunked body
+    const body_cap: usize = 256;
+    const body_mem: &void = malloc(body_cap);
+    if (body_mem as &byte) as usize == 0 {
+        _ = sys_close(stream_resp.fd) catch {};
+        sys_exit(34);
+    }
+
+    const body_result: !usize = http1_read_chunked_body_sync(
+        stream_resp.fd,
+        body_mem as &byte,
+        body_cap
+    );
+    const body_len: usize = body_result catch |err| {
+        free(body_mem);
+        _ = sys_close(stream_resp.fd) catch {};
+        write_stderr_msg(&"client:chunked:read_body\n"[0: 23]);
+        write_err_kind(&"client:chunked:read_body err="[0: 29], @error_id(err));
+        write_stderr_msg(&"\n"[0: 1]);
+        sys_exit(34);
+        return;  // 类型检查需要
+    };
+    
+    // 关闭 fd
+    _ = sys_close(stream_resp.fd) catch {};
+    
+    // 验证结果
+    const result_body: &[byte] = slice_from_raw(body_mem as &byte, body_len);
+    if !slice_eq_bytes(result_body, &"hello chunked world"[0: 19]) {
+        write_stderr_msg(&"client:chunked:body\n"[0: 20]);
+        write_stderr_msg(&"got: "[0: 5]);
+        _ = sys_write(2, result_body.ptr, result_body.len);
+        write_stderr_msg(&" expect: hello chunked world\n"[0: 29]);
+        free(body_mem);
+        sys_exit(34);
+    }
+    
+    free(body_mem);
+    sys_exit(0);
+}
+
+fn async_http1_get_server_roundtrip() !void {
+    const srv: HttpServer = try listen_loopback_server();
+    const child_pid: i32 = fork();
+    if child_pid == 0 {
+        http_server_close(&srv);
+        run_async_get_client(srv.port);
+    }
+    if child_pid <= 0 {
+        try assert_eq_i32(0, 1);
+    }
+
+    var srv_tmp: HttpServer = HttpServer{ listen_fd: srv.listen_fd, port: srv.port };
+    const conn: Conn = try http_server_accept(&srv_tmp);
+    const sfd: i32 = conn.fd;
+    const pr: ParseResult = try http_recv_parse_request(sfd);
+    try assert_eq_i32(pr.request.method as i32, Method.GET as i32);
+    try assert_eq_i32(pr.request.path_len, 6);
+    try assert_eq_i32(pr.request.body.len as i32, 0);
+    _ = http_send_response(sfd, Status.OK, &"get-ok"[0: 6]) catch {};
+    _ = sys_close(sfd);
+
+    wait_child_ok(child_pid);
+    http_server_close(&srv);
+}
+
+fn async_http1_get_localhost_roundtrip() !void {
+    const srv: HttpServer = try listen_loopback_server();
+    const child_pid: i32 = fork();
+    if child_pid == 0 {
+        http_server_close(&srv);
+        run_async_get_localhost_client(srv.port);
+    }
+    if child_pid <= 0 {
+        try assert_eq_i32(0, 1);
+    }
+
+    var srv_tmp: HttpServer = HttpServer{ listen_fd: srv.listen_fd, port: srv.port };
+    const conn: Conn = try http_server_accept(&srv_tmp);
+    const sfd: i32 = conn.fd;
+    const pr: ParseResult = try http_recv_parse_request(sfd);
+    try assert_eq_i32(pr.request.method as i32, Method.GET as i32);
+    try assert_eq_i32(pr.request.path_len, 6);
+    _ = http_send_response(sfd, Status.OK, &"get-ok"[0: 6]) catch {};
+    _ = sys_close(sfd);
+
+    wait_child_ok(child_pid);
+    http_server_close(&srv);
+}
+
+fn async_http1_post_server_roundtrip() !void {
+    var cfg: ServerConfig = ServerConfig{
+        mode: ServerMode.Blocking,
+        max_connections: 8,
+        port: 0,
+        host: [],
+    };
+    const srv: HttpServer = try listen_loopback_server();
+    const child_pid: i32 = fork();
+    if child_pid == 0 {
+        http_server_close(&srv);
+        run_async_post_client(srv.port);
+    }
+    if child_pid <= 0 {
+        try assert_eq_i32(0, 1);
+    }
+
+    var srv_tmp: HttpServer = HttpServer{ listen_fd: srv.listen_fd, port: srv.port };
+    const conn: Conn = try http_server_accept(&srv_tmp);
+    const sfd: i32 = conn.fd;
+    const pr: ParseResult = try http_recv_parse_request(sfd);
+    try assert_eq_i32(pr.request.method as i32, Method.POST as i32);
+    try assert_eq_i32(pr.request.path_len, 7);
+    if !slice_eq_bytes(pr.request.body, &"hello"[0: 5]) {
+        try assert_eq_i32(0, 1);
+    }
+    _ = http_send_response(sfd, Status.Created, &"post-ok"[0: 7]) catch {};
+    _ = sys_close(sfd);
+
+    wait_child_ok(child_pid);
+    http_server_close(&srv);
+}
+
+fn async_http1_get_chunked_roundtrip() !void {
+    const srv: HttpServer = try listen_loopback_server();
+    const child_pid: i32 = fork();
+    if child_pid == 0 {
+        http_server_close(&srv);
+        run_async_chunked_get_client(srv.port);
+    }
+    if child_pid <= 0 {
+        try assert_eq_i32(0, 1);
+    }
+
+    var srv_tmp: HttpServer = HttpServer{ listen_fd: srv.listen_fd, port: srv.port };
+    const conn: Conn = try http_server_accept(&srv_tmp);
+    const sfd: i32 = conn.fd;
+    const pr: ParseResult = try http_recv_parse_request(sfd);
+    try assert_eq_i32(pr.request.method as i32, Method.GET as i32);
+    try assert_eq_i32(pr.request.path_len, 8);
+
+    const raw: &[byte] = &"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n1\r\n \r\n7\r\nchunked\r\n1\r\n \r\n5\r\nworld\r\n0\r\n\r\n"[0: 115];
+    _ = sys_write(sfd, raw.ptr, raw.len);
+    _ = sys_close(sfd);
+
+    wait_child_ok(child_pid);
+    http_server_close(&srv);
+}
+
+test "http1_async_get_invalid_url" {
+    const bad_url: &[byte] = &"ftp://127.0.0.1/"[0: 16];
+    const fut: Future<!Http1AsyncResponse> = http1_async_get(bad_url, null, 0);
+    const out: !Http1AsyncResponse = block_on<Http1AsyncResponse>(fut);
+    match out {
+        error.InvalidRequest => {
+        }
+        r => {
+            http1_async_response_free(&r);
+            try assert_eq_i32(0, 1);
+        }
+    };
+}
+
+test "http1_async_post_invalid_url" {
+    const bad_url: &[byte] = &"ftp://127.0.0.1/post"[0: 20];
+    var payload: [byte: 8] = [0: 8];
+    const hello: &[byte] = &"hello"[0: 5];
+    var k: usize = 0;
+    while k < hello.len {
+        payload[k] = hello.ptr[k];
+        k = k + 1;
+    }
+    const body_sl: &[byte] = payload[0: 5];
+    const ct: &[byte] = &"text/plain"[0: 10];
+    var z: [byte: 1] = [0 as byte];
+    const empty: &[byte] = z[0: 0];
+    var req_ov: Http1AsyncRequest = Http1AsyncRequest{
+        method: Method.POST,
+        host: empty,
+        port: 0,
+        path: empty,
+        body: body_sl,
+        content_type: ct,
+    };
+    const fut: Future<!Http1AsyncResponse> = http1_async_post(bad_url, &req_ov, 0);
+    const out: !Http1AsyncResponse = block_on<Http1AsyncResponse>(fut);
+    match out {
+        error.InvalidRequest => {
+        }
+        r => {
+            http1_async_response_free(&r);
+            try assert_eq_i32(0, 1);
+        }
+    };
+}
+
+test "http1_async_get_loopback_roundtrip" {
+    if !http_loopback_tests_supported() {
+        write_stderr_msg(&"skip:http1_loopback\n"[0: 20]);
+        return;
+    }
+    try async_http1_get_server_roundtrip();
+}
+
+test "http1_async_get_localhost_roundtrip" {
+    if !http_loopback_tests_supported() {
+        write_stderr_msg(&"skip:http1_loopback\n"[0: 20]);
+        return;
+    }
+    try async_http1_get_localhost_roundtrip();
+}
+
+test "http1_async_post_loopback_roundtrip" {
+    if !http_loopback_tests_supported() {
+        write_stderr_msg(&"skip:http1_loopback\n"[0: 20]);
+        return;
+    }
+    try async_http1_post_server_roundtrip();
+}
+
+test "http1_async_get_chunked_loopback_roundtrip" {
+    if !http_loopback_tests_supported() {
+        write_stderr_msg(&"skip:http1_loopback\n"[0: 20]);
+        return;
+    }
+    try async_http1_get_chunked_roundtrip();
+}

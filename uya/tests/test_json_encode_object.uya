@@ -1,0 +1,29 @@
+// 测试 std.json 编码：对象
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.value.JsonStrView;
+use std.json.value.JsonKeyValue;
+use std.json.value.JsonObject;
+use std.json.encoder.encode_to;
+
+export fn main() i32 {
+    var buf: [byte: 128] = [];
+
+    const empty_obj: JsonObject = JsonObject{ pairs: null, len: 0 };
+    const ve: JsonValue = JsonValue.obj(empty_obj);
+    const e_len: usize = encode_to(&ve, &buf[0], 128) catch { return 1; };
+    if e_len != 2 { return 2; }
+    if buf[0] != 123 || buf[1] != 125 { return 3; }
+
+    var key_a: [byte: 4] = [];
+    key_a[0] = 97;
+    var pairs: [JsonKeyValue: 2] = [];
+    pairs[0] = JsonKeyValue{ key: JsonStrView{ ptr: &key_a[0], len: 1 }, value: JsonValue.int_val(1) };
+    const obj1: JsonObject = JsonObject{ pairs: &pairs[0], len: 1 };
+    const v1: JsonValue = JsonValue.obj(obj1);
+    const len1: usize = encode_to(&v1, &buf[0], 128) catch { return 4; };
+    if len1 != 7 { return 5; }
+    if buf[0] != 123 || buf[1] != 34 || buf[2] != 97 || buf[3] != 34 || buf[4] != 58 || buf[5] != 49 || buf[6] != 125 { return 6; }
+
+    return 0;
+}

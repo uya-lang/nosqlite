@@ -1,0 +1,116 @@
+// Tests for container memory sandbox — cross-platform bounds checking
+
+use kernel.errors;
+use kernel.sandbox;
+use std.testing.assert_eq_i32;
+
+test "sandbox_read_write_in_bounds" {
+    var region: [byte: 256] = [];
+    var sb: Sandbox = Sandbox{ base: null, size: 0, fault_count: 0 };
+    sandbox_init(&sb, &region[0], 256);
+
+    // Write i32 at offset 0
+    try sandbox_write_i32(&sb, &region[0], 0, 42);
+    const val: i32 = try sandbox_read_i32(&sb, &region[0], 0);
+    try assert_eq_i32(val, 42);
+
+    // Write at offset 100
+    try sandbox_write_i32(&sb, &region[0], 100, 99);
+    const val2: i32 = try sandbox_read_i32(&sb, &region[0], 100);
+    try assert_eq_i32(val2, 99);
+}
+
+test "sandbox_read_out_of_bounds_faults" {
+    var region: [byte: 64] = [];
+    var sb: Sandbox = Sandbox{ base: null, size: 0, fault_count: 0 };
+    sandbox_init(&sb, &region[0], 64);
+
+    // Read at offset 62, size 4 → 62+4=66 > 64, out of bounds
+    var faulted: i32 = 0;
+    const val: i32 = sandbox_read_i32(&sb, &region[0], 62) catch |err| {
+        faulted = 1;
+        0;
+    };
+    try assert_eq_i32(faulted, 1);
+    try assert_eq_i32(sb.fault_count as i32, 1);
+}
+
+test "sandbox_write_out_of_bounds_faults" {
+    var region: [byte: 32] = [];
+    var sb: Sandbox = Sandbox{ base: null, size: 0, fault_count: 0 };
+    sandbox_init(&sb, &region[0], 32);
+
+    // Write at offset 30, size 4 → out of bounds
+    var faulted: i32 = 0;
+    sandbox_write_i32(&sb, &region[0], 30, 123) catch |err| {
+        faulted = 1;
+    };
+    try assert_eq_i32(faulted, 1);
+}
+
+test "sandbox_byte_access" {
+    var region: [byte: 16] = [];
+    var sb: Sandbox = Sandbox{ base: null, size: 0, fault_count: 0 };
+    sandbox_init(&sb, &region[0], 16);
+
+    try sandbox_write_byte(&sb, &region[0], 5, 0xAB as byte);
+    const b: byte = try sandbox_read_byte(&sb, &region[0], 5);
+    try assert_eq_i32(b as i32, 0xAB);
+}
+
+test "sandbox_alloc_bump" {
+    var region: [byte: 256] = [];
+    var sb: Sandbox = Sandbox{ base: null, size: 0, fault_count: 0 };
+    sandbox_init(&sb, &region[0], 256);
+
+    var sa: SandboxAllocator = SandboxAllocator{ sb: &sb, used: 0 };
+    sandbox_alloc_init(&sa, &sb);
+
+    // Allocate 32 bytes
+    const p1: &byte = try sandbox_alloc(&sa, 32);
+    try assert_eq_i32(sa.used as i32, 32);
+
+    // Allocate 64 bytes
+    const p2: &byte = try sandbox_alloc(&sa, 64);
+    try assert_eq_i32(sa.used as i32, 96);
+
+    // Writing to allocated memory should be within sandbox
+    try sandbox_write_i32(&sb, p1, 0, 100);
+    const val: i32 = try sandbox_read_i32(&sb, p1, 0);
+    try assert_eq_i32(val, 100);
+}
+
+test "sandbox_alloc_oom" {
+    var region: [byte: 32] = [];
+    var sb: Sandbox = Sandbox{ base: null, size: 0, fault_count: 0 };
+    sandbox_init(&sb, &region[0], 32);
+
+    var sa: SandboxAllocator = SandboxAllocator{ sb: &sb, used: 0 };
+    sandbox_alloc_init(&sa, &sb);
+
+    // Allocate 16 bytes - OK
+    const p1: &byte = try sandbox_alloc(&sa, 16);
+
+    // Allocate another 24 bytes - should fail (16+24=40 > 32)
+    var oom: i32 = 0;
+    const p2: &byte = sandbox_alloc(&sa, 24) catch |err| {
+        oom = 1;
+        &region[0];  // dummy
+    };
+    try assert_eq_i32(oom, 1);
+}
+
+test "sandbox_external_pointer_faults" {
+    var region: [byte: 64] = [];
+    var outside: [byte: 16] = [];
+    var sb: Sandbox = Sandbox{ base: null, size: 0, fault_count: 0 };
+    sandbox_init(&sb, &region[0], 64);
+
+    // Reading from a pointer OUTSIDE the sandbox should fault
+    var faulted: i32 = 0;
+    const val: i32 = sandbox_read_i32(&sb, &outside[0], 0) catch |err| {
+        faulted = 1;
+        0;
+    };
+    try assert_eq_i32(faulted, 1);
+}

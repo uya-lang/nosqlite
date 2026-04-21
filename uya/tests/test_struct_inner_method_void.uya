@@ -1,0 +1,28 @@
+// 结构体内定义方法（void 返回）
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Counter {
+  value: i32,
+  fn inc(self: &Self) void {
+    self.value = self.value + 1;
+  }
+}
+
+fn test_inner_void_method() !void {
+  var c: Counter = Counter{ value: 5 };
+  c.inc();
+  c.inc();
+  try assert_eq_i32(c.value, 7);
+}
+
+export fn main() i32 {
+  test_suite_begin("Struct Inner Method Void Tests");
+  run_test("inner void method", test_inner_void_method);
+  return test_suite_end();
+}

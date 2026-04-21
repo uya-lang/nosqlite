@@ -1,0 +1,34 @@
+// 测试 &const T 和 *const T 只读指针类型
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+fn read_value(ptr: & const i32) i32 {
+    return ptr[0];
+}
+
+test "implicit conversion" {
+    var x: i32 = 42;
+    var ptr: &i32 = &x;
+    var const_ptr: & const i32 = ptr;
+    try expect(const_ptr[0] == 42);
+}
+
+test "const pointer usage" {
+    var x: i32 = 100;
+    var const_ptr: & const i32 = &x;
+    try expect(const_ptr[0] == 100);
+}
+
+test "const pointer function param" {
+    var x: i32 = 200;
+    const result: i32 = read_value(&x);
+    try assert_eq_i32(result, 200);
+}
+
+test "const pointer with mutable" {
+    var x: i32 = 300;
+    var ptr: &i32 = &x;
+    const result: i32 = read_value(ptr);
+    try assert_eq_i32(result, 300);
+}

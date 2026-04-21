@@ -1,0 +1,60 @@
+// tests/test_inline_optimization.uya
+// 测试函数内联优化
+
+use std.testing.assert_eq_i32;
+
+// 简单函数：单条 return 语句
+fn square(x: i32) i32 {
+    return x * x;
+}
+
+// 简单函数：多条语句但很小
+fn add_one(x: i32) i32 {
+    const result: i32 = x + 1;
+    return result;
+}
+
+// 简单函数：带条件
+fn abs_val(x: i32) i32 {
+    if x < 0 {
+        return -x;
+    }
+    return x;
+}
+
+test "simple_inline" {
+    // square(5) 内联后 -> 5 * 5 -> 常量折叠 -> 25
+    const a: i32 = square(5);
+    try assert_eq_i32(a, 25);
+    
+    // add_one(10) 内联后 -> 10 + 1 -> 11
+    const b: i32 = add_one(10);
+    try assert_eq_i32(b, 11);
+}
+
+test "nested_inline" {
+    // square(square(2)) -> square(4) -> 16
+    const a: i32 = square(square(2));
+    try assert_eq_i32(a, 16);
+    
+    // add_one(square(3)) -> add_one(9) -> 10
+    const b: i32 = add_one(square(3));
+    try assert_eq_i32(b, 10);
+}
+
+test "conditional_inline" {
+    // abs_val(-5) -> 5
+    const a: i32 = abs_val(-5);
+    try assert_eq_i32(a, 5);
+    
+    // abs_val(5) -> 5
+    const b: i32 = abs_val(5);
+    try assert_eq_i32(b, 5);
+}
+
+test "inline_propagation" {
+    const x: i32 = 3;
+    // square(x) 内联后 -> x * x -> 常量传播 -> 3 * 3 -> 9
+    const y: i32 = square(x);
+    try assert_eq_i32(y, 9);
+}

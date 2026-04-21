@@ -1,0 +1,29 @@
+// SIMD：@vector(u16, 4) 算术、比较、splat
+type Vec4u16 = @vector(u16, 4);
+type Mask4 = @mask(4);
+
+export fn main() i32 {
+    const a: Vec4u16 = @vector.splat(100 as u16);
+    const b: Vec4u16 = @vector.splat(30 as u16);
+    const s: Vec4u16 = a + b;
+    if @vector.all(s == @vector.splat(130 as u16)) == false {
+        return 1;
+    }
+    const d: Vec4u16 = a - b;
+    if @vector.all(d == @vector.splat(70 as u16)) == false {
+        return 2;
+    }
+    const p: Vec4u16 = b * @vector.splat(3 as u16);
+    if @vector.all(p == @vector.splat(90 as u16)) == false {
+        return 3;
+    }
+    const m1: Mask4 = a < @vector.splat(200 as u16);
+    if @vector.all(m1) == false {
+        return 4;
+    }
+    const m2: Mask4 = b > @vector.splat(10 as u16);
+    if @vector.all(m2) == false {
+        return 5;
+    }
+    return 0;
+}

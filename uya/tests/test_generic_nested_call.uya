@@ -1,0 +1,38 @@
+// 测试泛型函数 - 嵌套调用
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn identity<T>(x: T) T {
+    return x;
+}
+
+fn double_i32(x: i32) i32 {
+    return x * 2;
+}
+
+fn test_nested_generic_call() !void {
+    const x: i32 = identity<i32>(identity<i32>(42));
+    try assert_eq_i32(x, 42);
+}
+
+fn test_generic_with_normal() !void {
+    const y: i32 = identity<i32>(double_i32(10));
+    try assert_eq_i32(y, 20);
+}
+
+fn test_deep_nesting() !void {
+    const z: i32 = identity<i32>(identity<i32>(identity<i32>(100)));
+    try assert_eq_i32(z, 100);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Nested Call Tests");
+    run_test("nested generic call", test_nested_generic_call);
+    run_test("generic with normal", test_generic_with_normal);
+    run_test("deep nesting", test_deep_nesting);
+    return test_suite_end();
+}

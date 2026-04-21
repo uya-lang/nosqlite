@@ -1,0 +1,21 @@
+// 不能像 C 语言一样访问枚举的测试
+// 预期：编译失败
+// Uya 只支持 T.member 方式（如 Color.RED），不支持：
+// 1) C 风格裸枚举常量（如 RED）
+// 2) 变量.member（如 c.RED，c 为枚举类型变量）
+
+enum Color {
+    RED,
+    GREEN,
+    BLUE,
+}
+
+fn main() i32 {
+    // 非法：C 风格裸枚举常量（C 里可以写 RED，Uya 必须写 Color.RED）
+    const c: Color = RED;
+
+    // 非法：枚举变量不能 .member 访问（必须用类型名.Color.RED）
+    const x: Color = c.GREEN;
+
+    return 0;
+}

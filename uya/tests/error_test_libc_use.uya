@@ -1,0 +1,9 @@
+// error_test_libc_use.uya - 测试 libc 模块 use 语句错误提示
+// 预期：编译错误，提示 "libc 模块是扁平化的，请使用 'use libc.xxx;' 而不是 'use libc.stdio.xxx;'"
+
+use libc.stdio.put_char;  // 错误：libc.stdio 不是有效的模块路径
+
+export fn main() i32 {
+    put_char(65);  // 'A'
+    return 0;
+}

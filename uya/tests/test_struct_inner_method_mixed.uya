@@ -1,0 +1,38 @@
+// 结构体内定义方法（字段与方法混合）
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Rect {
+  width: i32,
+  fn getWidth(self: &Self) i32 {
+    return self.width;
+  },
+  height: i32,
+  fn getHeight(self: &Self) i32 {
+    return self.height;
+  },
+  fn area(self: &Self) i32 {
+    return self.width * self.height;
+  }
+}
+
+fn test_mixed_methods() !void {
+  const r: Rect = Rect{ width: 3, height: 4 };
+  const w: i32 = r.getWidth();
+  const h: i32 = r.getHeight();
+  const a: i32 = r.area();
+  try assert_eq_i32(w, 3);
+  try assert_eq_i32(h, 4);
+  try assert_eq_i32(a, 12);
+}
+
+export fn main() i32 {
+  test_suite_begin("Struct Inner Method Mixed Tests");
+  run_test("mixed methods", test_mixed_methods);
+  return test_suite_end();
+}

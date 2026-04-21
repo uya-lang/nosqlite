@@ -1,0 +1,17 @@
+// SIMD 阶段 4：x86_64+GCC/Clang+SSE2 时 C99 走 uya_simd_sse_* 内联（4×i32/f32 等）；其他目标为标量实现，语义一致。
+type Vec4i32 = @vector(i32, 4);
+type Mask4 = @mask(4);
+
+export fn main() i32 {
+    const a: Vec4i32 = @vector.splat(2) + @vector.splat(3);
+    const ok1: Mask4 = a == @vector.splat(5);
+    if @vector.all(ok1) == false {
+        return 1;
+    }
+    const x: Vec4i32 = @vector.splat(10) & @vector.splat(3);
+    const ok2: Mask4 = x == @vector.splat(2);
+    if @vector.all(ok2) == false {
+        return 2;
+    }
+    return 0;
+}

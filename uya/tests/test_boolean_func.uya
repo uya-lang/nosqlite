@@ -1,0 +1,31 @@
+// 测试布尔函数返回值
+
+use std.testing.assert;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+fn is_true() bool {
+    return true;
+}
+
+fn is_false() bool {
+    return false;
+}
+
+test "true_return" {
+    const a: bool = is_true();
+    try assert(a, "is_true should return true");
+}
+
+test "false_return" {
+    const b: bool = is_false();
+    try assert(b == false, "is_false should return false");
+}
+
+test "bool_combination" {
+    const a: bool = is_true();
+    const b: bool = is_false();
+    try assert(a && !b, "true && !false should be true");
+}

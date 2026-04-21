@@ -1,0 +1,64 @@
+// match 表达式测试：常量模式、变量绑定、else 分支
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+enum Color { Red = 1, Green, Blue }
+
+test "int constant match" {
+    const x: i32 = 1;
+    const r1: i32 = match x {
+        0 => 10,
+        1 => 20,
+        2 => 30,
+        else => 40,
+    };
+    try assert_eq_i32(r1, 20);
+}
+
+test "variable binding" {
+    const r2: i32 = match 42 {
+        v => v,
+    };
+    try assert_eq_i32(r2, 42);
+}
+
+test "else branch" {
+    const r3: i32 = match 99 {
+        0 => 0,
+        1 => 1,
+        else => 99,
+    };
+    try assert_eq_i32(r3, 99);
+}
+
+test "enum match" {
+    const c: Color = Color.Green;
+    const r4: i32 = match c {
+        Color.Red => 1,
+        Color.Green => 2,
+        Color.Blue => 3,
+        else => 0,
+    };
+    try assert_eq_i32(r4, 2);
+}
+
+test "bool match" {
+    const b: bool = true;
+    const r5: i32 = match b {
+        true => 1,
+        false => 0,
+        else => 0,
+    };
+    try assert_eq_i32(r5, 1);
+}
+
+test "match as statement" {
+    var n: i32 = 0;
+    match 1 {
+        0 => { n = 10; },
+        1 => { n = 20; },
+        else => { n = 30; },
+    };
+    try assert_eq_i32(n, 20);
+}

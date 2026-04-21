@@ -1,0 +1,6 @@
+use std.runtime.entry;
+
+export fn main() i32 {
+    const ptr: &i32 = null as &i32;
+    return ptr[0];
+}

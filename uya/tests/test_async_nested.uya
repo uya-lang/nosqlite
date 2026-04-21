@@ -1,0 +1,27 @@
+// test_async_nested.uya
+// 多个 @async_fn：poll Future<i32>。注：嵌套类型 Future<Future<i32>> 上 .poll 尚为已知限制。
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+@async_fn
+fn answer() !Future<i32> {
+    return 42;
+}
+
+@async_fn
+fn get_answer() !Future<i32> {
+    return 42;
+}
+
+test "async_nested_multiple_fns" {
+    const f: Future<i32> = try get_answer();
+    const w: Waker = Waker{};
+    const p: Poll<i32> = f.poll(&w);
+    var result: i32 = 0 - 1;
+    match p {
+        .Ready(x) => { result = x; },
+        .Pending(_) => { result = 0 - 2; },
+    };
+    try assert_eq_i32(result, 42);
+}

@@ -1,0 +1,10 @@
+// test_multifile_utils.uya - 工具函数文件
+
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+fn multiply(a: i32, b: i32) i32 {
+    return a * b;
+}
+

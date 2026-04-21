@@ -1,0 +1,110 @@
+// 运算符优先级完整测试程序
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+test "unary priority" {
+    var x: i32 = 5;
+    var result1: i32 = -x * 2;
+    try assert_eq_i32(result1, -10);
+    
+    var bool_val: bool = false;
+    var result2: bool = !bool_val && true;
+    try expect(result2);
+}
+
+test "cast priority" {
+    var i32_val: i32 = 10;
+    var byte_val: byte = 2;
+    var result: i32 = (i32_val as byte) as i32 * (byte_val as i32);
+    try assert_eq_i32(result, 20);
+}
+
+test "mul/div/mod priority" {
+    var result1: i32 = 2 + 3 * 4;
+    try assert_eq_i32(result1, 14);
+    
+    var result2: i32 = 10 - 8 / 2;
+    try assert_eq_i32(result2, 6);
+    
+    var result3: i32 = 10 + 15 % 4;
+    try assert_eq_i32(result3, 13);
+}
+
+test "mul/div/mod assoc" {
+    var result1: i32 = 24 / 4 / 2;
+    try assert_eq_i32(result1, 3);
+    
+    var result2: i32 = 2 * 3 * 4;
+    try assert_eq_i32(result2, 24);
+}
+
+test "add/sub priority" {
+    var result1: i32 = 1 + 2 * 3;
+    try assert_eq_i32(result1, 7);
+}
+
+test "add/sub assoc" {
+    var result1: i32 = 10 - 3 - 2;
+    try assert_eq_i32(result1, 5);
+    
+    var result2: i32 = 1 + 2 + 3;
+    try assert_eq_i32(result2, 6);
+}
+
+test "comparison priority" {
+    var result1: bool = 1 + 2 < 5;
+    try expect(result1);
+    
+    var result2: bool = 10 - 3 > 5;
+    try expect(result2);
+    
+    var a: i32 = 5;
+    var b: i32 = 10;
+    var c: i32 = 15;
+    var result3: bool = a < b && b < c;
+    try expect(result3);
+}
+
+test "equality priority" {
+    var result1: bool = 1 + 2 == 3;
+    try expect(result1);
+    
+    var result2: bool = 5 < 10 == true;
+    try expect(result2);
+}
+
+test "logic and priority" {
+    var result1: bool = true || false && false;
+    try expect(result1);
+    
+    var result2: bool = false && true || true;
+    try expect(result2);
+    
+    var result3: bool = true && true && false;
+    try expect(!result3);
+}
+
+test "logic or assoc" {
+    var result: bool = false || false || true;
+    try expect(result);
+}
+
+test "assign priority" {
+    var var1: i32 = 10;
+    var var2: i32 = 20;
+    var var3: i32 = 0;
+    var3 = var1 + var2;
+    try assert_eq_i32(var3, 30);
+}
+
+test "complex expr" {
+    var result1: i32 = 2 * 3 + 4 * 5;
+    try assert_eq_i32(result1, 26);
+    
+    var result2: bool = 1 + 2 * 3 == 7 && 10 > 5;
+    try expect(result2);
+    
+    var result3: bool = !false && 5 < 10 || 3 > 5;
+    try expect(result3);
+}

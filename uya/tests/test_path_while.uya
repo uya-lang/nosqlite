@@ -1,0 +1,49 @@
+// test_path_while.uya - 测试 while 循环的路径敏感分析
+use std.runtime.entry;
+// 
+// 功能：验证 while 循环条件中的约束能够传播到循环体内，
+//       编译器能够证明数组访问安全。
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_while_bounds_check() !void {
+    var arr: [i32: 10] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    var i: i32 = 0;
+    
+    // 测试：while 循环条件 i < 10 建立上界约束
+    // 变量初始化 i = 0 建立下界约束 i >= 0
+    while i < 10 {
+        arr[i] = i * 2;
+        i = i + 1;
+    }
+    
+    try assert_eq_i32(arr[0], 0);
+    try assert_eq_i32(arr[4], 8);
+    try assert_eq_i32(arr[9], 18);
+}
+
+fn test_while_with_lower_bound() !void {
+    var arr: [i32: 10] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    var i: i32 = 0;
+    
+    // 测试：显式下界检查
+    while i < 10 {
+        if i >= 0 {
+            arr[i] = 100 + i;
+        }
+        i = i + 1;
+    }
+    
+    try assert_eq_i32(arr[0], 100);
+    try assert_eq_i32(arr[5], 105);
+}
+
+export fn main() i32 {
+    test_suite_begin("Path Sensitive While Tests");
+    run_test("while bounds check", test_while_bounds_check);
+    run_test("while with lower bound", test_while_with_lower_bound);
+    return test_suite_end();
+}

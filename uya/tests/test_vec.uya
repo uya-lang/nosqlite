@@ -1,0 +1,104 @@
+// test_vec.uya - Vec<T>：IAllocator + 方法 + drop（风格对齐 hashmap）
+
+use std.testing;
+
+use std.mem.allocator.IAllocator;
+use std.mem.allocator.MallocAllocator;
+use std.mem.allocator.get_allocator;
+
+use std.collections.vec.Vec;
+use std.collections.vec.vec_new;
+
+var g_vec_test_dealloc_count: i32 = 0;
+
+struct CountingMallocWrapper : IAllocator {
+    inner: &MallocAllocator,
+
+    fn alloc(self: &Self, size: usize) !&byte {
+        return self.inner.alloc(size);
+    },
+
+    fn dealloc(self: &Self, ptr: &byte) void {
+        g_vec_test_dealloc_count = g_vec_test_dealloc_count + 1;
+        self.inner.dealloc(ptr);
+    },
+
+    fn realloc(self: &Self, ptr: &byte, new_size: usize) !&byte {
+        return self.inner.realloc(ptr, new_size);
+    },
+}
+
+test "vec_push_pop_at" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var v: Vec<i32> = vec_new<i32>(w);
+    try v.push(10);
+    try v.push(20);
+    const g0r: !i32 = v.get(0);
+    const g1r: !i32 = v.get(1);
+    var g0: i32 = try g0r;
+    var g1: i32 = try g1r;
+    try assert_eq_i32(g0, 10);
+    try assert_eq_i32(g1, 20);
+    try assert_eq_i32(v.len() as i32, 2);
+    const ar: !i32 = v.pop();
+    var a: i32 = try ar;
+    try assert_eq_i32(a, 20);
+    try assert_eq_i32(v.len() as i32, 1);
+}
+
+test "vec_drop_one_dealloc" {
+    g_vec_test_dealloc_count = 0;
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    {
+        var v: Vec<i32> = vec_new<i32>(w);
+        try v.push(1);
+        try v.push(2);
+        try v.push(3);
+    }
+    try assert_eq_i32(g_vec_test_dealloc_count, 1);
+}
+
+test "vec_drop_empty_zero_dealloc" {
+    g_vec_test_dealloc_count = 0;
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    {
+        var _v: Vec<i32> = vec_new<i32>(w);
+    }
+    try assert_eq_i32(g_vec_test_dealloc_count, 0);
+}
+
+test "vec_literal_init_push_get_i32" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var ia: IAllocator = w;
+    var v: Vec<i32> = Vec<i32>{
+        allocator: ia,
+        data: null,
+        _len: 0,
+        _cap: 0,
+    };
+    try v.push(1);
+    try v.push(2);
+    const r0: !i32 = v.get(0);
+    const r1: !i32 = v.get(1);
+    var a0: i32 = try r0;
+    var a1: i32 = try r1;
+    try assert_eq_i32(a0, 1);
+    try assert_eq_i32(a1, 2);
+}
+
+test "vec_literal_init_push_get_usize" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var ia: IAllocator = w;
+    var v: Vec<usize> = Vec<usize>{
+        allocator: ia,
+        data: null,
+        _len: 0,
+        _cap: 0,
+    };
+    try v.push(10 as usize);
+    try v.push(20 as usize);
+    const a0: usize = try v.get(0);
+    const a1: usize = try v.get(1);
+    try assert_eq_i32(a0 as i32, 10);
+    try assert_eq_i32(a1 as i32, 20);
+}

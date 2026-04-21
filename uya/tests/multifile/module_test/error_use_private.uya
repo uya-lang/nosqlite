@@ -1,0 +1,8 @@
+// error_use_private.uya - 测试使用未导出的项（预期编译失败）
+
+use module_a.private_func;  // 错误：private_func 未导出
+
+fn main() i32 {
+    return 0;
+}
+

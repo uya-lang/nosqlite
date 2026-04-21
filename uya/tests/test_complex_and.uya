@@ -1,0 +1,48 @@
+// 测试复杂的逻辑与运算符
+use std.runtime.entry;
+
+use std.testing.assert;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+fn test_triple_and() !void {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    const c: i32 = 30;
+    
+    try assert(a == 10 && b == 20 && c == 30, "triple and should be true");
+}
+
+fn test_nested_and() !void {
+    const x: i32 = 5;
+    const y: i32 = 10;
+    const z: i32 = 15;
+    
+    try assert((x < y) && (y < z) && (x + y == z), "nested comparisons should be true");
+}
+
+fn test_and_with_negation() !void {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    
+    try assert(a == 10 && !(b == 30), "and with negation should be true");
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    test_suite_begin("Complex And Tests");
+    
+    run_test("triple_and", test_triple_and);
+    run_test("nested_and", test_nested_and);
+    run_test("and_with_negation", test_and_with_negation);
+    
+    return test_suite_end();
+}

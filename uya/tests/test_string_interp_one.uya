@@ -1,0 +1,11 @@
+// 测试单变量字符串插值
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+test "test_string_interp_one" {
+    const x: u32 = 255;
+    const msg: [i8: 64] = "hex=${x:#06x}\n";
+    try assert_eq_i32(@size_of(msg) > 0, true);
+}

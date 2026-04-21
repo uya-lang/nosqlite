@@ -1,0 +1,53 @@
+use std;
+// 确保 HostOS/TargetArch 的 C 枚举被发出（cfg 顶层 const 单独引用时 codegen 可能未输出枚举定义）
+use std.platform;
+
+std.cfg(std.host_os == .hos_linux, {
+    const EXPECT_HOST_OS: HostOS = HostOS.hos_linux;
+    const HOST_CFG_OK: i32 = 11;
+}, std.cfg(std.host_os == .hos_macos, {
+    const EXPECT_HOST_OS: HostOS = HostOS.hos_macos;
+    const HOST_CFG_OK: i32 = 11;
+}, {
+    use imaginary.nonexistent_module;
+    const EXPECT_HOST_OS: HostOS = HostOS.hos_unknown;
+    const HOST_CFG_OK: MissingType = 11;
+}))
+
+std.cfg(std.target_arch == .ta_x86_64, {
+    const EXPECT_TARGET_ARCH: TargetArch = TargetArch.ta_x86_64;
+}, std.cfg(std.target_arch == .ta_arm64, {
+    const EXPECT_TARGET_ARCH: TargetArch = TargetArch.ta_arm64;
+}, std.cfg(std.target_arch == .ta_riscv64, {
+    const EXPECT_TARGET_ARCH: TargetArch = TargetArch.ta_riscv64;
+}, std.cfg(std.target_arch == .ta_arm, {
+    const EXPECT_TARGET_ARCH: TargetArch = TargetArch.ta_arm;
+}, {
+    const EXPECT_TARGET_ARCH: TargetArch = TargetArch.ta_unknown;
+}))))
+
+fn statement_cfg_value() i32 {
+    std.cfg(std.host_os == .hos_linux, {
+        return 7;
+    }, std.cfg(std.host_os == .hos_macos, {
+        return 7;
+    }, {
+        return undefined_symbol;
+    }))
+}
+
+export fn main() i32 {
+    if std.host_os != EXPECT_HOST_OS {
+        return 1;
+    }
+    if std.target_arch != EXPECT_TARGET_ARCH {
+        return 2;
+    }
+    if HOST_CFG_OK != 11 {
+        return 3;
+    }
+    if statement_cfg_value() != 7 {
+        return 4;
+    }
+    return 0;
+}

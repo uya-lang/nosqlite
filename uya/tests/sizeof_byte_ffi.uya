@@ -1,0 +1,44 @@
+// sizeof byte 和 FFI 指针类型测试
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+test "test_size_of_byte" {
+    try assert_eq_i32(@size_of(byte), 1);
+}
+
+test "test_size_of_ffi_ptr" {
+    try assert_eq_i32(@size_of(*byte), 8);  // 64位平台
+}
+
+test "test_size_of_byte_array" {
+    try assert_eq_i32(@size_of([byte: 10]), 10);
+    try assert_eq_i32(@size_of([byte: 5]), 5);
+    try assert_eq_i32(@size_of([byte: 100]), 100);
+}
+
+test "test_size_of_byte_var" {
+    var byte_var: byte = 42;
+    try assert_eq_i32(@size_of(byte_var), 1);
+    
+    var byte_arr: [byte: 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    try assert_eq_i32(@size_of(byte_arr), 10);
+}
+
+test "test_size_of_slice" {
+    try assert_eq_i32(@size_of(&[byte: 10]), 16);  // 胖指针 64位
+}
+
+test "test_ptr_sizes_equal" {
+    try assert_eq_i32(@size_of(*byte), @size_of(&byte));
+}
+
+test "test_size_in_expression" {
+    try assert_eq_i32(@size_of(byte) * 10, 10);
+    try assert_eq_i32(@size_of(*byte) * 5, 40);
+}
+
+test "test_slice_ne_array" {
+    try assert_eq_i32(@size_of(&[byte: 10]) == @size_of([byte: 10]), false);
+}

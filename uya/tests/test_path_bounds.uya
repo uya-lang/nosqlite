@@ -1,0 +1,45 @@
+// test_path_bounds.uya - 测试路径敏感的数组边界检查
+use std.runtime.entry;
+// 
+// 功能：验证 if 语句中的条件约束能够传播到数组访问，
+//       编译器能够证明数组访问安全。
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_nested_if_bounds() !void {
+    var arr: [i32: 10] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    var i: i32 = 5;
+    
+    // 测试：嵌套 if 建立约束
+    if i >= 0 {
+        if i < 10 {
+            arr[i] = 42;
+        }
+    }
+    
+    try assert_eq_i32(arr[5], 42);
+}
+
+fn test_independent_if_bounds() !void {
+    var arr: [i32: 10] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    var i: i32 = 5;
+    
+    // 测试：独立比较约束
+    if i < 10 {
+        if i >= 0 {
+            arr[i] = 100;
+        }
+    }
+    
+    try assert_eq_i32(arr[5], 100);
+}
+
+export fn main() i32 {
+    test_suite_begin("Path Sensitive Bounds Tests");
+    run_test("nested if bounds", test_nested_if_bounds);
+    run_test("independent if bounds", test_independent_if_bounds);
+    return test_suite_end();
+}

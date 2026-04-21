@@ -1,0 +1,25 @@
+// test_proof_in_if.uya - 在 if 内部的数组访问证明测试
+use std.runtime.entry;
+// 
+// 功能：验证在 if 检查内部的数组访问可以被证明安全
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_proof_in_if() !void {
+    var arr: [i32: 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    var i: i32 = 5;
+    
+    // 在 if 内部的数组访问应该可以被证明安全
+    if i >= 0 && i < 10 {
+        try assert_eq_i32(arr[i], 5);
+    }
+}
+
+export fn main() i32 {
+    test_suite_begin("Proof In If");
+    run_test("proof_in_if", test_proof_in_if);
+    return test_suite_end();
+}

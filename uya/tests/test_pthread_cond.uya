@@ -1,0 +1,140 @@
+// test_pthread_cond.uya - pthread 条件变量测试
+
+use std.runtime.entry;
+use libc.pthread;
+use libc.syscall;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.test_pass;
+use std.testing.test_fail;
+use std.testing.expect;
+
+const ETIMEDOUT: i32 = 110;
+
+// 共享数据结构
+struct SharedData {
+    ready: i32,
+    value: i32,
+}
+
+// 线程启动函数：等待条件变量
+fn thread_wait_cond(arg: &void) &void {
+    const data: &SharedData = arg as &SharedData;
+    var mutex: pthread_mutex_t = pthread_mutex_t{ state: 0 };
+    var cond: pthread_cond_t = pthread_cond_t{ waiters: 0, seq: 0 };
+
+    pthread_mutex_init(&mutex, null as &const pthread_mutexattr_t);
+    pthread_cond_init(&cond, null as &const pthread_condattr_t);
+    pthread_mutex_lock(&mutex);
+
+    // 等待 ready 变为 1
+    while data.ready == 0 {
+        pthread_cond_wait(&cond, &mutex);
+    }
+
+    // 验证值
+    if data.value != 42 {
+        pthread_mutex_unlock(&mutex);
+        return (1 as &void);
+    }
+
+    pthread_mutex_unlock(&mutex);
+    pthread_mutex_destroy(&mutex);
+    pthread_cond_destroy(&cond);
+    return (0 as &void);
+}
+
+fn test_pthread_cond_signal_basic() !void {
+    var data: SharedData = SharedData{ ready: 0, value: 0 };
+    var mutex: pthread_mutex_t = pthread_mutex_t{ state: 0 };
+    var cond: pthread_cond_t = pthread_cond_t{ waiters: 0, seq: 0 };
+
+    pthread_mutex_init(&mutex, null as &const pthread_mutexattr_t);
+    pthread_cond_init(&cond, null as &const pthread_condattr_t);
+
+    pthread_mutex_lock(&mutex);
+    data.value = 42;
+    data.ready = 1;
+    pthread_cond_signal(&cond);
+    pthread_mutex_unlock(&mutex);
+
+    pthread_cond_destroy(&cond);
+    pthread_mutex_destroy(&mutex);
+    try expect(true);
+}
+
+fn test_pthread_cond_broadcast_basic() !void {
+    var cond: pthread_cond_t = pthread_cond_t{ waiters: 0, seq: 0 };
+
+    pthread_cond_init(&cond, null as &const pthread_condattr_t);
+    pthread_cond_broadcast(&cond);
+    pthread_cond_destroy(&cond);
+
+    try expect(true);
+}
+
+fn test_pthread_cond_init_destroy() !void {
+    var cond: pthread_cond_t = pthread_cond_t{ waiters: 0, seq: 0 };
+    try expect(pthread_cond_init(&cond, null as &const pthread_condattr_t) == 0);
+    try expect(pthread_cond_destroy(&cond) == 0);
+}
+
+fn test_pthread_cond_timedwait_monotonic() !void {
+    var condattr: pthread_condattr_t = pthread_condattr_t{ clock: 0 };
+    var cond: pthread_cond_t = pthread_cond_t{ waiters: 0, seq: 0 };
+    var mutex: pthread_mutex_t = pthread_mutex_t{ state: 0 };
+    var now: TimeSpec = TimeSpec{ tv_sec: 0, tv_nsec: 0 };
+    var abstime: timespec = timespec{ tv_sec: 0, tv_nsec: 0 };
+
+    try expect(pthread_condattr_init(&condattr) == 0);
+    try expect(pthread_condattr_setclock(&condattr, CLOCK_MONOTONIC) == 0);
+    try expect(pthread_cond_init(&cond, &condattr) == 0);
+    try expect(pthread_mutex_init(&mutex, null as &const pthread_mutexattr_t) == 0);
+    try sys_clock_gettime(CLOCK_MONOTONIC, &now);
+
+    abstime.tv_sec = now.tv_sec;
+    abstime.tv_nsec = now.tv_nsec + 100 * 1000 * 1000;
+    if abstime.tv_nsec >= 1000000000 {
+        abstime.tv_sec = abstime.tv_sec + 1;
+        abstime.tv_nsec = abstime.tv_nsec - 1000000000;
+    }
+
+    pthread_mutex_lock(&mutex);
+    const rc: i32 = pthread_cond_timedwait(&cond, &mutex, &abstime);
+    pthread_mutex_unlock(&mutex);
+
+    try expect(pthread_cond_destroy(&cond) == 0);
+    try expect(pthread_mutex_destroy(&mutex) == 0);
+    try expect(pthread_condattr_destroy(&condattr) == 0);
+    try expect(rc == ETIMEDOUT);
+}
+
+export fn main() i32 {
+    test_suite_begin("pthread_cond");
+
+    test_pthread_cond_init_destroy() catch {
+        test_fail("pthread_cond_init_destroy");
+        return test_suite_end();
+    };
+    test_pass("pthread_cond_init_destroy");
+
+    test_pthread_cond_timedwait_monotonic() catch {
+        test_fail("pthread_cond_timedwait_monotonic");
+        return test_suite_end();
+    };
+    test_pass("pthread_cond_timedwait_monotonic");
+
+    test_pthread_cond_signal_basic() catch {
+        test_fail("pthread_cond_signal_basic");
+        return test_suite_end();
+    };
+    test_pass("pthread_cond_signal_basic");
+
+    test_pthread_cond_broadcast_basic() catch {
+        test_fail("pthread_cond_broadcast_basic");
+        return test_suite_end();
+    };
+    test_pass("pthread_cond_broadcast_basic");
+
+    return test_suite_end();
+}

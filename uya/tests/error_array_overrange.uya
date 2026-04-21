@@ -1,0 +1,9 @@
+// error_array_overrange.uya - 常量数组越界编译错误测试
+// 预期：编译失败（常量索引越界）
+// 注意：此文件预期编译失败，用于验证编译器的边界检查
+
+export fn main() i32 {
+    const array: [u8: 1] = [10];
+    const value: u8 = array[2];
+    return value as i32;
+}

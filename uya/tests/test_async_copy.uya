@@ -1,0 +1,15 @@
+// test_async_copy.uya - 测试 std.async.async_copy
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+test "async_copy" {
+    var src: [byte: 8] = [ 1, 2, 3, 4, 5, 6, 7, 8 ];
+    var r: MemAsyncReader = mem_async_reader_new(&src[0] as &const byte, 8);
+    var w: MemAsyncWriter = mem_async_writer_new();
+    var buf: [byte: 4] = [];
+    const f: Future<!usize> = async_copy(&r, &w, &buf[0], 4);
+    const bo: !usize = block_on<usize>(f);
+    const total: usize = bo catch { 0 as usize; };
+    try assert_eq_i32(total as i32, 8);
+}

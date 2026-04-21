@@ -1,0 +1,17 @@
+// 回归：scheduler/event 入图后，allocator 的 !&byte 签名必须在 split 头中有完整 err_union 定义
+
+use std.async_event;
+use std.async_scheduler;
+use std.mem.allocator.g_allocator;
+use std.testing.assert_eq_i32;
+
+test "scheduler_event_allocator_err_union_ptr_signature" {
+    const alloc_ret: !&byte = g_allocator.alloc(1 as usize);
+    const p: &byte = alloc_ret catch { null as &byte; };
+    var ok: i32 = 0;
+    if p != null {
+        g_allocator.dealloc(p);
+        ok = 1;
+    }
+    try assert_eq_i32(ok, 1);
+}

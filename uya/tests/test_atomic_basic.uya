@@ -1,0 +1,42 @@
+// 原子类型基本测试，规范 uya.md §13
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_atomic_read_write() !void {
+    var counter: atomic i32 = 0;
+    const v1: i32 = counter;
+    try assert_eq_i32(v1, 0);
+    
+    counter = 10;
+    const v2: i32 = counter;
+    try assert_eq_i32(v2, 10);
+}
+
+fn test_atomic_fetch_add() !void {
+    var counter: atomic i32 = 10;
+    counter += 5;
+    const v: i32 = counter;
+    try assert_eq_i32(v, 15);
+}
+
+fn test_atomic_fetch_sub() !void {
+    var counter: atomic i32 = 15;
+    counter -= 3;
+    const v: i32 = counter;
+    try assert_eq_i32(v, 12);
+}
+
+export fn main() i32 {
+    test_suite_begin("Atomic Basic Tests");
+    
+    run_test("atomic read write", test_atomic_read_write);
+    run_test("atomic fetch add", test_atomic_fetch_add);
+    run_test("atomic fetch sub", test_atomic_fetch_sub);
+    
+    return test_suite_end();
+}

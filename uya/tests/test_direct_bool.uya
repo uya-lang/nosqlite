@@ -1,0 +1,32 @@
+// 测试直接使用布尔字面量作为条件
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_true_literal() !void {
+    var executed: bool = false;
+    if true {
+        executed = true;
+    }
+    try expect(executed);
+}
+
+fn test_false_literal() !void {
+    var executed: bool = false;
+    if false {
+        executed = true;
+    }
+    try expect(!executed);
+}
+
+export fn main() i32 {
+    test_suite_begin("Direct Bool Tests");
+    
+    run_test("true literal", test_true_literal);
+    run_test("false literal", test_false_literal);
+    
+    return test_suite_end();
+}

@@ -1,0 +1,50 @@
+// test_usize_from_ptr.uya - 测试 @usize_from_ptr 内置函数
+use std.runtime.entry;
+// 测试从指针转换为 usize 的功能
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_null_ptr_conversion() !void {
+    const null_ptr: &void = null;
+    const addr1: usize = @usize_from_ptr(null_ptr);
+    try expect(addr1 == 0);
+}
+
+fn test_var_addr_conversion() !void {
+    var value: i32 = 42;
+    const value_ptr: &i32 = &value;
+    const addr2: usize = @usize_from_ptr(value_ptr as &void);
+    try expect(addr2 != 0);
+}
+
+fn test_array_addr_conversion() !void {
+    var arr: [i32: 10] = [];
+    const arr_ptr: &i32 = &arr[0];
+    const addr3: usize = @usize_from_ptr(arr_ptr as &void);
+    try expect(addr3 != 0);
+}
+
+fn test_ptr_arithmetic() !void {
+    var arr: [i32: 10] = [];
+    const arr_ptr: &i32 = &arr[0];
+    
+    const base_addr: usize = @usize_from_ptr(arr_ptr as &void);
+    const offset: usize = 4;
+    const next_addr: usize = base_addr + offset;
+    const next_ptr: &void = @ptr_from_usize(next_addr);
+    const verify_addr: usize = @usize_from_ptr(next_ptr);
+    
+    try expect(verify_addr == next_addr);
+}
+
+export fn main() i32 {
+    test_suite_begin("Usize From Ptr Tests");
+    run_test("null ptr conversion", test_null_ptr_conversion);
+    run_test("var addr conversion", test_var_addr_conversion);
+    run_test("array addr conversion", test_array_addr_conversion);
+    run_test("ptr arithmetic", test_ptr_arithmetic);
+    return test_suite_end();
+}

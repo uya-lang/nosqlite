@@ -1,0 +1,11 @@
+// error_asm_slice_input.uya - @asm slice 作为输入错误测试
+// 期望编译错误：@asm 输入必须是整数或指针类型
+
+fn main() i32 {
+    var arr: [i32] = [1, 2, 3];
+    var result: i32 = 0;
+    @asm {
+        "mov %0, %1" (arr, -> result);
+    }
+    return 0;
+}

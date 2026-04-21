@@ -1,0 +1,117 @@
+// TFLM 阶段 2：量化辅助、ReLU、Reshape、2×2 Pool 直接 eval
+use std.runtime.entry;
+use tflm.common.BuiltinOperator;
+use tflm.common.Context;
+use tflm.kernels.average_pool2d_eval;
+use tflm.kernels.max_pool2d_eval;
+use tflm.kernels.relu_eval;
+use tflm.kernels.reshape_eval;
+use tflm.quant.quant_mul_i32_shift_sat;
+use tflm.quant.quant_sat_i32_to_i8;
+use tflm.tensor.TensorType;
+use tflm.tensor.TensorView;
+
+fn store_i32_le(p: &byte, idx: usize, v: i32) void {
+    const off: usize = idx * 4;
+    const u: u32 = v as u32;
+    p[off] = (u as byte);
+    p[off + 1] = ((u >> 8) as byte);
+    p[off + 2] = ((u >> 16) as byte);
+    p[off + 3] = ((u >> 24) as byte);
+}
+
+fn load_i32_le(p: &byte, idx: usize) i32 {
+    const off: usize = idx * 4;
+    const u: u32 = (p[off] as u32) | ((p[off + 1] as u32) << 8) | ((p[off + 2] as u32) << 16) | ((p[off + 3] as u32) << 24);
+    return u as i32;
+}
+
+export fn main() i32 {
+    if quant_sat_i32_to_i8(200) != 127i8 {
+        return 1;
+    }
+    if quant_sat_i32_to_i8(-200) != -128i8 {
+        return 2;
+    }
+    if quant_mul_i32_shift_sat(8, 1, 1 as u32) != 4i8 {
+        return 3;
+    }
+
+    var rb: [byte: 8] = [];
+    store_i32_le(&rb[0], 0, -3);
+    store_i32_le(&rb[0], 1, 4);
+    var ctx_r: Context = Context{
+        op: BuiltinOperator.relu,
+        in0: TensorView{ dims: [2, 0, 0, 0], dim_count: 1, typ: TensorType.tt_int32, data: &rb[0], bytes: 8 },
+        in1: TensorView{ dims: [0, 0, 0, 0], dim_count: 0, typ: TensorType.tt_int32, data: &rb[0], bytes: 0 },
+        in2: TensorView{ dims: [0, 0, 0, 0], dim_count: 0, typ: TensorType.tt_int32, data: &rb[0], bytes: 0 },
+        out0: TensorView{ dims: [2, 0, 0, 0], dim_count: 1, typ: TensorType.tt_int32, data: &rb[0], bytes: 8 },
+    };
+    relu_eval(&ctx_r) catch {
+        return 4;
+    };
+    if load_i32_le(&rb[0], 0) != 0 || load_i32_le(&rb[0], 1) != 4 {
+        return 5;
+    }
+
+    var sh_in: [byte: 8] = [];
+    var sh_out: [byte: 8] = [];
+    store_i32_le(&sh_in[0], 0, 7);
+    store_i32_le(&sh_in[0], 1, 8);
+    var ctx_sh: Context = Context{
+        op: BuiltinOperator.reshape,
+        in0: TensorView{ dims: [2, 0, 0, 0], dim_count: 1, typ: TensorType.tt_int32, data: &sh_in[0], bytes: 8 },
+        in1: TensorView{ dims: [0, 0, 0, 0], dim_count: 0, typ: TensorType.tt_int32, data: &sh_in[0], bytes: 0 },
+        in2: TensorView{ dims: [0, 0, 0, 0], dim_count: 0, typ: TensorType.tt_int32, data: &sh_in[0], bytes: 0 },
+        out0: TensorView{ dims: [1, 2, 0, 0], dim_count: 2, typ: TensorType.tt_int32, data: &sh_out[0], bytes: 8 },
+    };
+    reshape_eval(&ctx_sh) catch {
+        return 6;
+    };
+    if load_i32_le(&sh_out[0], 0) != 7 || load_i32_le(&sh_out[0], 1) != 8 {
+        return 7;
+    }
+
+    var pb: [byte: 64] = [];
+    var po: [byte: 16] = [];
+    var yy: i32 = 0;
+    while yy < 4 {
+        var xx: i32 = 0;
+        while xx < 4 {
+            const idx2: usize = (yy as usize) * 4 + (xx as usize);
+            store_i32_le(&pb[0], idx2, yy * 4 + xx + 1);
+            xx = xx + 1;
+        }
+        yy = yy + 1;
+    }
+    var ctx_ap: Context = Context{
+        op: BuiltinOperator.average_pool_2d,
+        in0: TensorView{ dims: [4, 4, 1, 0], dim_count: 3, typ: TensorType.tt_int32, data: &pb[0], bytes: 64 },
+        in1: TensorView{ dims: [0, 0, 0, 0], dim_count: 0, typ: TensorType.tt_int32, data: &pb[0], bytes: 0 },
+        in2: TensorView{ dims: [0, 0, 0, 0], dim_count: 0, typ: TensorType.tt_int32, data: &pb[0], bytes: 0 },
+        out0: TensorView{ dims: [2, 2, 1, 0], dim_count: 3, typ: TensorType.tt_int32, data: &po[0], bytes: 16 },
+    };
+    average_pool2d_eval(&ctx_ap) catch {
+        return 8;
+    };
+    if load_i32_le(&po[0], 0) != 3 {
+        return 9;
+    }
+
+    var mxo: [byte: 16] = [];
+    var ctx_mp: Context = Context{
+        op: BuiltinOperator.max_pool_2d,
+        in0: TensorView{ dims: [4, 4, 1, 0], dim_count: 3, typ: TensorType.tt_int32, data: &pb[0], bytes: 64 },
+        in1: TensorView{ dims: [0, 0, 0, 0], dim_count: 0, typ: TensorType.tt_int32, data: &pb[0], bytes: 0 },
+        in2: TensorView{ dims: [0, 0, 0, 0], dim_count: 0, typ: TensorType.tt_int32, data: &pb[0], bytes: 0 },
+        out0: TensorView{ dims: [2, 2, 1, 0], dim_count: 3, typ: TensorType.tt_int32, data: &mxo[0], bytes: 16 },
+    };
+    max_pool2d_eval(&ctx_mp) catch {
+        return 10;
+    };
+    if load_i32_le(&mxo[0], 0) != 6 {
+        return 11;
+    }
+
+    return 0;
+}

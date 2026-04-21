@@ -1,0 +1,28 @@
+// SIMD：16×i32 / 16×f32 通过 4× uya_simd_sse_*x4（与 4/8 通道同一助手）
+type Vec16i32 = @vector(i32, 16);
+type Vec16f32 = @vector(f32, 16);
+type Mask16 = @mask(16);
+
+export fn main() i32 {
+    const a: Vec16i32 = @vector.splat(1);
+    const b: Vec16i32 = @vector.splat(10);
+    const s: Vec16i32 = a + b;
+    if @vector.all(s == @vector.splat(11)) == false {
+        return 1;
+    }
+    const t: Vec16i32 = -s;
+    if @vector.all(t == @vector.splat(-11)) == false {
+        return 2;
+    }
+    const m: Mask16 = s < @vector.splat(12);
+    if @vector.all(m) == false {
+        return 3;
+    }
+    const u: Vec16f32 = @vector.splat(3.0f32);
+    const v: Vec16f32 = @vector.splat(2.0f32);
+    const w: Vec16f32 = u * v;
+    if @vector.all(w == @vector.splat(6.0f32)) == false {
+        return 4;
+    }
+    return 0;
+}

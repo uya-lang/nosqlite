@@ -1,0 +1,106 @@
+// 测试泛型方法调用语法 obj.method<T>()
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 泛型结构体，带泛型方法
+struct Container<T> {
+    value: T,
+    
+    // 泛型方法：将 T 转换为 U（简化版本）
+    fn as_type<U>(self: &Self) U {
+        return self.value as U;
+    }
+    
+    // 非泛型方法
+    fn get(self: &Self) T {
+        return self.value;
+    }
+    
+    // 另一个泛型方法
+    fn wrap<U>(self: &Self, other: U) Pair<T, U> {
+        return Pair<T, U>{ first: self.value, second: other };
+    }
+}
+
+// 简单的 Pair 结构体
+struct Pair<T, U> {
+    first: T,
+    second: U,
+}
+
+fn test_non_generic_method() !void {
+    const c: Container<i32> = Container<i32>{ value: 42 };
+    const v: i32 = c.get();
+    try assert_eq_i32(v, 42);
+}
+
+fn test_generic_method_as_type() !void {
+    const c: Container<i32> = Container<i32>{ value: 100 };
+    // 显式指定类型参数调用泛型方法
+    const result: i64 = c.as_type<i64>();
+    try expect(result == 100);
+}
+
+fn test_generic_method_wrap() !void {
+    const c: Container<i32> = Container<i32>{ value: 10 };
+    // 泛型方法 wrap<i32, i32>
+    const p: Pair<i32, i32> = c.wrap<i32>(20);
+    try assert_eq_i32(p.first, 10);
+    try assert_eq_i32(p.second, 20);
+}
+
+fn test_comparison_not_affected() !void {
+    // 确保比较运算符不受影响
+    const a: i32 = 10;
+    const b: i32 = 20;
+    
+    // 这些应该是比较运算
+    if a < b {
+        try assert_eq_i32(1, 1);
+    } else {
+        try assert_eq_i32(0, 1);  // 应该不会执行
+    }
+    
+    if a > b {
+        try assert_eq_i32(0, 1);  // 应该不会执行
+    } else {
+        try assert_eq_i32(1, 1);
+    }
+}
+
+fn test_member_compare() !void {
+    // 测试成员访问后的比较运算
+    const c: Container<i32> = Container<i32>{ value: 5 };
+    
+    // c.get() < 10 应该是比较运算
+    const v: i32 = c.get();
+    if v < 10 {
+        try assert_eq_i32(1, 1);
+    } else {
+        try assert_eq_i32(0, 1);
+    }
+    
+    // c.get() > 10 应该是比较运算
+    if v > 10 {
+        try assert_eq_i32(0, 1);
+    } else {
+        try assert_eq_i32(1, 1);
+    }
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Method Call Tests");
+    
+    run_test("non generic method", test_non_generic_method);
+    run_test("generic method as_type", test_generic_method_as_type);
+    run_test("generic method wrap", test_generic_method_wrap);
+    run_test("comparison not affected", test_comparison_not_affected);
+    run_test("member compare", test_member_compare);
+    
+    return test_suite_end();
+}

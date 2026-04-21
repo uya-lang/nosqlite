@@ -1,0 +1,47 @@
+// test_async_frame_pool_full.uya
+// 验证：当 async frame allocator 失败时，@async_fn wrapper 返回 AsyncFramePoolFull 错误
+
+use std.async;
+use std.async_frame;
+use std.mem.allocator.IAllocator;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.testing.assert_true;
+use libc.stdlib;
+
+struct FailingAlloc : IAllocator {
+    fn alloc(self: &Self, size: usize) !&byte {
+        return error.AllocOutOfMemory;
+    }
+    fn dealloc(self: &Self, ptr: &byte) void {}
+    fn realloc(self: &Self, ptr: &byte, new_size: usize) !&byte {
+        return error.AllocOutOfMemory;
+    }
+}
+
+@async_fn
+fn tiny_async() !Future<i32> {
+    return 1;
+}
+
+fn test_pool_full_returns_error() !void {
+    var failing: FailingAlloc = FailingAlloc{};
+    set_async_frame_allocator(&failing as &IAllocator);
+    const r: !Future<i32> = tiny_async();
+    var got_pool_full: bool = false;
+    const f: Future<i32> = r catch |err| {
+        if @error_id(err) != @error_id(error.AsyncFramePoolFull) {
+            abort();
+        }
+        return;
+    };
+    _ = f;
+    try assert_true(false);
+}
+
+export fn main() i32 {
+    test_suite_begin("Async Frame Pool Full Tests");
+    run_test("pool full returns error", test_pool_full_returns_error);
+    return test_suite_end();
+}

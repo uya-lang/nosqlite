@@ -1,0 +1,360 @@
+// 启用 pm.base 时：SYS_PRINT 走 MMU；SYS_ALLOC 走页池 + 页表
+
+use kernel.dispatch;
+use kernel.mem;
+use kernel.paging;
+use kernel.scheduler;
+use kernel.syscall;
+use std.testing.assert_eq_i32;
+
+fn guest_read_u8(ctx: &KernelHostCtx, vaddr: u32) !byte {
+    const ptr: &byte = try mmu_translate_ptr(&ctx.pts[0], &ctx.pm, vaddr, 1u32, ACCESS_R);
+    return ptr[0];
+}
+
+fn guest_read_u32_le(ctx: &KernelHostCtx, vaddr: u32) !u32 {
+    const b0: u32 = (try guest_read_u8(ctx, vaddr)) as u32;
+    const b1: u32 = (try guest_read_u8(ctx, vaddr + 1u32)) as u32;
+    const b2: u32 = (try guest_read_u8(ctx, vaddr + 2u32)) as u32;
+    const b3: u32 = (try guest_read_u8(ctx, vaddr + 3u32)) as u32;
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+}
+
+fn guest_write_u8(ctx: &KernelHostCtx, vaddr: u32, value: byte) !void {
+    const ptr: &byte = try mmu_translate_ptr(&ctx.pts[0], &ctx.pm, vaddr, 1u32, ACCESS_W);
+    ptr[0] = value;
+}
+
+fn guest_write_u32_le(ctx: &KernelHostCtx, vaddr: u32, value: u32) !void {
+    try guest_write_u8(ctx, vaddr, (value & 255u32) as byte);
+    try guest_write_u8(ctx, vaddr + 1u32, ((value >> 8) & 255u32) as byte);
+    try guest_write_u8(ctx, vaddr + 2u32, ((value >> 16) & 255u32) as byte);
+    try guest_write_u8(ctx, vaddr + 3u32, ((value >> 24) & 255u32) as byte);
+}
+
+fn guest_read_cstring_len(ctx: &KernelHostCtx, vaddr: u32, max_len: u32) !u32 {
+    var i: u32 = 0;
+    while i < max_len {
+        const b: byte = try guest_read_u8(ctx, vaddr + i);
+        if b == 0 as byte {
+            return i;
+        }
+        i = i + 1u32;
+    }
+    return max_len;
+}
+
+test "host_print_mmu_mapped_returns_len" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+
+    var backing: [byte: 65536] = [];
+    backing[0] = 65;
+    backing[1] = 66;
+    backing[2] = 67;
+    backing[3] = 0;
+
+    var ctx: KernelHostCtx = KernelHostCtx{
+        sch: &sch,
+        pts: [],
+        pm: PhysMem{ base: &backing[0], size: 65536 },
+        pool: PagePool{ used: [], count: 0, used_count: 0 },
+        alloc_pages: [],
+        heap_base_vpn: [],
+        heap_next_vpn: [],
+        stack_base_vpn: [],
+        stack_page_count: [],
+        io_allowed_devices: [],
+        io_allowed_ops: [],
+        io_available_devices: 0,
+    };
+    kernel_host_ctx_init(&ctx);
+
+    try pt_map(&ctx.pts[0], 0, 0, PTE_R | PTE_U);
+
+    const n: u32 = try syscall_dispatch(&ctx, 0, SYS_PRINT, 0, 4);
+    try assert_eq_i32(n as i32, 4);
+
+    var has_a: i32 = 0;
+    if (ctx.pts[0].entries[0] & PTE_A) != 0 {
+        has_a = 1;
+    }
+    try assert_eq_i32(has_a, 1);
+}
+
+test "guest_string_scan_crosses_pages_through_mmu" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+
+    var backing: [byte: 131072] = [];
+    var ctx: KernelHostCtx = KernelHostCtx{
+        sch: &sch,
+        pts: [],
+        pm: PhysMem{ base: &backing[0], size: 131072 },
+        pool: PagePool{ used: [], count: 0, used_count: 0 },
+        alloc_pages: [],
+        heap_base_vpn: [],
+        heap_next_vpn: [],
+        stack_base_vpn: [],
+        stack_page_count: [],
+        io_allowed_devices: [],
+        io_allowed_ops: [],
+        io_available_devices: 0,
+    };
+    kernel_host_ctx_init(&ctx);
+
+    try pt_map(&ctx.pts[0], 0, 0, PTE_R | PTE_U);
+    try pt_map(&ctx.pts[0], 1, 1, PTE_R | PTE_U);
+
+    backing[65534] = 104;
+    backing[65535] = 101;
+    backing[65536] = 108;
+    backing[65537] = 108;
+    backing[65538] = 111;
+    backing[65539] = 0;
+
+    const n: u32 = try guest_read_cstring_len(&ctx, 65534, 16u32);
+    try assert_eq_i32(n as i32, 5);
+
+    var has_a0: i32 = 0;
+    var has_a1: i32 = 0;
+    if (ctx.pts[0].entries[0] & PTE_A) != 0 {
+        has_a0 = 1;
+    }
+    if (ctx.pts[0].entries[1] & PTE_A) != 0 {
+        has_a1 = 1;
+    }
+    try assert_eq_i32(has_a0, 1);
+    try assert_eq_i32(has_a1, 1);
+}
+
+test "guest_struct_field_read_write_sets_access_bits" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+
+    var backing: [byte: 65536] = [];
+    var ctx: KernelHostCtx = KernelHostCtx{
+        sch: &sch,
+        pts: [],
+        pm: PhysMem{ base: &backing[0], size: 65536 },
+        pool: PagePool{ used: [], count: 0, used_count: 0 },
+        alloc_pages: [],
+        heap_base_vpn: [],
+        heap_next_vpn: [],
+        stack_base_vpn: [],
+        stack_page_count: [],
+        io_allowed_devices: [],
+        io_allowed_ops: [],
+        io_available_devices: 0,
+    };
+    kernel_host_ctx_init(&ctx);
+
+    try pt_map(&ctx.pts[0], 0, 0, PTE_R | PTE_W | PTE_U);
+
+    try guest_write_u32_le(&ctx, 0, 287454020u32);
+    try guest_write_u32_le(&ctx, 4, 1432778632u32);
+
+    const f0: u32 = try guest_read_u32_le(&ctx, 0);
+    const f1: u32 = try guest_read_u32_le(&ctx, 4);
+    try assert_eq_i32(f0 as i32, 287454020);
+    try assert_eq_i32(f1 as i32, 1432778632);
+
+    var has_a: i32 = 0;
+    var has_d: i32 = 0;
+    if (ctx.pts[0].entries[0] & PTE_A) != 0 {
+        has_a = 1;
+    }
+    if (ctx.pts[0].entries[0] & PTE_D) != 0 {
+        has_d = 1;
+    }
+    try assert_eq_i32(has_a, 1);
+    try assert_eq_i32(has_d, 1);
+}
+
+test "guest_pointer_chain_reads_translate_each_hop" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+
+    var backing: [byte: 131072] = [];
+    var ctx: KernelHostCtx = KernelHostCtx{
+        sch: &sch,
+        pts: [],
+        pm: PhysMem{ base: &backing[0], size: 131072 },
+        pool: PagePool{ used: [], count: 0, used_count: 0 },
+        alloc_pages: [],
+        heap_base_vpn: [],
+        heap_next_vpn: [],
+        stack_base_vpn: [],
+        stack_page_count: [],
+        io_allowed_devices: [],
+        io_allowed_ops: [],
+        io_available_devices: 0,
+    };
+    kernel_host_ctx_init(&ctx);
+
+    try pt_map(&ctx.pts[0], 0, 0, PTE_R | PTE_U);
+    try pt_map(&ctx.pts[0], 1, 1, PTE_R | PTE_U);
+
+    backing[0] = 0;
+    backing[1] = 0;
+    backing[2] = 1;
+    backing[3] = 0;
+    backing[65536] = 239;
+    backing[65537] = 190;
+    backing[65538] = 173;
+    backing[65539] = 222;
+
+    const ptr_vaddr: u32 = try guest_read_u32_le(&ctx, 0);
+    const value: u32 = try guest_read_u32_le(&ctx, ptr_vaddr);
+    try assert_eq_i32(ptr_vaddr as i32, 65536);
+    try assert_eq_i32(value as i32, 3735928559);
+
+    var has_a0: i32 = 0;
+    var has_a1: i32 = 0;
+    if (ctx.pts[0].entries[0] & PTE_A) != 0 {
+        has_a0 = 1;
+    }
+    if (ctx.pts[0].entries[1] & PTE_A) != 0 {
+        has_a1 = 1;
+    }
+    try assert_eq_i32(has_a0, 1);
+    try assert_eq_i32(has_a1, 1);
+}
+
+test "host_print_unmapped_page_fault" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+
+    var backing: [byte: 65536] = [];
+    var ctx: KernelHostCtx = KernelHostCtx{
+        sch: &sch,
+        pts: [],
+        pm: PhysMem{ base: &backing[0], size: 65536 },
+        pool: PagePool{ used: [], count: 0, used_count: 0 },
+        alloc_pages: [],
+        heap_base_vpn: [],
+        heap_next_vpn: [],
+        stack_base_vpn: [],
+        stack_page_count: [],
+        io_allowed_devices: [],
+        io_allowed_ops: [],
+        io_available_devices: 0,
+    };
+    kernel_host_ctx_init(&ctx);
+
+    var fault: i32 = 0;
+    _ = syscall_dispatch(&ctx, 0, SYS_PRINT, 0, 1) catch |err| {
+        fault = 1;
+        0u32;
+    };
+    try assert_eq_i32(fault, 1);
+}
+
+test "host_alloc_maps_first_page" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+
+    var backing: [byte: 524288] = [];
+    var ctx: KernelHostCtx = KernelHostCtx{
+        sch: &sch,
+        pts: [],
+        pm: PhysMem{ base: &backing[0], size: 524288 },
+        pool: PagePool{ used: [], count: 0, used_count: 0 },
+        alloc_pages: [],
+        heap_base_vpn: [],
+        heap_next_vpn: [],
+        stack_base_vpn: [],
+        stack_page_count: [],
+        io_allowed_devices: [],
+        io_allowed_ops: [],
+        io_available_devices: 0,
+    };
+    kernel_host_ctx_init(&ctx);
+
+    const va: u32 = try syscall_dispatch(&ctx, 0, SYS_ALLOC, 4096, 0);
+    try assert_eq_i32(va as i32, 0);
+
+    const ptr: &byte = try mmu_translate_ptr(&ctx.pts[0], &ctx.pm, 0, 4, ACCESS_W);
+    ptr[0] = 7;
+    try assert_eq_i32(backing[0] as i32, 7);
+
+    var has_a: i32 = 0;
+    var has_d: i32 = 0;
+    if (ctx.pts[0].entries[0] & PTE_A) != 0 {
+        has_a = 1;
+    }
+    if (ctx.pts[0].entries[0] & PTE_D) != 0 {
+        has_d = 1;
+    }
+    try assert_eq_i32(has_a, 1);
+    try assert_eq_i32(has_d, 1);
+}
+
+test "host_alloc_quota_third_fails" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+
+    var backing: [byte: 524288] = [];
+    var ctx: KernelHostCtx = KernelHostCtx{
+        sch: &sch,
+        pts: [],
+        pm: PhysMem{ base: &backing[0], size: 524288 },
+        pool: PagePool{ used: [], count: 0, used_count: 0 },
+        alloc_pages: [],
+        heap_base_vpn: [],
+        heap_next_vpn: [],
+        stack_base_vpn: [],
+        stack_page_count: [],
+        io_allowed_devices: [],
+        io_allowed_ops: [],
+        io_available_devices: 0,
+    };
+    kernel_host_ctx_init(&ctx);
+
+    _ = try syscall_dispatch(&ctx, 0, SYS_ALLOC, 1, 0);
+    _ = try syscall_dispatch(&ctx, 0, SYS_ALLOC, 1, 0);
+
+    var q: i32 = 0;
+    _ = syscall_dispatch(&ctx, 0, SYS_ALLOC, 1, 0) catch |err| {
+        q = 1;
+        0u32;
+    };
+    try assert_eq_i32(q, 1);
+}
+
+test "host_alloc_size_over_one_page" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+
+    var backing: [byte: 524288] = [];
+    var ctx: KernelHostCtx = KernelHostCtx{
+        sch: &sch,
+        pts: [],
+        pm: PhysMem{ base: &backing[0], size: 524288 },
+        pool: PagePool{ used: [], count: 0, used_count: 0 },
+        alloc_pages: [],
+        heap_base_vpn: [],
+        heap_next_vpn: [],
+        stack_base_vpn: [],
+        stack_page_count: [],
+        io_allowed_devices: [],
+        io_allowed_ops: [],
+        io_available_devices: 0,
+    };
+    kernel_host_ctx_init(&ctx);
+
+    var big: i32 = 0;
+    _ = syscall_dispatch(&ctx, 0, SYS_ALLOC, 65537, 0) catch |err| {
+        big = 1;
+        0u32;
+    };
+    try assert_eq_i32(big, 1);
+}
+
+test "paging_pt_find_free_skips_valid" {
+    var pt: PageTable = PageTable{ entries: [] };
+    pt_init(&pt);
+    try pt_map(&pt, 0, 0, PTE_R | PTE_U);
+    const v: u32 = try pt_find_free_vpn(&pt);
+    try assert_eq_i32(v as i32, 1);
+}

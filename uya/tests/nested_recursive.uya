@@ -1,0 +1,59 @@
+// 嵌套递归调用测试
+use std.runtime.entry;
+// 测试递归函数与其他函数的嵌套调用
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+fn multiply(a: i32, b: i32) i32 {
+    return a * b;
+}
+
+fn factorial(n: i32) i32 {
+    if n <= 1 {
+        return 1;
+    } else {
+        return multiply(n, factorial(n - 1));
+    }
+}
+
+fn sum_recursive(n: i32) i32 {
+    if n <= 0 {
+        return 0;
+    } else {
+        return add(n, sum_recursive(n - 1));
+    }
+}
+
+fn test_factorial() !void {
+    try assert_eq_i32(factorial(5), 120);
+}
+
+fn test_sum_recursive() !void {
+    try assert_eq_i32(sum_recursive(10), 55);
+}
+
+fn test_recursive_combined() !void {
+    const result: i32 = add(factorial(3), sum_recursive(4));
+    try assert_eq_i32(result, 16);
+}
+
+fn test_recursive_as_param() !void {
+    const result: i32 = multiply(factorial(2), sum_recursive(3));
+    try assert_eq_i32(result, 12);
+}
+
+export fn main() i32 {
+    test_suite_begin("Nested Recursive Tests");
+    run_test("factorial", test_factorial);
+    run_test("sum recursive", test_sum_recursive);
+    run_test("recursive combined", test_recursive_combined);
+    run_test("recursive as param", test_recursive_as_param);
+    return test_suite_end();
+}

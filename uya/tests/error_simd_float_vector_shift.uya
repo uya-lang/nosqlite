@@ -1,0 +1,9 @@
+// 向量位移仅支持整数元素类型
+type Vec4f32 = @vector(f32, 4);
+
+export fn main() i32 {
+    const a: Vec4f32 = @vector.splat(1.0f32);
+    const b: Vec4f32 = @vector.splat(2.0f32);
+    const c: Vec4f32 = a << b;
+    return 0;
+}

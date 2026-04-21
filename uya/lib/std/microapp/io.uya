@@ -1,0 +1,11 @@
+// std.microapp.io - portable microapp IO surface
+// 模块路径：use std.microapp.io
+
+use std.microapp.abi.MICROAPP_SYS_PRINT;
+
+export fn write_stdout_bytes(buf: &const byte, n: usize) !usize {
+    const raw: !i64 = @syscall(MICROAPP_SYS_PRINT, buf as i64, n as i64);
+    const bytes_written: i64 = try raw;
+    const out_tmp: !usize = bytes_written as! usize;
+    return out_tmp.value;
+}

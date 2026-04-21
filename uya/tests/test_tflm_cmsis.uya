@@ -1,0 +1,45 @@
+// TFLM 阶段 2+3：CMSIS-NN FFI（backend.uya 纯 Uya 实现；arm.uya 为 ARM CMSIS-NN 文档占位）
+use std.runtime.entry;
+use tflm.backend;
+
+export fn main() i32 {
+    var im: [byte: 4] = [];
+    var wt: [byte: 4] = [];
+    var bias: [byte: 2] = [];
+    var out: [byte: 2] = [];
+    var sa: [byte: 16] = [];
+    var sb: [byte: 16] = [];
+    im[0] = (2 as byte);
+    im[1] = (3 as byte);
+    wt[0] = (1 as byte);
+    wt[1] = (1 as byte);
+    bias[0] = (0 as byte);
+    tflm_arm_conv_hwc_q7_basic(
+        &im[0],
+        2 as usize,
+        1,
+        2,
+        &wt[0],
+        2 as usize,
+        1,
+        1,
+        0,
+        1,
+        &bias[0],
+        1 as usize,
+        0,
+        0,
+        &out[0],
+        1 as usize,
+        &sa[0],
+        16 as usize,
+        &sb[0],
+        16 as usize,
+    ) catch {
+        return 1;
+    };
+    if out[0] != (5 as byte) {
+        return 2;
+    }
+    return 0;
+}

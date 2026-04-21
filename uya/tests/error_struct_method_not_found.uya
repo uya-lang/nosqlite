@@ -1,0 +1,17 @@
+// 预期编译失败：结构体上不存在该方法
+struct Point {
+  x: i32,
+  y: i32
+}
+
+Point {
+  fn distance(self: &Self) i32 {
+    return self.x + self.y;
+  }
+}
+
+fn main() i32 {
+  const p: Point = Point{ x: 1, y: 2 };
+  const n: i32 = p.nonexistent();
+  return n;
+}

@@ -1,0 +1,35 @@
+// 非法 Flow：尾随垃圾、空 key 等应返回解析 error（catch 后 return 0 表示通过）
+use std.runtime.entry;
+use std.yaml.parser.parse;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.mem.arena.arena_reset;
+
+fn expect_parse_fail(a: &Arena, ptr: &byte, len: usize) bool {
+    _ = parse(a, ptr, len) catch {
+        return true;
+    };
+    return false;
+}
+
+export fn main() i32 {
+    var arena_buf: [byte: 4096] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 4096);
+
+    var buf: [byte: 16] = [];
+
+    buf[0] = 123;
+    buf[1] = 125;
+    buf[2] = 120;
+    if !expect_parse_fail(&a, &buf[0], 3) { return 1; }
+
+    arena_reset(&a);
+    buf[0] = 123;
+    buf[1] = 58;
+    buf[2] = 49;
+    buf[3] = 125;
+    if !expect_parse_fail(&a, &buf[0], 4) { return 2; }
+
+    return 0;
+}

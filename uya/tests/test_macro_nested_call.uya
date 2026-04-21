@@ -1,0 +1,72 @@
+// 测试宏嵌套调用
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+// 宏生成调用普通函数的代码
+mc call_function(val: expr) expr {
+    add_numbers(${val}, 10);
+}
+
+fn add_numbers(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+// 基础宏
+mc base_value() expr {
+    42;
+}
+
+// 宏调用另一个宏
+mc wrapper_macro() expr {
+    base_value();
+}
+
+// 带参数的宏调用带参数的宏
+mc inner_add(a: expr, b: expr) expr {
+    ${a} + ${b};
+}
+
+mc outer_calc(x: expr) expr {
+    inner_add(${x}, 10);
+}
+
+// 多层宏调用
+mc level1() expr {
+    100;
+}
+
+mc level2() expr {
+    level1() + 50;
+}
+
+mc level3() expr {
+    level2() * 2;
+}
+
+// 宏调用宏和函数的组合
+mc complex_macro(val: expr) expr {
+    add_numbers(inner_add(${val}, 5), 20);
+}
+
+test "test_macro_call_function" {
+    try assert_eq_i32(call_function(32), 42);
+}
+
+test "test_macro_base_value" {
+    try assert_eq_i32(base_value(), 42);
+    try assert_eq_i32(wrapper_macro(), 42);
+}
+
+test "test_macro_nested" {
+    try assert_eq_i32(outer_calc(32), 42);
+}
+
+test "test_multi_level_macro" {
+    try assert_eq_i32(level3(), 300);  // (100 + 50) * 2
+}
+
+test "test_complex_macro" {
+    try assert_eq_i32(complex_macro(10), 35);  // add_numbers(15, 20)
+}

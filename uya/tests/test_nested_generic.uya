@@ -1,0 +1,38 @@
+// 测试嵌套泛型
+use std.runtime.entry;
+// 已知问题：>> 被解析为右移运算符
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Box<T> {
+    value: T,
+}
+
+struct Pair<A, B> {
+    first: A,
+    second: B,
+}
+
+fn test_simple_generic() !void {
+    const b1: Box<i32> = Box<i32>{ value: 42 };
+    try assert_eq_i32(b1.value, 42);
+}
+
+fn test_nested_generic() !void {
+    const b2: Box<Pair<i32, i32>> = Box<Pair<i32, i32>>{ 
+        value: Pair<i32, i32>{ first: 10, second: 20 } 
+    };
+    try assert_eq_i32(b2.value.first, 10);
+    try assert_eq_i32(b2.value.second, 20);
+}
+
+export fn main() i32 {
+    test_suite_begin("Nested Generic Tests");
+    run_test("simple generic", test_simple_generic);
+    run_test("nested generic", test_nested_generic);
+    return test_suite_end();
+}

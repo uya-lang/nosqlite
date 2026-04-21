@@ -1,0 +1,8 @@
+// circular_b/module_b.uya - 循环依赖测试：模块 B 依赖模块 A（形成循环）
+
+use circular_a.func_a;
+
+export fn helper_b() i32 {
+    return func_a() + 1;
+}
+

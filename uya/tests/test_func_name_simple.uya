@@ -1,0 +1,18 @@
+// 简单测试 @func_name
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_func_name() !void {
+    const func: *byte = @func_name;
+    try expect(func != null);
+}
+
+export fn main() i32 {
+    test_suite_begin("Func Name Simple Tests");
+    run_test("func name", test_func_name);
+    return test_suite_end();
+}

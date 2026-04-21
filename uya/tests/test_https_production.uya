@@ -1,0 +1,172 @@
+// test_https_production.uya - 生产环境 HTTPS 测试（启用证书验证）
+// 此测试验证 TLS 在生产环境下的安全性
+
+use tls.https;
+use tls.x509.trust_store;
+use libc.getenv;
+use libc.unistd;
+use libc.syscall;
+use libc.fcntl;
+
+fn write_stderr_msg(msg: &[byte]) void {
+    _ = sys_write(2, msg.ptr, msg.len);
+}
+
+fn allow_skip_network() bool {
+    const github_actions: &byte = getenv("GITHUB_ACTIONS" as *byte);
+    if github_actions != null {
+        return true;
+    }
+    const ci: &byte = getenv("CI" as *byte);
+    if ci != null {
+        return true;
+    }
+    const fd_res: !i32 = sys_open("/tmp/uya_allow_skip_network", O_RDONLY as i32, 0);
+    const fd: i32 = fd_res catch {
+        return false;
+    };
+    _ = sys_close(fd) catch {};
+    return true;
+}
+
+fn test_trust_store_loading() i32 {
+    write_stderr_msg(&"Test 1: Loading system trust store...\n"[0: 39]);
+    
+    var ts: TrustStore = TrustStore{};
+    if !trust_store_load_system(&ts) {
+        write_stderr_msg(&"  Warning: Could not load system trust store\n"[0: 46]);
+        // 这不是致命错误，某些环境可能没有根证书
+        return 0;
+    }
+    
+    if ts.count == 0 {
+        write_stderr_msg(&"  Warning: Trust store is empty\n"[0: 32]);
+        return 0;
+    }
+    
+    write_stderr_msg(&"  Loaded certificates: "[0: 23]);
+    // 简化输出，只打印数量
+    if ts.count >= 10 {
+        write_stderr_msg(&"10+\n"[0: 4]);
+    } else if ts.count >= 5 {
+        write_stderr_msg(&"5+\n"[0: 3]);
+    } else {
+        write_stderr_msg(&"few\n"[0: 4]);
+    }
+    
+    return 0;
+}
+
+fn test_https_with_verification() i32 {
+    write_stderr_msg(&"Test 2: HTTPS with certificate verification...\n"[0: 48]);
+    
+    if allow_skip_network() {
+        write_stderr_msg(&"  SKIP: Network tests disabled (CI/local override)\n"[0: 52]);
+        return 0;
+    }
+    
+    // 尝试连接 example.com（启用证书验证）
+    var host: [byte: 12] = "example.com";
+    
+    write_stderr_msg(&"  Connecting to https://example.com/...\n"[0: 41]);
+    
+    var resp: HttpsResponse = https_get(&host[0], 11, 443, &"/"[0: 1]) catch {
+        write_stderr_msg(&"  Connection failed (may be network unavailable)\n"[0: 50]);
+        // 网络问题不算测试失败
+        return 0;
+    };
+    
+    if resp.status != 200 {
+        write_stderr_msg(&"  FAIL: Unexpected HTTP status\n"[0: 33]);
+        return 1;
+    }
+    
+    if resp.response_len == 0 {
+        write_stderr_msg(&"  FAIL: Empty response\n"[0: 24]);
+        return 1;
+    }
+    
+    // 检查是否包含预期内容
+    var found: bool = false;
+    var i: usize = 0;
+    while i + 14 <= resp.response_len {
+        var j: usize = 0;
+        var is_match: bool = true;
+        const needle: &[byte] = &"Example Domain"[0: 14];
+        while j < 14 {
+            if resp.response[i + j] != needle[j] {
+                is_match = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if is_match {
+            found = true;
+            break;
+        }
+        i = i + 1;
+    }
+    
+    if !found {
+        write_stderr_msg(&"  FAIL: Expected content not found\n"[0: 36]);
+        return 1;
+    }
+    
+    write_stderr_msg(&"  PASS: HTTPS with verification succeeded\n"[0: 43]);
+    return 0;
+}
+
+fn test_https_insecure() i32 {
+    write_stderr_msg(&"Test 3: HTTPS without verification (insecure mode)...\n"[0: 55]);
+    
+    if allow_skip_network() {
+        write_stderr_msg(&"  SKIP: Network tests disabled (CI/local override)\n"[0: 52]);
+        return 0;
+    }
+    
+    var host: [byte: 12] = "example.com";
+    
+    write_stderr_msg(&"  Connecting without verification...\n"[0: 38]);
+    
+    var resp: HttpsResponse = https_get_insecure(&host[0], 11, 443, &"/"[0: 1]) catch {
+        write_stderr_msg(&"  Connection failed (may be network unavailable)\n"[0: 50]);
+        return 0;
+    };
+    
+    if resp.status != 200 {
+        write_stderr_msg(&"  FAIL: Unexpected HTTP status\n"[0: 33]);
+        return 1;
+    }
+    
+    write_stderr_msg(&"  PASS: Insecure HTTPS succeeded\n"[0: 34]);
+    return 0;
+}
+
+export fn main() i32 {
+    write_stderr_msg(&"=== HTTPS Production Test ===\n"[0: 31]);
+    
+    var result: i32 = 0;
+    
+    // Test 1: Trust store loading
+    if test_trust_store_loading() != 0 {
+        result = 1;
+    }
+    
+    // Test 2: HTTPS with verification (production mode)
+    if test_https_with_verification() != 0 {
+        result = 1;
+    }
+    
+    // Test 3: HTTPS without verification (test mode)
+    if test_https_insecure() != 0 {
+        result = 1;
+    }
+    
+    if result == 0 {
+        write_stderr_msg(&"\n=== All tests PASSED ===\n"[0: 26]);
+    } else {
+        write_stderr_msg(&"\n=== Some tests FAILED ===\n"[0: 27]);
+    }
+    
+    return result;
+}

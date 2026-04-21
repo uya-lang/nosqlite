@@ -1,0 +1,10 @@
+// error_use_module_invalid_call.uya - 测试通过 use 导入不存在的函数（预期编译失败）
+// 验证编译器正确报告模块中不存在函数的错误
+
+use mem.non_existent_func;
+
+export fn main() i32 {
+    // 错误：mem 模块中不存在 non_existent_func 函数
+    const result: i32 = non_existent_func(1, 2);
+    return result;
+}

@@ -1,0 +1,37 @@
+type Vec4i32 = @vector(i32, 4);
+type Mask4 = @mask(4);
+
+struct Holder {
+    v: Vec4i32,
+    m: Mask4,
+}
+
+fn passthrough_vec(v: Vec4i32) Vec4i32 {
+    return v;
+}
+
+fn passthrough_mask(m: Mask4) Mask4 {
+    return m;
+}
+
+fn passthrough_holder(h: Holder) Holder {
+    return h;
+}
+
+export fn main() i32 {
+    const vec_size: i32 = @size_of(Vec4i32);
+    const mask_size: i32 = @size_of(Mask4);
+    const holder_size: i32 = @size_of(Holder);
+
+    if vec_size <= 0 {
+        return 1;
+    }
+    if mask_size <= 0 {
+        return 2;
+    }
+    if holder_size <= 0 {
+        return 3;
+    }
+
+    return 0;
+}

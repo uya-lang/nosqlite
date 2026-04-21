@@ -1,0 +1,103 @@
+use std.testing.assert_eq_i32;
+use std.testing.run_test;
+
+const EMBED_BYTES: &[const byte] = @embed("fixtures/embed/basic.bin");
+const EMBED_DIR_ITEMS: &[const EmbedDirEntry] = @embed_dir("fixtures/embed/assets");
+const GLOBAL_EMBED_COPY: &[const byte] = @embed("fixtures/embed/basic.bin");
+const GLOBAL_EMBED_DIR_COPY: &[const EmbedDirEntry] = @embed_dir("fixtures/embed/assets");
+
+fn assert_slice_eq_text(actual: &[const byte], expected: &[const byte]) !void {
+    try assert_eq_i32(@len(actual), @len(expected));
+    var i: i32 = 0;
+    while i < @len(actual) {
+        try assert_eq_i32(actual.ptr[i] as i32, expected.ptr[i] as i32);
+        i = i + 1;
+    }
+}
+
+fn test_embed_file_bytes() !void {
+    try assert_eq_i32(@len(EMBED_BYTES), 4);
+    try assert_eq_i32(@len(@embed("fixtures/embed/basic.bin")), 4);
+    try assert_eq_i32(EMBED_BYTES.ptr[0] as i32, 0);
+    try assert_eq_i32(EMBED_BYTES.ptr[1] as i32, 127);
+    try assert_eq_i32(EMBED_BYTES.ptr[2] as i32, 128);
+    try assert_eq_i32(EMBED_BYTES.ptr[3] as i32, 255);
+
+    const local_bytes: &[const byte] = @embed("fixtures/embed/basic.bin");
+    try assert_eq_i32(@len(local_bytes), 4);
+    try assert_eq_i32(local_bytes.ptr[0] as i32, 0);
+}
+
+fn test_embed_dir_entries() !void {
+    try assert_eq_i32(@len(EMBED_DIR_ITEMS), 3);
+    try assert_eq_i32(@len(@embed_dir("fixtures/embed/assets")), 3);
+
+    try assert_slice_eq_text(EMBED_DIR_ITEMS.ptr[0].path, "a.txt");
+    try assert_eq_i32(@len(EMBED_DIR_ITEMS.ptr[0].data), 1);
+    try assert_eq_i32(EMBED_DIR_ITEMS.ptr[0].data.ptr[0] as i32, 'A' as i32);
+
+    try assert_slice_eq_text(EMBED_DIR_ITEMS.ptr[1].path, "dir/b.bin");
+    try assert_eq_i32(@len(EMBED_DIR_ITEMS.ptr[1].data), 2);
+    try assert_eq_i32(EMBED_DIR_ITEMS.ptr[1].data.ptr[0] as i32, 0);
+    try assert_eq_i32(EMBED_DIR_ITEMS.ptr[1].data.ptr[1] as i32, 66);
+
+    try assert_slice_eq_text(EMBED_DIR_ITEMS.ptr[2].path, "empty.bin");
+    try assert_eq_i32(@len(EMBED_DIR_ITEMS.ptr[2].data), 0);
+
+    const local_items: &[const EmbedDirEntry] = @embed_dir("fixtures/embed/assets");
+    try assert_eq_i32(@len(local_items), 3);
+    try assert_slice_eq_text(local_items.ptr[0].path, "a.txt");
+}
+
+fn take_embed_bytes(data: &[const byte]) !void {
+    try assert_eq_i32(@len(data), 4);
+    try assert_eq_i32(data.ptr[3] as i32, 255);
+}
+
+fn return_embed_bytes() &[const byte] {
+    return @embed("fixtures/embed/basic.bin");
+}
+
+fn take_embed_dir(items: &[const EmbedDirEntry]) !void {
+    try assert_eq_i32(@len(items), 3);
+    try assert_slice_eq_text(items.ptr[1].path, "dir/b.bin");
+}
+
+fn return_embed_dir() &[const EmbedDirEntry] {
+    return @embed_dir("fixtures/embed/assets");
+}
+
+fn test_embed_param_and_return() !void {
+    try take_embed_bytes(@embed("fixtures/embed/basic.bin"));
+    const returned_bytes: &[const byte] = return_embed_bytes();
+    try assert_eq_i32(@len(returned_bytes), 4);
+    try assert_eq_i32(returned_bytes.ptr[1] as i32, 127);
+
+    try take_embed_dir(@embed_dir("fixtures/embed/assets"));
+    const returned_items: &[const EmbedDirEntry] = return_embed_dir();
+    try assert_eq_i32(@len(returned_items), 3);
+    try assert_slice_eq_text(returned_items.ptr[2].path, "empty.bin");
+}
+
+fn test_embed_global_init() !void {
+    try assert_eq_i32(@len(GLOBAL_EMBED_COPY), 4);
+    try assert_eq_i32(GLOBAL_EMBED_COPY.ptr[2] as i32, 128);
+    try assert_eq_i32(@len(GLOBAL_EMBED_DIR_COPY), 3);
+    try assert_slice_eq_text(GLOBAL_EMBED_DIR_COPY.ptr[0].path, "a.txt");
+}
+
+test "embed_file_bytes" {
+    run_test("embed_file_bytes", test_embed_file_bytes);
+}
+
+test "embed_dir_entries" {
+    run_test("embed_dir_entries", test_embed_dir_entries);
+}
+
+test "embed_param_and_return" {
+    run_test("embed_param_and_return", test_embed_param_and_return);
+}
+
+test "embed_global_init" {
+    run_test("embed_global_init", test_embed_global_init);
+}

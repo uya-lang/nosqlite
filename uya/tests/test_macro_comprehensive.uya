@@ -1,0 +1,214 @@
+// 测试宏：综合测试用例
+use std.runtime.entry;
+// 覆盖多个宏定义、不同类型返回值、各种使用场景
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// ========== 数学常量宏 ==========
+mc PI_INT() expr {
+    @mc_code(@mc_ast(3));
+}
+
+mc E_INT() expr {
+    @mc_code(@mc_ast(2));
+}
+
+mc GOLDEN_RATIO() expr {
+    @mc_code(@mc_ast(1));
+}
+
+// ========== 配置常量宏 ==========
+mc MAX_BUFFER_SIZE() expr {
+    @mc_code(@mc_ast(1024));
+}
+
+mc MIN_BUFFER_SIZE() expr {
+    @mc_code(@mc_ast(64));
+}
+
+mc DEFAULT_TIMEOUT() expr {
+    @mc_code(@mc_ast(5000));
+}
+
+// ========== 位操作常量宏 ==========
+mc FLAG_READ() expr {
+    @mc_code(@mc_ast(1));
+}
+
+mc FLAG_WRITE() expr {
+    @mc_code(@mc_ast(2));
+}
+
+mc FLAG_EXECUTE() expr {
+    @mc_code(@mc_ast(4));
+}
+
+mc FLAG_ALL() expr {
+    @mc_code(@mc_ast(7));
+}
+
+// ========== 状态码宏 ==========
+mc STATUS_OK() expr {
+    @mc_code(@mc_ast(0));
+}
+
+mc STATUS_ERR() expr {
+    @mc_code(@mc_ast(-1));
+}
+
+mc STATUS_PENDING() expr {
+    @mc_code(@mc_ast(1));
+}
+
+// ========== 布尔常量宏 ==========
+mc FEATURE_ENABLED() expr {
+    @mc_code(@mc_ast(true));
+}
+
+mc DEBUG_MODE() expr {
+    @mc_code(@mc_ast(false));
+}
+
+fn test_math_constants() !void {
+    const pi: i32 = PI_INT();
+    const e: i32 = E_INT();
+    const golden: i32 = GOLDEN_RATIO();
+    
+    try assert_eq_i32(pi, 3);
+    try assert_eq_i32(e, 2);
+    try assert_eq_i32(golden, 1);
+    
+    // 测试组合使用
+    const sum: i32 = pi + e + golden;
+    try assert_eq_i32(sum, 6);
+}
+
+fn test_config_constants() !void {
+    const max_size: i32 = MAX_BUFFER_SIZE();
+    const min_size: i32 = MIN_BUFFER_SIZE();
+    const timeout: i32 = DEFAULT_TIMEOUT();
+    
+    try assert_eq_i32(max_size, 1024);
+    try assert_eq_i32(min_size, 64);
+    try assert_eq_i32(timeout, 5000);
+    
+    // 测试比较
+    try expect(max_size > min_size);
+    try expect(timeout < max_size);
+}
+
+fn test_bit_flags() !void {
+    const read: i32 = FLAG_READ();
+    const write: i32 = FLAG_WRITE();
+    const execute: i32 = FLAG_EXECUTE();
+    const all: i32 = FLAG_ALL();
+    
+    try assert_eq_i32(read, 1);
+    try assert_eq_i32(write, 2);
+    try assert_eq_i32(execute, 4);
+    try assert_eq_i32(all, 7);
+    
+    // 测试位运算
+    const combined: i32 = read | write | execute;
+    try assert_eq_i32(combined, all);
+    
+    try assert_eq_i32(all & read, read);
+    try assert_eq_i32(all & write, write);
+    try assert_eq_i32(all & execute, execute);
+}
+
+fn test_status_codes() !void {
+    const ok: i32 = STATUS_OK();
+    const err_code: i32 = STATUS_ERR();
+    const pending: i32 = STATUS_PENDING();
+    
+    try assert_eq_i32(ok, 0);
+    try assert_eq_i32(err_code, -1);
+    try assert_eq_i32(pending, 1);
+    
+    // 测试条件判断
+    try assert_eq_i32(ok, STATUS_OK());
+    try expect(err_code < STATUS_OK());
+}
+
+fn test_boolean_constants() !void {
+    const enabled: bool = FEATURE_ENABLED();
+    const debug: bool = DEBUG_MODE();
+    
+    try expect(enabled);
+    try expect(!debug);
+    
+    // 测试逻辑运算
+    try expect(enabled && !debug);
+    try expect(enabled || debug);
+}
+
+fn test_complex_scenario() !void {
+    // 模拟真实使用场景：配置驱动的逻辑
+    
+    var buffer_size: i32 = MIN_BUFFER_SIZE();
+    
+    if FEATURE_ENABLED() {
+        buffer_size = MAX_BUFFER_SIZE();
+    }
+    
+    try assert_eq_i32(buffer_size, 1024);
+    
+    // 模拟权限检查
+    var permissions: i32 = 0;
+    
+    if !DEBUG_MODE() {
+        permissions = FLAG_READ() | FLAG_WRITE();
+    } else {
+        permissions = FLAG_ALL();
+    }
+    
+    try assert_eq_i32(permissions, 3);  // read | write = 3
+    
+    // 模拟状态机
+    var status: i32 = STATUS_PENDING();
+    
+    if status == STATUS_PENDING() {
+        status = STATUS_OK();
+    }
+    
+    try assert_eq_i32(status, STATUS_OK());
+}
+
+fn test_macro_in_expressions() !void {
+    // 测试宏在各种表达式中的使用
+    
+    // 三元形式（使用 if-else）
+    const val: i32 = 10;
+    var result: i32 = 0;
+    if val > PI_INT() {
+        result = STATUS_OK();
+    } else {
+        result = STATUS_ERR();
+    }
+    try assert_eq_i32(result, 0);
+    
+    // 复杂算术
+    const calc: i32 = (MAX_BUFFER_SIZE() - MIN_BUFFER_SIZE()) / PI_INT();
+    try assert_eq_i32(calc, 320);  // (1024 - 64) / 3 = 320
+    
+    // 位运算链
+    const flags: i32 = (FLAG_READ() << 8) | FLAG_WRITE();
+    try assert_eq_i32(flags, 258);  // (1 << 8) | 2 = 256 | 2 = 258
+}
+
+export fn main() i32 {
+    test_suite_begin("Macro Comprehensive Tests");
+    run_test("math constants", test_math_constants);
+    run_test("config constants", test_config_constants);
+    run_test("bit flags", test_bit_flags);
+    run_test("status codes", test_status_codes);
+    run_test("boolean constants", test_boolean_constants);
+    run_test("complex scenario", test_complex_scenario);
+    run_test("macro in expressions", test_macro_in_expressions);
+    return test_suite_end();
+}

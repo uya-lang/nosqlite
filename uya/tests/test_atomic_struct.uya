@@ -1,0 +1,66 @@
+// 原子类型作为结构体字段测试，规范 uya.md §13
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Counter {
+    value: atomic i32
+}
+
+fn test_atomic_struct_field() !void {
+    var counter: Counter = Counter{ value: 0 };
+    
+    const v1: i32 = counter.value;
+    try assert_eq_i32(v1, 0);
+    
+    counter.value = 42;
+    const v2: i32 = counter.value;
+    try assert_eq_i32(v2, 42);
+}
+
+fn test_atomic_struct_add() !void {
+    var counter: Counter = Counter{ value: 42 };
+    counter.value += 8;
+    try assert_eq_i32(counter.value, 50);
+}
+
+fn test_atomic_struct_sub() !void {
+    var counter: Counter = Counter{ value: 50 };
+    counter.value -= 10;
+    try assert_eq_i32(counter.value, 40);
+}
+
+// 结构体字段上的 *= /= %=（CAS 循环）
+fn test_atomic_struct_mul() !void {
+    var counter: Counter = Counter{ value: 6 };
+    counter.value *= 7;
+    try assert_eq_i32(counter.value, 42);
+}
+
+fn test_atomic_struct_div() !void {
+    var counter: Counter = Counter{ value: 42 };
+    counter.value /= 7;
+    try assert_eq_i32(counter.value, 6);
+}
+
+fn test_atomic_struct_mod() !void {
+    var counter: Counter = Counter{ value: 13 };
+    counter.value %= 5;
+    try assert_eq_i32(counter.value, 3);
+}
+
+export fn main() i32 {
+    test_suite_begin("Atomic Struct Tests");
+    
+    run_test("atomic struct field", test_atomic_struct_field);
+    run_test("atomic struct add", test_atomic_struct_add);
+    run_test("atomic struct sub", test_atomic_struct_sub);
+    run_test("atomic struct mul", test_atomic_struct_mul);
+    run_test("atomic struct div", test_atomic_struct_div);
+    run_test("atomic struct mod", test_atomic_struct_mod);
+    
+    return test_suite_end();
+}

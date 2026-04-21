@@ -1,0 +1,32 @@
+// microapp 代码生成回归：成员访问、数组访问、解引用、字符串切片访问都必须走 MMU 包装
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Holder {
+    point: Point,
+    values: [i32: 4],
+    bytes: &[byte],
+    ptr: &Point,
+}
+
+fn touch(h: &Holder) i32 {
+    var sum: i32 = 0;
+    sum = sum + h.point.x;
+    h.point.y = h.point.y + 1;
+    sum = sum + h.values[1];
+    sum = sum + (*h.ptr).x;
+    const msg: &[byte] = &"abcd"[0: 4];
+    sum = sum + msg[1] as i32;
+    sum = sum + h.bytes[1] as i32;
+    return sum;
+}
+
+export fn main() i32 {
+    var raw: [byte: 4] = [1, 2, 3, 4];
+    var p: Point = Point{ x: 7, y: 9 };
+    var h: Holder = Holder{ point: Point{ x: 1, y: 2 }, values: [11, 22, 33, 44], bytes: &raw[0: 4], ptr: &p };
+    return touch(&h);
+}

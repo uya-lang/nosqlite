@@ -1,0 +1,24 @@
+// 测试 @await 语法解析
+
+extern fn printf(fmt: *byte, ...) i32;
+
+// 简单的异步函数
+@async_fn
+fn async_get() i32 {
+    return 42;
+}
+
+// 使用 @await 的异步函数
+@async_fn
+fn test_await() i32 {
+    // 测试 @await 语法解析
+    // 注意：目前不检查 @await 必须与 try 配合使用
+    const result: i32 = @await async_get();
+    return result;
+}
+
+fn main() i32 {
+    printf("@await 语法解析测试\n");
+    return 0;
+}
+

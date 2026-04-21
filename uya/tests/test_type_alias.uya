@@ -1,0 +1,132 @@
+// 测试类型别名功能
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+// 基本类型别名
+type Int = i32;
+type Byte = u8;
+type Float = f64;
+
+// 指针类型别名
+type IntPtr = *i32;
+
+// 数组类型别名
+type IntArray = [i32: 4];
+
+// 结构体类型别名
+struct Point {
+    x: i32,
+    y: i32,
+}
+type Pt = Point;
+
+// 多层别名（别名的别名）
+type MyInt = Int;  // Int -> i32
+type MyByte = Byte; // Byte -> u8
+
+// ============================================
+// 泛型类型别名
+// ============================================
+
+// 泛型结构体
+struct Box<T> {
+    value: T,
+}
+
+struct Pair<K, V> {
+    key: K,
+    val: V,
+}
+
+// 泛型类型的别名
+type IntBox = Box<i32>;
+type StringBox = Box<&byte>;
+type IntPair = Pair<i32, i32>;
+type StrIntPair = Pair<&byte, i32>;
+
+// 嵌套泛型类型别名
+type BoxOfBox = Box<Box<i32>>;
+
+// ============================================
+// 宏创建的类型别名
+// ============================================
+
+use std.macro_typeinfo.TypeInfo;
+
+// 类型信息别名
+type TI = TypeInfo;
+
+// 宏：创建类型信息
+mc make_type_info(T: type) expr {
+    @mc_type(T);
+}
+
+test "basic type alias" {
+    // 使用类型别名声明变量
+    var a: Int = 42;
+    var b: Byte = 255;
+    var c: Float = 3.14;
+    
+    try assert_eq_i32(a, 42);
+    try assert_eq_i32(b as i32, 255);
+}
+
+test "pointer type alias" {
+    var x: i32 = 100;
+    var ptr: IntPtr = &x;
+    
+    try assert_eq_i32(*ptr, 100);
+}
+
+test "array type alias" {
+    var arr: IntArray = [1, 2, 3, 4];
+    
+    try assert_eq_i32(arr[0], 1);
+}
+
+test "struct type alias" {
+    var p: Pt = Point { x: 10, y: 20 };
+    
+    try assert_eq_i32(p.x, 10);
+}
+
+test "multi level alias" {
+    var m: MyInt = 50;
+    var n: MyByte = 128;
+    
+    try assert_eq_i32(m, 50);
+    try assert_eq_i32(n as i32, 128);
+}
+
+test "generic type alias" {
+    // IntBox = Box<i32>
+    var ibox: IntBox = Box<i32> { value: 123 };
+    try assert_eq_i32(ibox.value, 123);
+    
+    // IntPair = Pair<i32, i32>
+    var ipair: IntPair = Pair<i32, i32> { key: 1, val: 2 };
+    try assert_eq_i32(ipair.key, 1);
+    try assert_eq_i32(ipair.val, 2);
+    
+    // StrIntPair = Pair<&byte, i32>
+    var spair: StrIntPair = Pair<&byte, i32> { key: "hello", val: 42 };
+    try assert_eq_i32(spair.val, 42);
+    
+    // BoxOfBox = Box<Box<i32>>
+    const inner: Box<i32> = Box<i32> { value: 999 };
+    var bbox: BoxOfBox = Box<Box<i32>> { value: inner };
+    try assert_eq_i32(bbox.value.value, 999);
+}
+
+test "macro type alias" {
+    // 使用 TypeInfo 的别名
+    const ti: TI = make_type_info(i32);
+    try assert_eq_i32(ti.size, 4);
+    try expect(ti.is_integer);
+    
+    // 验证 f64 类型信息
+    const f64_info: TI = make_type_info(f64);
+    try assert_eq_i32(f64_info.size, 8);
+    try expect(f64_info.is_float);
+}

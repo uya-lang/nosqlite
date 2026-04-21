@@ -1,0 +1,6 @@
+// errdefer 只能在返回 !T 的函数中使用；main() i32 中不能使用 errdefer
+// 预期：编译失败
+fn main() i32 {
+    errdefer { }
+    return 0;
+}

@@ -1,0 +1,18 @@
+// 多个测试单元
+
+use std.testing.assert_eq_i32;
+
+test "test 1" {
+    const x: i32 = 1;
+    try assert_eq_i32(x, 1);
+}
+
+test "test 2" {
+    const y: i32 = 2;
+    try assert_eq_i32(y, 2);
+}
+
+test "test 3" {
+    const z: i32 = 3;
+    try assert_eq_i32(z, 3);
+}

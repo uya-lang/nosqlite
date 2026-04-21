@@ -1,0 +1,97 @@
+// test_crypto_hmac_sha256.uya — HMAC-SHA256 向量（与 Python hmac.digest(..., 'sha256') 一致）
+
+use std.crypto.hmac_sha256;
+use std.testing.assert_eq_i32;
+
+fn hex_eq(mac: &[byte], expect_ascii: &[byte]) bool {
+    const hex: &[byte] = &"0123456789abcdef"[0: 16];
+    var i: usize = 0;
+    while i < 32 {
+        const hi: usize = (mac.ptr[i] >> 4) as usize;
+        const lo: usize = (mac.ptr[i] & 15) as usize;
+        if expect_ascii.ptr[i * 2] != hex.ptr[hi] {
+            return false;
+        }
+        if expect_ascii.ptr[i * 2 + 1] != hex.ptr[lo] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+test "hmac_sha256_secret_hello" {
+    var out: [byte: 32] = [];
+    const key: &[byte] = &"secret"[0: 6];
+    const msg: &[byte] = &"Hello"[0: 5];
+    hmac_sha256(key, msg, out[0: 32]);
+    const exp: &[byte] = &"0cc692f2177b42b6e5cd82488ee6c5d526a007c571e7de1fec07c1e2b1dfa2e2"[0: 64];
+    if !hex_eq(out[0: 32], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "hmac_sha256_empty_message" {
+    var z: [byte: 1] = [];
+    var out: [byte: 32] = [];
+    const key: &[byte] = &"key"[0: 3];
+    const empty: &[byte] = z[0: 0];
+    hmac_sha256(key, empty, out[0: 32]);
+    const exp: &[byte] = &"5d5d139563c95b5967b9bd9a8c9b233a9dedb45072794cd232dc1b74832607d0"[0: 64];
+    if !hex_eq(out[0: 32], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "hmac_sha256_long_key_uses_inner_hash" {
+    var out: [byte: 32] = [];
+    const key: &[byte] = &"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"[0: 70];
+    const msg: &[byte] = &"data"[0: 4];
+    hmac_sha256(key, msg, out[0: 32]);
+    const exp: &[byte] = &"0604a734b5006c79780d68058b5887e8e5e641a21c14b955637ee2a4b8134535"[0: 64];
+    if !hex_eq(out[0: 32], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "hmac_sha256_rfc4231_style_vector" {
+    var out: [byte: 32] = [];
+    const key: &[byte] = &"\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b"[0: 20];
+    const msg: &[byte] = &"Hi There"[0: 8];
+    hmac_sha256(key, msg, out[0: 32]);
+    const exp: &[byte] = &"b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"[0: 64];
+    if !hex_eq(out[0: 32], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "hmac_sha256_jwt_signing_blob_matches_hs256" {
+    var out: [byte: 32] = [];
+    const secret: &[byte] = &"secret"[0: 6];
+    // 与 jwt_sign_hs256：header_b64 + '.' + payload_b64url（{"x":1} → eyJ4IjoxfQ）
+    const signing: &[byte] = &"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ4IjoxfQ"[0: 47];
+    hmac_sha256(secret, signing, out[0: 32]);
+    const exp: &[byte] = &"f5868abccb78d8eed55aea9ead96bc55ea0a9eb70743cbfe321aec403a942198"[0: 64];
+    if !hex_eq(out[0: 32], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "hmac_sha256_short_mac_buffer_no_write" {
+    var buf: [byte: 64] = [];
+    var i: usize = 0;
+    while i < 64 {
+        buf[i] = 0xab as byte;
+        i = i + 1;
+    }
+    const key: &[byte] = &"k"[0: 1];
+    const msg: &[byte] = &"m"[0: 1];
+    hmac_sha256(key, msg, buf[0: 31]);
+    var j: usize = 0;
+    while j < 64 {
+        if buf[j] != (0xab as byte) {
+            try assert_eq_i32(0, 1);
+        }
+        j = j + 1;
+    }
+}

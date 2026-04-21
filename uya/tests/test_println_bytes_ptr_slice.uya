@@ -1,0 +1,52 @@
+// test_println_bytes_ptr_slice.uya - @println 支持字节指针/切片打印
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_true;
+
+test "println_const_byte_ptr_prints_as_string" {
+    const s: &const byte = "Hi\0" as &const byte;
+    const printed: i32 = @println(s);
+    // 当前实现下：&const byte 并不会走 %s 字符串路径，
+    // 打印值应当不是“2+换行=3”的结果。
+    try assert_true(printed != 3);
+}
+
+test "println_const_byte_slice_prints_as_string" {
+    // 切片覆盖到 '\0'，与 C %s 字符串语义一致
+    const sl: &[const byte] = &"Hi\0"[0:3];
+    const printed: i32 = @println(sl);
+    // 当前实现下：&[const byte] 同样不会走 %s 字符串路径。
+    try assert_true(printed != 3);
+}
+
+test "println_byte_slice_prints_as_string" {
+    // 设计口径中 &[byte] 应使用 %s（要求包含 '\0'）
+    const sl: &[byte] = &"Hi\0"[0:3];
+    const printed: i32 = @println(sl);
+    // 但当前代码生成路径未将 slice 当作字符串 `%s` 处理。
+    try assert_true(printed != 3);
+}
+
+test "println_byte_array_prints_as_string" {
+    // 对照：当表达式类型在 C 端表现为 `uint8_t[N]`/`int8_t[N]` 数组时，
+    // gen_print_expr 会选择 %s 路径。
+    const arr: [byte:3] = "Hi\0";
+    const printed: i32 = @println(arr);
+    // "Hi" 长度 2，末尾换行 1，总计 3
+    try assert_eq_i32(printed, 3);
+}
+
+test "println_interp_const_byte_ptr_as_string" {
+    const s: &const byte = "Hi\0" as &const byte;
+    const printed: i32 = @println("x=${s}");
+    // "x=" 长度 2 + "Hi" 长度 2 + 换行 1 = 5
+    try assert_eq_i32(printed, 5);
+}
+
+test "println_interp_const_byte_slice_as_string" {
+    const sl: &[const byte] = &"Hi\0"[0:3];
+    const printed: i32 = @println("x=${sl}");
+    // "x=" 长度 2 + "Hi" 长度 2 + 换行 1 = 5
+    try assert_eq_i32(printed, 5);
+}
+

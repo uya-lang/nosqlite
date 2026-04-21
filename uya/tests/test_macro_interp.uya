@@ -1,0 +1,311 @@
+// 测试宏插值 ${} 语法
+use std.runtime.entry;
+// 在 @mc_ast 内部使用 ${var} 引用宏参数
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 错误声明
+error OutOfRange;
+error NotPositive;
+
+// ==================== 基础测试 ====================
+
+// 简单插值：直接引用参数
+mc identity(x: expr) expr {
+    @mc_code(@mc_ast(${x}));
+}
+
+// 插值用于表达式内部
+mc add_one(x: expr) expr {
+    @mc_code(@mc_ast(${x} + 1));
+}
+
+// 多次使用同一个插值
+mc double_val(x: expr) expr {
+    @mc_code(@mc_ast(${x} + ${x}));
+}
+
+// ==================== 复杂测试 ====================
+
+// 多参数宏：两个参数相加
+mc add(a: expr, b: expr) expr {
+    @mc_code(@mc_ast(${a} + ${b}));
+}
+
+// 多参数宏：三个参数
+mc sum3(a: expr, b: expr, c: expr) expr {
+    @mc_code(@mc_ast(${a} + ${b} + ${c}));
+}
+
+// 复杂表达式：乘法和加法组合
+mc mul_add(a: expr, b: expr, c: expr) expr {
+    @mc_code(@mc_ast(${a} * ${b} + ${c}));
+}
+
+// 带括号的复杂表达式
+mc weighted_sum(x: expr, y: expr, w: expr) expr {
+    @mc_code(@mc_ast((${x} + ${y}) * ${w}));
+}
+
+// 比较表达式
+mc is_greater(a: expr, b: expr) expr {
+    @mc_code(@mc_ast(${a} > ${b}));
+}
+
+// 逻辑表达式
+mc both_positive(a: expr, b: expr) expr {
+    @mc_code(@mc_ast(${a} > 0 && ${b} > 0));
+}
+
+// 条件表达式内使用插值（返回语句）
+mc check_range(val: expr, min: expr, max: expr) stmt {
+    if ${val} < ${min} || ${val} > ${max} {
+        return error.OutOfRange;
+    }
+}
+
+// 嵌套宏调用：使用插值传递给另一个宏
+mc double_then_add(x: expr, y: expr) expr {
+    @mc_code(@mc_ast(add(${x} + ${x}, ${y})));
+}
+
+// ==================== 复杂代码结构 ====================
+
+// 复杂表达式：四参数运算
+mc complex_calc(a: expr, b: expr, c: expr, d: expr) expr {
+    @mc_code(@mc_ast((${a} + ${b}) * (${c} - ${d})));
+}
+
+// 位运算插值
+mc bitwise_or(a: expr, b: expr) expr {
+    @mc_code(@mc_ast(${a} | ${b}));
+}
+
+mc bitwise_and(a: expr, b: expr) expr {
+    @mc_code(@mc_ast(${a} & ${b}));
+}
+
+mc bitwise_xor(a: expr, b: expr) expr {
+    @mc_code(@mc_ast(${a} ^ ${b}));
+}
+
+mc shift_left(val: expr, n: expr) expr {
+    @mc_code(@mc_ast(${val} << ${n}));
+}
+
+mc shift_right(val: expr, n: expr) expr {
+    @mc_code(@mc_ast(${val} >> ${n}));
+}
+
+// 条件选择（使用乘法模拟）
+mc select_by_flag(flag: expr, a: expr, b: expr) expr {
+    @mc_code(@mc_ast(${flag} * ${a} + (1 - ${flag}) * ${b}));
+}
+
+// 生成带条件检查的 stmt（使用语法糖）
+mc assert_positive(val: expr) stmt {
+    if ${val} <= 0 {
+        return error.NotPositive;
+    }
+}
+
+// 生成赋值语句
+mc assign_sum(target: expr, a: expr, b: expr) stmt {
+    ${target} = ${a} + ${b};
+}
+
+// 多层嵌套运算
+mc nested_calc(a: expr, b: expr, c: expr) expr {
+    @mc_code(@mc_ast(${a} * ${b} * ${c} + ${a} + ${b} + ${c}));
+}
+
+// 取反
+mc negate_val(x: expr) expr {
+    @mc_code(@mc_ast(0 - ${x}));
+}
+
+// 绝对值风格（使用位运算技巧：需要假设 32 位整数）
+mc abs_approx(x: expr) expr {
+    @mc_code(@mc_ast((${x} + (${x} >> 31)) ^ (${x} >> 31)));
+}
+
+// 最大值（两数）
+mc max_of_two(a: expr, b: expr) expr {
+    @mc_code(@mc_ast(${a} - ((${a} - ${b}) & ((${a} - ${b}) >> 31))));
+}
+
+// 最小值（两数）
+mc min_of_two(a: expr, b: expr) expr {
+    @mc_code(@mc_ast(${b} + ((${a} - ${b}) & ((${a} - ${b}) >> 31))));
+}
+
+// 平方
+mc square_val(x: expr) expr {
+    @mc_code(@mc_ast(${x} * ${x}));
+}
+
+// 立方
+mc cube_val(x: expr) expr {
+    @mc_code(@mc_ast(${x} * ${x} * ${x}));
+}
+
+// 检查是否为偶数
+mc is_even(x: expr) expr {
+    @mc_code(@mc_ast((${x} & 1) == 0));
+}
+
+// 检查是否为奇数
+mc is_odd(x: expr) expr {
+    @mc_code(@mc_ast((${x} & 1) == 1));
+}
+
+// ==================== 测试函数 ====================
+
+fn test_basic_interp() !void {
+    // 测试 identity
+    try assert_eq_i32(identity(42), 42);
+    
+    // 测试 add_one
+    try assert_eq_i32(add_one(10), 11);
+    
+    // 测试 double_val
+    try assert_eq_i32(double_val(5), 10);
+}
+
+fn test_multi_param() !void {
+    // 测试 add (两参数)
+    try assert_eq_i32(add(3, 7), 10);
+    
+    // 测试 sum3 (三参数)
+    try assert_eq_i32(sum3(1, 2, 3), 6);
+}
+
+fn test_complex_expr() !void {
+    // 测试 mul_add: 2 * 3 + 4 = 10
+    try assert_eq_i32(mul_add(2, 3, 4), 10);
+    
+    // 测试 weighted_sum: (3 + 7) * 2 = 20
+    try assert_eq_i32(weighted_sum(3, 7, 2), 20);
+}
+
+fn test_comparison_logic() !void {
+    // 测试 is_greater
+    try expect(is_greater(10, 5));
+    try expect(!is_greater(3, 8));
+    
+    // 测试 both_positive
+    try expect(both_positive(5, 3));
+    try expect(!both_positive(-1, 3));
+}
+
+fn test_nested_macro() !void {
+    // 测试 double_then_add: add(5+5, 3) = add(10, 3) = 13
+    try assert_eq_i32(double_then_add(5, 3), 13);
+}
+
+fn test_complex_calc() !void {
+    // 测试复杂运算: (10+5) * (8-3) = 15 * 5 = 75
+    try assert_eq_i32(complex_calc(10, 5, 8, 3), 75);
+}
+
+fn test_bitwise() !void {
+    // 测试位运算 OR: 15 | 240 = 255
+    try assert_eq_i32(bitwise_or(15, 240), 255);
+    
+    // 测试位运算 AND: 255 & 15 = 15
+    try assert_eq_i32(bitwise_and(255, 15), 15);
+    
+    // 测试位运算 XOR: 255 ^ 15 = 240
+    try assert_eq_i32(bitwise_xor(255, 15), 240);
+    
+    // 测试左移
+    try assert_eq_i32(shift_left(1, 4), 16);
+    
+    // 测试右移
+    try assert_eq_i32(shift_right(256, 4), 16);
+}
+
+fn test_conditional_select() !void {
+    // 测试 select_by_flag (条件选择)
+    try assert_eq_i32(select_by_flag(1, 100, 200), 100);  // flag=1
+    try assert_eq_i32(select_by_flag(0, 100, 200), 200);  // flag=0
+}
+
+fn test_stmt_macro() !void {
+    // 测试 check_range (值在范围内，不应返回)
+    const val: i32 = 50;
+    check_range(val, 0, 100);
+    
+    // 测试 assert_positive (条件检查 stmt)
+    assert_positive(10);
+}
+
+fn test_assign_sum() !void {
+    var o: i32 = 0;
+    assign_sum(o, 15, 25);
+    try assert_eq_i32(o, 40);
+}
+
+fn test_nested_calc() !void {
+    // 测试多层嵌套运算: 2*3*4 + 2 + 3 + 4 = 24 + 9 = 33
+    try assert_eq_i32(nested_calc(2, 3, 4), 33);
+}
+
+fn test_negate() !void {
+    try assert_eq_i32(negate_val(10), -10);
+    try assert_eq_i32(negate_val(-5), 5);
+}
+
+fn test_abs() !void {
+    try assert_eq_i32(abs_approx(10), 10);
+    try assert_eq_i32(abs_approx(-10), 10);
+}
+
+fn test_max_min() !void {
+    try assert_eq_i32(max_of_two(10, 20), 20);
+    try assert_eq_i32(max_of_two(30, 15), 30);
+    
+    try assert_eq_i32(min_of_two(10, 20), 10);
+    try assert_eq_i32(min_of_two(30, 15), 15);
+}
+
+fn test_power() !void {
+    // 测试平方
+    try assert_eq_i32(square_val(7), 49);
+    
+    // 测试立方
+    try assert_eq_i32(cube_val(3), 27);
+}
+
+fn test_even_odd() !void {
+    try expect(is_even(10));
+    try expect(!is_even(7));
+    
+    try expect(is_odd(7));
+    try expect(!is_odd(10));
+}
+
+export fn main() i32 {
+    test_suite_begin("Macro Interp Tests");
+    run_test("basic interp", test_basic_interp);
+    run_test("multi param", test_multi_param);
+    run_test("complex expr", test_complex_expr);
+    run_test("comparison logic", test_comparison_logic);
+    run_test("nested macro", test_nested_macro);
+    run_test("complex calc", test_complex_calc);
+    run_test("bitwise", test_bitwise);
+    run_test("conditional select", test_conditional_select);
+    run_test("stmt macro", test_stmt_macro);
+    run_test("assign sum", test_assign_sum);
+    run_test("nested calc", test_nested_calc);
+    run_test("negate", test_negate);
+    run_test("abs", test_abs);
+    run_test("max min", test_max_min);
+    run_test("power", test_power);
+    run_test("even odd", test_even_odd);
+    return test_suite_end();
+}

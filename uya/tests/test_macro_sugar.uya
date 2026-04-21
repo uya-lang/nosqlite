@@ -1,0 +1,98 @@
+// 测试宏返回值语法糖
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+use std.macro_typeinfo.TypeInfo;
+
+// expr 语法糖
+mc double_it() expr {
+    2 * 21;
+}
+
+mc add(a: expr, b: expr) expr {
+    ${a} + ${b};
+}
+
+mc calc(x: expr, y: expr, z: expr) expr {
+    ${x} * ${y} + ${z};
+}
+
+// 带局部变量的语法糖
+mc compute_with_local() expr {
+    const doubled: i32 = @mc_eval(16 * 2);
+    @mc_code(@mc_ast(doubled + 10));
+}
+
+mc multi_local() expr {
+    const sum: i32 = @mc_eval(5 + 7);
+    const product: i32 = @mc_eval(5 * 7);
+    @mc_code(@mc_ast(sum + product));
+}
+
+// type 语法糖
+mc int_type() type {
+    i32;
+}
+
+mc bool_type() type {
+    bool;
+}
+
+// struct 语法糖
+mc add_getter_sugar() struct {
+    @mc_code(@mc_ast(
+        fn get_val(self: &Self) i32 {
+            return self.val;
+        }
+    ));
+}
+
+struct TestStruct {
+    val: i32,
+}
+
+TestStruct {
+    add_getter_sugar();
+}
+
+// @mc_type 作为最后表达式
+mc get_type_info(T: type) expr {
+    @mc_type(T);
+}
+
+mc get_type_size(T: type) expr {
+    const info: TypeInfo = @mc_type(T);
+    info.size;
+}
+
+test "test_expr_sugar" {
+    try assert_eq_i32(double_it(), 42);
+    try assert_eq_i32(add(10, 32), 42);
+    try assert_eq_i32(calc(5, 8, 2), 42);
+}
+
+test "test_local_var_sugar" {
+    try assert_eq_i32(compute_with_local(), 42);
+    try assert_eq_i32(multi_local(), 47);
+}
+
+test "test_type_sugar" {
+    const x: int_type() = 100;
+    try assert_eq_i32(x, 100);
+    
+    const flag: bool_type() = true;
+    try assert_eq_i32(flag, true);
+}
+
+test "test_struct_sugar" {
+    const ts: TestStruct = TestStruct { val: 42 };
+    try assert_eq_i32(ts.get_val(), 42);
+}
+
+test "test_mc_type_sugar" {
+    const info: TypeInfo = get_type_info(i32);
+    try assert_eq_i32(info.size, 4);
+    
+    try assert_eq_i32(get_type_size(i64), 8);
+}

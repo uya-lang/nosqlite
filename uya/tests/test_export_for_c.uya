@@ -1,0 +1,29 @@
+// 测试 Uya 函数导出给 C 调用
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+// 导出函数给 C 调用
+export fn uya_add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+export fn uya_print_hello() void {
+    // 导出函数示例
+}
+
+export fn uya_get_answer() i32 {
+    return 42;
+}
+
+// 内部函数（C 无法调用）
+fn internal_func(x: i32) i32 {
+    return x * 2;
+}
+
+test "test_export_func" {
+    try assert_eq_i32(uya_add(10, 20), 30);
+    try assert_eq_i32(uya_get_answer(), 42);
+    try assert_eq_i32(internal_func(21), 42);
+}

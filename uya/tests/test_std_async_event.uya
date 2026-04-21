@@ -1,0 +1,78 @@
+// test_std_async_event.uya - 验证 std.async_event 提供 EventLoop、EventKind、LinuxEpoll
+// 设计见 docs/std_async_design.md 阶段 3
+
+use std.runtime.entry;
+use std.async;
+use std.async_event;
+use std.testing.assert_eq_i32;
+
+const TEST_SYS_WRITE: i64 = 1;
+const TEST_SYS_CLOSE: i64 = 3;
+const TEST_SYS_PIPE2: i64 = 293;
+const TEST_O_NONBLOCK: i32 = 0x800;
+
+fn test_sys_write(fd: i32, buf: &const byte, count: usize) !isize {
+    return @syscall(TEST_SYS_WRITE, fd as i64, buf as i64, count as i64) as! isize;
+}
+
+fn test_sys_close(fd: i32) !i32 {
+    return @syscall(TEST_SYS_CLOSE, fd as i64) as! i32;
+}
+
+fn test_sys_pipe2(pipefd: &i32, flags: i32) !i32 {
+    return @syscall(TEST_SYS_PIPE2, pipefd as i64, flags as i64) as! i32;
+}
+
+export fn main() i32 {
+    const create_ok: LinuxEpoll = linux_epoll_create(0) catch {
+        return 1;
+    };
+    if create_ok.epfd < 0 {
+        return 2;
+    }
+    const n: i32 = create_ok.poll(0) catch {
+        return 3;
+    };
+    if n < 0 {
+        return 4;
+    }
+    _ = assert_eq_i32(n, 0) catch { return 5; };
+
+    var fds: [i32: 2] = [];
+    _ = test_sys_pipe2(&fds[0], TEST_O_NONBLOCK) catch {
+        return 6;
+    };
+    const read_fd: i32 = fds[0];
+    const write_fd: i32 = fds[1];
+    var src: [byte: 1] = [ 42 ];
+    _ = test_sys_write(write_fd, &src[0] as &const byte, 1) catch {
+        _ = test_sys_close(read_fd);
+        _ = test_sys_close(write_fd);
+        return 7;
+    };
+
+    var w: Waker = Waker{};
+    _ = create_ok.register(read_fd, EventKind.Readable({}), &w) catch {
+        _ = test_sys_close(read_fd);
+        _ = test_sys_close(write_fd);
+        return 8;
+    };
+
+    const ready_n: i32 = create_ok.poll(0) catch {
+        _ = test_sys_close(read_fd);
+        _ = test_sys_close(write_fd);
+        return 9;
+    };
+
+    _ = create_ok.deregister(read_fd) catch {
+        _ = test_sys_close(read_fd);
+        _ = test_sys_close(write_fd);
+        return 10;
+    };
+    _ = test_sys_close(read_fd);
+    _ = test_sys_close(write_fd);
+
+    _ = assert_eq_i32(ready_n, 1) catch { return 11; };
+    _ = assert_eq_i32(w.is_woken() as i32, 1) catch { return 12; };
+    return 0;
+}

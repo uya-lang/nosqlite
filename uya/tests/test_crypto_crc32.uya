@@ -1,0 +1,29 @@
+// test_crypto_crc32.uya — CRC-32 (IEEE) 校验向量
+
+use std.crypto.crc32;
+use std.testing.assert_eq_u64;
+
+test "crc32_empty" {
+    var z: [byte: 1] = [];
+    const empty: &[byte] = z[0: 0];
+    const c: u32 = crc32_compute(empty);
+    try assert_eq_u64(c as u64, 0u64);
+}
+
+test "crc32_abc" {
+    const data: &[byte] = &"abc"[0: 3];
+    const c: u32 = crc32_compute(data);
+    try assert_eq_u64(c as u64, 0x352441c2u64);
+}
+
+test "crc32_rfc_123456789" {
+    const data: &[byte] = &"123456789"[0: 9];
+    const c: u32 = crc32_compute(data);
+    try assert_eq_u64(c as u64, 0xcbf43926u64);
+}
+
+test "crc32_alphabet" {
+    const data: &[byte] = &"abcdefghijklmnopqrstuvwxyz"[0: 26];
+    const c: u32 = crc32_compute(data);
+    try assert_eq_u64(c as u64, 0x4c2750bdu64);
+}

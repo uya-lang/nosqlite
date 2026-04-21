@@ -1,0 +1,49 @@
+// 测试 extern 函数 FFI 指针类型参数支持
+use std.runtime.entry;
+// 验证解析、类型检查、代码生成是否正确处理 *T 类型参数
+
+// 测试1：基础 FFI 指针类型参数（*byte, *i32）
+extern fn test_byte_pointer(p: *byte) i32;
+extern fn test_i32_pointer(p: *i32) i32;
+extern fn test_void_pointer(p: *void) i32;
+
+// 测试2：FFI 指针类型返回值
+extern fn get_pointer() *byte;
+extern fn get_i32_pointer() *i32;
+
+// 测试3：多个 FFI 指针类型参数
+extern fn test_multiple_pointers(p1: *byte, p2: *i32, p3: *void) i32;
+
+// 测试4：混合基础类型和 FFI 指针类型参数
+extern fn test_mixed_params(value: i32, ptr: *byte, count: i32) i32;
+
+// 测试5：嵌套指针类型（指针指向指针，虽然不常用，但应该支持）
+extern fn test_pointer_to_pointer(pp: **byte) i32;
+
+// 测试函数调用（虽然实际无法链接，但可以验证代码生成）
+export fn main() i32 {
+    // 注意：这些调用在实际运行时需要链接真实的C函数
+    // 这里仅测试编译器能否正确解析、类型检查和生成代码
+    
+    // 测试1：调用单参数 FFI 指针函数（需要实际的指针值，这里仅测试语法）
+    // const result1: i32 = test_byte_pointer(null);  // null 需要支持
+    // const result2: i32 = test_i32_pointer(null);
+    // const result3: i32 = test_void_pointer(null);
+    
+    // 测试2：调用返回 FFI 指针的函数
+    // const ptr1: *byte = get_pointer();
+    // const ptr2: *i32 = get_i32_pointer();
+    
+    // 测试3：调用多参数 FFI 指针函数
+    // const result4: i32 = test_multiple_pointers(null, null, null);
+    
+    // 测试4：调用混合参数类型函数
+    // const result5: i32 = test_mixed_params(10, null, 20);
+    
+    // 测试5：调用嵌套指针类型函数
+    // const result6: i32 = test_pointer_to_pointer(null);
+    
+    // 如果编译器能够成功编译（解析、类型检查、代码生成），说明支持已实现
+    return 0;
+}
+

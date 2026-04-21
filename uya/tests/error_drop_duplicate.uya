@@ -1,0 +1,16 @@
+// 预期编译失败：每个类型只能有一个 drop 方法
+// 此处在方法块中定义两个 drop，应报错
+
+struct S {
+}
+
+S {
+  fn drop(self: S) void {
+  }
+  fn drop(self: S) void {
+  }
+}
+
+fn main() i32 {
+  return 0;
+}

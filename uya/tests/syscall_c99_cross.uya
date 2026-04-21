@@ -1,0 +1,5 @@
+// `verify_syscall_c99_cross.sh` 生成整文件 C 并做 AArch64/ARM 片段交叉编译；Linux 下亦纳入默认并行测试（macOS 见 run_programs_parallel SKIP）
+export fn main() i32 {
+    _ = @syscall(1 as i64, 0 as i64);
+    return 0;
+}

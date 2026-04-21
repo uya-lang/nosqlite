@@ -1,0 +1,10 @@
+// error_asm_missing_string.uya - @asm 缺少指令字符串错误测试
+// 期望编译错误：@asm 块中期望指令字符串
+
+fn main() i32 {
+    var x: i32 = 0;
+    @asm {
+        (-> x);
+    }
+    return 0;
+}

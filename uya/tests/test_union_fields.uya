@@ -1,0 +1,35 @@
+// 测试 union 包含各种指针类型字段
+// 验证方案 A 可行性：union 变体可以是指针类型
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+// 测试 1：union 包含两个相同类型的变体
+union SameTypeUnion {
+    a: i32,
+    b: i32,
+}
+
+test "union same type" {
+    var u: SameTypeUnion = SameTypeUnion.a(42);
+    const result: i32 = match u {
+        .a(v) => v,
+        .b(v) => v,
+    };
+    try assert_eq_i32(result, 42);
+}
+
+// 测试 2：union 包含指针和整数（不同大小）
+union MixedUnion {
+    ptr_val: &i32,
+    int_val: i32,
+}
+
+test "union mixed" {
+    var u1: MixedUnion = MixedUnion.int_val(100);
+    const r1: i32 = match u1 {
+        .ptr_val(_) => 0,
+        .int_val(v) => v,
+    };
+    try assert_eq_i32(r1, 100);
+}

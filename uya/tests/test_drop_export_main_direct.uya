@@ -1,0 +1,23 @@
+// 测试 export fn main() 顶级作用域变量的 drop 自动调用
+// 如果 drop 被调用，exit(0)；否则 exit(1)
+
+extern fn exit(code: i32) void;
+
+struct MainTopResource {
+    id: i32
+}
+
+MainTopResource {
+    fn drop(self: MainTopResource) void {
+        // drop 被调用时，正常退出
+        exit(0);
+    }
+}
+
+export fn main() i32 {
+    // 变量在顶层作用域，函数结束时应该调用 drop
+    const main_res: MainTopResource = MainTopResource { id: 1 };
+    
+    // 如果 drop 没被调用，会返回 1
+    return 1;
+}

@@ -1,0 +1,23 @@
+// test_async_poll_inline_struct_init.uya
+// 回归：结构体字面量字段内联初始化泛型 union（Poll<T>）时，codegen 必须使用单态化 tagged union 名称。
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+fn mk_ready() !Future<i32> {
+    // 这里故意内联 Poll<i32>.Ready(...)，避免用 const p 绕开 codegen 路径
+    return Future<i32>{ state: Poll<i32>.Ready(7) };
+}
+
+test "poll_inline_in_struct_init" {
+    const f: Future<i32> = try mk_ready();
+    const w: Waker = Waker{};
+    const p: Poll<i32> = f.poll(&w);
+    var result: i32 = 0 - 1;
+    match p {
+        .Ready(v) => { result = v; },
+        .Pending(_) => { result = 0 - 2; },
+    };
+    try assert_eq_i32(result, 7);
+}
+

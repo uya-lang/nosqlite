@@ -1,0 +1,57 @@
+// 测试泛型函数 - 与指针类型结合
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn deref<T>(ptr: &T) T {
+    return *ptr;
+}
+
+fn set_value<T>(ptr: &T, value: T) void {
+    *ptr = value;
+}
+
+fn swap<T>(a: &T, b: &T) void {
+    const temp: T = *a;
+    *a = *b;
+    *b = temp;
+}
+
+fn test_deref() !void {
+    var x: i32 = 42;
+    const val: i32 = deref<i32>(&x);
+    try assert_eq_i32(val, 42);
+}
+
+fn test_set_value() !void {
+    var y: i32 = 0;
+    set_value<i32>(&y, 100);
+    try assert_eq_i32(y, 100);
+}
+
+fn test_swap() !void {
+    var a: i32 = 10;
+    var b: i32 = 20;
+    swap<i32>(&a, &b);
+    try assert_eq_i32(a, 20);
+    try assert_eq_i32(b, 10);
+}
+
+fn test_f64_type() !void {
+    var f: f64 = 3.14;
+    const fval: f64 = deref<f64>(&f);
+    try expect(fval == 3.14);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Pointer Tests");
+    run_test("deref", test_deref);
+    run_test("set value", test_set_value);
+    run_test("swap", test_swap);
+    run_test("f64 type", test_f64_type);
+    return test_suite_end();
+}

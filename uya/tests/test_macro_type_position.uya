@@ -1,0 +1,12 @@
+// 测试泛型参数位置的宏插值 - 简化版
+use std.runtime.entry;
+
+// 宏：构建类型名
+mc wrap_type(T: type) type {
+    @mc_code(@mc_ast(${T}));
+}
+
+export fn main() i32 {
+    const x: wrap_type(i32) = 42;
+    return x - 42;  // 应该返回 0
+}

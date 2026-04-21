@@ -1,0 +1,37 @@
+// 简单测试 &const T 语法
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+fn test_const_pointer_basic() !void {
+    var x: i32 = 42;
+    var ptr: & const i32 = &x;  // 注意：& 和 const 之间需要空格
+    try assert_eq_i32(ptr[0], 42);
+}
+
+fn test_const_pointer_read() !void {
+    var y: i32 = 100;
+    var ptr: & const i32 = &y;
+    const val: i32 = ptr[0];
+    try assert_eq_i32(val, 100);
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    test_suite_begin("Const Pointer Simple Tests");
+    
+    run_test("const_pointer_basic", test_const_pointer_basic);
+    run_test("const_pointer_read", test_const_pointer_read);
+    
+    return test_suite_end();
+}

@@ -1,0 +1,54 @@
+// test_asm_target.uya - @asm_target() 平台检测测试
+
+// 测试平台检测基本功能
+test "asm target detection" {
+    // @asm_target() 返回平台枚举值
+    // x86_64_linux = 0, x86_64_macos = 1, x86_64_windows = 2
+    // arm64_linux = 3, arm64_macos = 4, arm64_windows = 5
+    // riscv64_linux = 6
+    const target: i32 = @asm_target();
+    
+    // 验证 target 是一个有效的平台值
+    // 这里简单验证编译通过
+    var x: i32 = target;
+}
+
+// 测试平台检测用于条件编译
+test "asm target conditional" {
+    const target: i32 = @asm_target();
+    
+    // 根据平台选择不同的值
+    var result: i32 = 0;
+    
+    if target == 0 {
+        // x86_64_linux
+        result = 1;
+    } else if target == 1 {
+        // x86_64_macos
+        result = 2;
+    } else if target == 3 {
+        // arm64_linux
+        result = 3;
+    } else {
+        result = 99;
+    }
+    
+    // 验证 result 被设置
+    var check: i32 = result;
+}
+
+// 测试平台检测与 @asm 结合
+test "asm target with asm block" {
+    const target: i32 = @asm_target();
+    var value: i32 = 0;
+    
+    if target == 0 {
+        // x86_64_linux 平台
+        @asm {
+            "nop" (-> value);
+        }
+    } else {
+        // 其他平台
+        value = 42;
+    }
+}

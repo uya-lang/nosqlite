@@ -1,0 +1,48 @@
+// 结构体函数参数和返回值测试
+use std.runtime.entry;
+// 测试结构体在函数中的传递
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn add_points(p1: Point, p2: Point) Point {
+    return Point{ x: p1.x + p2.x, y: p1.y + p2.y };
+}
+
+fn get_x(p: Point) i32 {
+    return p.x;
+}
+
+fn test_add_points() !void {
+    const p1: Point = Point{ x: 10, y: 20 };
+    const p2: Point = Point{ x: 30, y: 40 };
+    
+    const sum: Point = add_points(p1, p2);
+    
+    try assert_eq_i32(sum.x, 40);
+    try assert_eq_i32(sum.y, 60);
+}
+
+fn test_get_x() !void {
+    const p1: Point = Point{ x: 10, y: 20 };
+    const p2: Point = Point{ x: 30, y: 40 };
+    const sum: Point = add_points(p1, p2);
+    
+    const x: i32 = get_x(sum);
+    try assert_eq_i32(x, 40);
+}
+
+export fn main() i32 {
+    test_suite_begin("Struct Params Tests");
+    run_test("add points", test_add_points);
+    run_test("get x", test_get_x);
+    return test_suite_end();
+}

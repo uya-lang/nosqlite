@@ -1,0 +1,50 @@
+// test_asm_clobbers.uya - @asm clobbers 声明测试
+
+// 测试单个寄存器 clobber
+test "asm single clobber" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    } clobbers = ["rax"];
+}
+
+// 测试多个寄存器 clobber
+test "asm multiple clobbers" {
+    var x: i32 = 0;
+    var y: i32 = 0;
+    @asm {
+        "nop" (-> x, y);
+    } clobbers = ["rax", "rbx", "rcx"];
+}
+
+// 测试 memory clobber
+test "asm memory clobber" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    } clobbers = ["memory"];
+}
+
+// 测试寄存器和 memory 混合 clobber
+test "asm mixed clobbers" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    } clobbers = ["rax", "rbx", "rcx", "memory"];
+}
+
+// 测试无 clobber 的汇编
+test "asm no clobbers" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    }
+}
+
+// 测试空 clobber 数组（无效果）
+test "asm empty clobbers" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    } clobbers = [];
+}

@@ -1,0 +1,56 @@
+// test_async_await.uya
+// try @await 基本使用：
+// - Ready Future：try @await 返回 !T 的成功值
+// - Pending Future：外层 future 首次 poll 返回 Pending，由状态机等待后续推进
+
+use std.async;
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+
+fn ready_7() Future<!i32> {
+    const p: Poll<!i32> = Poll<!i32>.Ready(ok<i32>(7));
+    return Future<!i32>{ state: p };
+}
+
+fn pending_i32() Future<!i32> {
+    const p: Poll<!i32> = Poll<!i32>.Pending();
+    return Future<!i32>{ state: p };
+}
+
+@async_fn
+fn await_ready_7() Future<!i32> {
+    const x: i32 = try @await ready_7();
+    return x;
+}
+
+@async_fn
+fn await_pending_should_pending() Future<!i32> {
+    const _x: i32 = try @await pending_i32();
+    _ = _x;
+    return 1;
+}
+
+test "async_await_ready_returns_value" {
+    const f: Future<!i32> = await_ready_7();
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = f.poll(&w);
+    var result: i32 = 0 - 1;
+    match p {
+        .Ready(ok_val) => { result = ok_val catch { 0 - 3; }; },
+        .Pending(_) => { result = 0 - 2; },
+    };
+    try assert_eq_i32(result, 7);
+}
+
+test "async_await_pending_returns_pending" {
+    const f: Future<!i32> = await_pending_should_pending();
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = f.poll(&w);
+    var seen_pending: bool = false;
+    match p {
+        .Ready(_) => { seen_pending = false; },
+        .Pending(_) => { seen_pending = true; },
+    };
+    try expect(seen_pending);
+}
+

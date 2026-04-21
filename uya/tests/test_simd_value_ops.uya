@@ -1,0 +1,35 @@
+type Vec4i32 = @vector(i32, 4);
+type Mask4 = @mask(4);
+
+fn all_true(mask: Mask4) bool {
+    return @vector.all(mask);
+}
+
+fn any_true(mask: Mask4) bool {
+    return @vector.any(mask);
+}
+
+export fn main() i32 {
+    const a: Vec4i32 = @vector.splat(3);
+    const b: Vec4i32 = @vector.splat(1);
+    const sum: Vec4i32 = a + b;
+    const bits: Vec4i32 = sum & a;
+    const shifted: Vec4i32 = bits << b;
+
+    const eq_self: Mask4 = shifted == shifted;
+    const eq_other: Mask4 = a == b;
+    const not_other: Mask4 = !eq_other;
+    const combined: Mask4 = eq_self & not_other;
+
+    if all_true(combined) == false {
+        return 1;
+    }
+    if any_true(eq_other) != false {
+        return 2;
+    }
+    if @vector.any(eq_self) == false {
+        return 3;
+    }
+
+    return 0;
+}

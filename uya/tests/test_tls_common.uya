@@ -1,0 +1,23 @@
+// test_tls_common.uya - 验证 lib/tls/common.uya 可被引用（阶段 0.1 验收）
+// 使用 tls.common 的 export fn，编译通过且返回 0 即表示 common 模块就绪
+// 注：export const 当前未入模块导出表，用 export fn 辅助验证
+
+use std.runtime.entry;
+use tls.common.tls_version_1_2;
+use tls.common.tls_version_1_3;
+use tls.common.tls_record_handshake;
+use tls.common.tls_record_application_data;
+
+export fn main() i32 {
+    const v12: u16 = tls_version_1_2();
+    const v13: u16 = tls_version_1_3();
+    const rec_handshake: u8 = tls_record_handshake();
+    const rec_app: u8 = tls_record_application_data();
+    if v12 != 0x0303 || v13 != 0x0304 {
+        return 1;
+    }
+    if rec_handshake != 22 || rec_app != 23 {
+        return 2;
+    }
+    return 0;
+}

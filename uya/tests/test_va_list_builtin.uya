@@ -1,0 +1,206 @@
+// test_va_list_builtin.uya - 测试 va_list 内置类型支持
+// 验证：
+// 1. va_list 是编译器内置类型
+// 2. va_list 可以作为函数参数传递
+// 3. @va_arg 可以在接收 va_list 参数的函数内使用
+// 4. @va_copy 可以复制 va_list
+
+use std.testing.expect;
+
+// ============================================================
+// Phase 1: va_list 类型基础测试
+// ============================================================
+
+test "va_list_type_exists" {
+    // va_list 应该是内置类型，使用 va_list{} 初始化
+    var ap: va_list = va_list{};
+    _ = ap;  // 避免未使用警告
+    try expect(@size_of(va_list) > 0);
+}
+
+test "va_list_size_platform_dependent" {
+    // va_list 大小是平台相关的，x86-64 Linux 是 24 字节
+    const size: usize = @size_of(va_list);
+    // 只验证大小大于 0，具体值由平台决定
+    try expect(size > 0);
+}
+
+test "va_list_pointer_type" {
+    // va_list 可以取指针
+    var ap: va_list = va_list{};
+    var ptr: &va_list = &ap;
+    try expect(ptr != null);
+}
+
+// ============================================================
+// Phase 2: va_list 作为函数参数
+// ============================================================
+
+// 辅助函数：接收 va_list 参数并读取 i32
+fn _read_i32_from_va_list(ap: va_list) i32 {
+    return @va_arg(ap, i32);
+}
+
+// 辅助函数：接收 va_list 参数并读取指针
+fn _read_ptr_from_va_list(ap: va_list) &const byte {
+    return @va_arg(ap, &const byte);
+}
+
+test "va_list_as_function_param" {
+    // 这个测试需要可变参数函数来初始化 va_list
+    const result: i32 = _test_va_list_param_wrapper(0, 42);
+    try expect(result == 42);
+}
+
+fn _test_va_list_param_wrapper(value: i32, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, value);
+    
+    // 将 va_list 传递给另一个函数
+    const read_value: i32 = _read_i32_from_va_list(ap);
+    
+    @va_end(&ap);
+    return read_value;
+}
+
+// ============================================================
+// Phase 3: @va_arg 在非可变参数函数中使用
+// ============================================================
+
+test "va_arg_in_va_list_receiver" {
+    const result: i32 = _test_va_arg_receiver_wrapper(0, 10, 20);
+    try expect(result == 30);  // 10 + 20
+}
+
+fn _test_va_arg_receiver_wrapper(first: i32, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, first);
+    
+    // 在另一个函数中使用 @va_arg
+    const sum: i32 = _sum_two_ints(ap);
+    
+    @va_end(&ap);
+    return sum;
+}
+
+// 这个函数接收 va_list 参数，在其内部使用 @va_arg
+fn _sum_two_ints(ap: va_list) i32 {
+    const a: i32 = @va_arg(ap, i32);
+    const b: i32 = @va_arg(ap, i32);
+    return a + b;
+}
+
+// ============================================================
+// Phase 4: @va_copy 测试
+// ============================================================
+
+test "va_copy_basic" {
+    const result: i32 = _test_va_copy_wrapper(0, 100);
+    try expect(result == 100);  // 两个 ap 读取相同值
+}
+
+fn _test_va_copy_wrapper(first: i32, ...) i32 {
+    var ap1: va_list = va_list{};
+    @va_start(&ap1, first);
+    
+    // 复制 va_list
+    var ap2: va_list = va_list{};
+    @va_copy(&ap2, ap1);
+    
+    // 从两个 va_list 读取
+    const v1: i32 = @va_arg(ap1, i32);
+    const v2: i32 = @va_arg(ap2, i32);
+    
+    @va_end(&ap1);
+    @va_end(&ap2);
+    
+    // 两个应该读取相同的值
+    try expect(v1 == v2);
+    return v2;
+}
+
+test "va_copy_independent_iteration" {
+    const result: i32 = _test_va_copy_independent(0, 1, 2, 3);
+    try expect(result == 6);  // 1 + 2 + 3
+}
+
+fn _test_va_copy_independent(first: i32, ...) i32 {
+    var ap1: va_list = va_list{};
+    @va_start(&ap1, first);
+    
+    // 读取第一个值
+    const v1: i32 = @va_arg(ap1, i32);
+    
+    // 复制 va_list（此时 ap2 也从第一个可变参数开始）
+    var ap2: va_list = va_list{};
+    @va_copy(&ap2, ap1);
+    
+    // ap1 继续读取第二个和第三个
+    const v2: i32 = @va_arg(ap1, i32);
+    const v3: i32 = @va_arg(ap1, i32);
+    
+    // ap2 从第一个可变参数读取（应该等于 v1）
+    const v1_copy: i32 = @va_arg(ap2, i32);
+    
+    @va_end(&ap1);
+    @va_end(&ap2);
+    
+    // 验证 ap2 读取的是第一个值
+    try expect(v1_copy == v1);
+    
+    return v1 + v2 + v3;
+}
+
+// ============================================================
+// Phase 5: vprintf 系列函数模拟
+// ============================================================
+
+// 简化的 vprintf 实现：只支持 %d
+fn _simple_vdprintf(format: &const byte, ap: va_list) i32 {
+    var count: i32 = 0;
+    var i: i32 = 0;
+    
+    while format[i] != 0 {
+        if format[i] == 37 {  // '%'
+            i = i + 1;
+            if format[i] == 100 {  // 'd'
+                const val: i32 = @va_arg(ap, i32);
+                count = count + _print_i32(val);
+            }
+        } else {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    return count;
+}
+
+fn _print_i32(val: i32) i32 {
+    // 简化实现，只返回打印的数字位数
+    if val < 10 {
+        return 1;
+    }
+    var digits: i32 = 0;
+    var v: i32 = val;
+    while v > 0 {
+        digits = digits + 1;
+        v = v / 10;
+    }
+    return digits;
+}
+
+test "vprintf_style_function" {
+    const result: i32 = _test_vprintf_wrapper("count=%d", 123);
+    // "count=" 6 字符 + "123" 3 字符 = 9
+    try expect(result >= 9);
+}
+
+fn _test_vprintf_wrapper(format: &const byte, ...) i32 {
+    var ap: va_list = va_list{};
+    @va_start(&ap, format);
+    
+    const result: i32 = _simple_vdprintf(format, ap);
+    
+    @va_end(&ap);
+    return result;
+}

@@ -1,0 +1,15 @@
+// 验证直接取地址的顶层函数会被保留
+
+fn dead_internal() i32 {
+    return 1;
+}
+
+fn callback_target() i32 {
+    return 2;
+}
+
+const callback_keep: &void = &callback_target as &void;
+
+export fn main() i32 {
+    return 0;
+}

@@ -1,0 +1,47 @@
+// 测试泛型结构体在函数中的使用
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Vec<T> {
+    data: *T,
+    len: usize,
+}
+
+fn get_len<T>(v: Vec<T>) usize {
+    return v.len;
+}
+
+fn create_vec<T>(len: usize) Vec<T> {
+    return Vec<T>{
+        data: null,
+        len: len,
+    };
+}
+
+fn test_i32_type() !void {
+    const v1: Vec<i32> = Vec<i32>{
+        data: null,
+        len: 10,
+    };
+    const len1: usize = get_len<i32>(v1);
+    try expect(len1 == 10);
+}
+
+fn test_f32_type() !void {
+    const v2: Vec<f32> = create_vec<f32>(20);
+    try expect(v2.len == 20);
+    const len2: usize = get_len<f32>(v2);
+    try expect(len2 == 20);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Struct Fn Tests");
+    run_test("i32 type", test_i32_type);
+    run_test("f32 type", test_f32_type);
+    return test_suite_end();
+}

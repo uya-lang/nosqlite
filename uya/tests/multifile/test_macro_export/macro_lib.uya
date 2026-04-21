@@ -1,0 +1,27 @@
+// 导出宏的库模块
+
+// 导出的宏：计算两数相加
+export mc add(a: expr, b: expr) expr {
+    ${a} + ${b};
+}
+
+// 导出的宏：计算平方
+export mc square(x: expr) expr {
+    ${x} * ${x};
+}
+
+// 导出的宏：返回常量
+export mc get_const() expr {
+    42;
+}
+
+// 导出的宏：stmt 返回类型
+export mc do_nothing() stmt {
+    const _unused: i32 = 0;
+}
+
+// 不导出的宏（私有）
+mc private_macro() expr {
+    999;
+}
+

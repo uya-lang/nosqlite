@@ -1,0 +1,62 @@
+// 测试程序：验证类型转换和指针类型
+// 测试指针类型转换、类型推断等
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+struct Data {
+    value: i32,
+    next: &Data,
+}
+
+test "pointer cast" {
+    var data: Data = Data{ value: 42, next: null };
+    var data2: Data = Data{ value: 100, next: null };
+    
+    // 指针类型转换
+    const ptr: &Data = &data;
+    const ptr2: &Data = &data2;
+    
+    // 访问指针成员
+    try assert_eq_i32(ptr.value, 42);
+    
+    // 修改指针成员
+    ptr.value = 200;
+    try assert_eq_i32(data.value, 200);
+    
+    // 指针赋值
+    data.next = ptr2;
+    try assert_eq_i32(data.next.value, 100);
+    
+    // 通过指针链访问
+    data.next.value = 300;
+    try assert_eq_i32(data2.value, 300);
+}
+
+test "null pointer" {
+    const ptr: &Data = null;
+    
+    try expect(ptr == null);
+    
+    // 空指针比较
+    var data: Data = Data{ value: 0, next: null };
+    const ptr2: &Data = &data;
+    
+    try expect(ptr2 != null);
+    
+    data.next = null;
+    try expect(data.next == null);
+}
+
+test "pointer type inference" {
+    var data: Data = Data{ value: 10, next: null };
+    
+    // 指针类型：&data 的类型是 &Data
+    const ptr: &Data = &data;
+    
+    // 应该能够访问成员
+    try assert_eq_i32(ptr.value, 10);
+    
+    ptr.value = 20;
+    try assert_eq_i32(data.value, 20);
+}

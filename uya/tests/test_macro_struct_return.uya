@@ -1,0 +1,80 @@
+// 测试 struct 返回标签的宏
+use std.runtime.entry;
+// 在方法块中调用宏生成方法
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 定义一个生成 getter 方法的宏（无参数）
+mc add_get_x() struct {
+    @mc_code(@mc_ast(
+        fn get_x(self: &Self) i32 {
+            return self.x;
+        }
+    ));
+}
+
+// 定义一个生成加法方法的宏
+mc add_adder() struct {
+    @mc_code(@mc_ast(
+        fn add(self: &Self, other: &Self) i32 {
+            return self.x + self.y + other.x + other.y;
+        }
+    ));
+}
+
+// 定义一个简单的结构体
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+// 在方法块中调用宏生成方法
+Point {
+    add_get_x();
+    add_adder();
+    
+    fn get_y(self: &Self) i32 {
+        return self.y;
+    }
+    
+    fn sum(self: &Self) i32 {
+        return self.x + self.y;
+    }
+}
+
+fn test_get_x() !void {
+    const p: Point = Point { x: 10, y: 20 };
+    const x_val: i32 = p.get_x();
+    try assert_eq_i32(x_val, 10);
+}
+
+fn test_get_y() !void {
+    const p: Point = Point { x: 10, y: 20 };
+    const y_val: i32 = p.get_y();
+    try assert_eq_i32(y_val, 20);
+}
+
+fn test_add() !void {
+    const p: Point = Point { x: 10, y: 20 };
+    const q: Point = Point { x: 5, y: 15 };
+    const add_result: i32 = p.add(&q);
+    try assert_eq_i32(add_result, 50);  // 10 + 20 + 5 + 15 = 50
+}
+
+fn test_sum() !void {
+    const p: Point = Point { x: 10, y: 20 };
+    const sum_result: i32 = p.sum();
+    try assert_eq_i32(sum_result, 30);
+}
+
+export fn main() i32 {
+    test_suite_begin("Macro Struct Return Tests");
+    run_test("get x", test_get_x);
+    run_test("get y", test_get_y);
+    run_test("add", test_add);
+    run_test("sum", test_sum);
+    return test_suite_end();
+}

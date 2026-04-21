@@ -1,0 +1,48 @@
+// test_https_local.uya - 测试本地 TLS 1.2 服务器
+
+use tls.https;
+use libc.unistd;
+use libc.syscall;
+
+fn debug(msg: &[byte]) void {
+    _ = sys_write(2, msg.ptr, msg.len) catch {};
+}
+
+fn local_tls_server_available() bool {
+    const fd_res: !i32 = sys_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    const fd: i32 = fd_res catch {
+        return false;
+    };
+    var addr: [byte: 16] = [0:16];
+    addr[0] = 2;
+    addr[2] = ((8443 >> 8) & 0xFF) as byte;
+    addr[3] = (8443 & 0xFF) as byte;
+    addr[4] = 127;
+    addr[5] = 0;
+    addr[6] = 0;
+    addr[7] = 1;
+    _ = sys_connect(fd, &addr[0] as &void, 16 as u32) catch {
+        _ = sys_close(fd) catch {};
+        return false;
+    };
+    _ = sys_close(fd) catch {};
+    return true;
+}
+
+export fn main() i32 {
+    debug(&"Testing local TLS 1.2 server...\n"[0: 34]);
+    if !local_tls_server_available() {
+        debug(&"skip:https_local_server_unavailable\n"[0: 35]);
+        return 0;
+    }
+    
+    // 使用本地服务器 IP 127.0.0.1
+    var host: [byte: 10] = "127.0.0.1";
+    var resp: HttpsResponse = https_get(&host[0], 9, 8443, &"/"[0: 1]) catch {
+        debug(&"Failed\n"[0: 7]);
+        return 1;
+    };
+    
+    debug(&"Success!\n"[0: 9]);
+    return 0;
+}

@@ -1,0 +1,9 @@
+// error_asm_missing_close_brace.uya - @asm 缺少闭合大括号错误测试
+// 期望编译错误：@asm 块期望 '}' 结束
+
+fn main() i32 {
+    var x: i32 = 0;
+    @asm {
+        "mov %0, 42" (-> x);
+    return 0;
+}

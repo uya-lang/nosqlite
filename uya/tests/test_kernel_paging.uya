@@ -1,0 +1,207 @@
+// Tests for kernel page table and MMU translation
+
+use kernel.errors;
+use kernel.mem;
+use kernel.paging;
+use std.testing.assert_eq_i32;
+
+// 哨兵值：表示操作失败（ppn/offset 不可能达到此值）
+const FAIL: i32 = -1;
+
+// ── Page Pool Tests ──
+
+test "page_pool_alloc_and_free" {
+    var pool: PagePool = PagePool{ used: [], count: 0, used_count: 0 };
+    page_pool_init(&pool, 4);
+
+    // 分配 4 页
+    const p0: u32 = try page_alloc(&pool);
+    const p1: u32 = try page_alloc(&pool);
+    const p2: u32 = try page_alloc(&pool);
+    const p3: u32 = try page_alloc(&pool);
+    try assert_eq_i32(pool.used_count as i32, 4);
+
+    // 第 5 次分配应失败
+    var alloc_failed: i32 = 0;
+    const p4: u32 = page_alloc(&pool) catch |err| {
+        alloc_failed = 1;
+        0u32;
+    };
+    try assert_eq_i32(alloc_failed, 1);
+
+    // 释放一页后可重新分配
+    page_free(&pool, p1);
+    try assert_eq_i32(pool.used_count as i32, 3);
+    const p5: u32 = try page_alloc(&pool);
+    try assert_eq_i32(p5 as i32, p1 as i32);
+}
+
+// ── PTE Construction Tests ──
+
+test "pte_make_and_extract" {
+    const ppn: u32 = 5;
+    const flags: u32 = PTE_V | PTE_R | PTE_W;
+    const pte: u32 = pte_make(ppn, flags);
+
+    // 提取 PPN 应等于 5
+    try assert_eq_i32(pte_ppn(pte) as i32, 5);
+
+    // 标志位检查
+    var has_v: i32 = 0; if (pte & PTE_V) != 0 { has_v = 1; }
+    var has_r: i32 = 0; if (pte & PTE_R) != 0 { has_r = 1; }
+    var has_w: i32 = 0; if (pte & PTE_W) != 0 { has_w = 1; }
+    var has_x: i32 = 0; if (pte & PTE_X) != 0 { has_x = 1; }
+    try assert_eq_i32(has_v, 1);
+    try assert_eq_i32(has_r, 1);
+    try assert_eq_i32(has_w, 1);
+    try assert_eq_i32(has_x, 0);
+}
+
+// ── Page Table Map/Translate Tests ──
+
+test "pt_map_and_translate" {
+    var pt: PageTable = PageTable{ entries: [] };
+    pt_init(&pt);
+
+    // 映射 vpn=0 → ppn=3, 可读可写
+    try pt_map(&pt, 0, 3, PTE_R | PTE_W | PTE_U);
+
+    // 翻译 vaddr=0x10 (vpn=0, offset=16)
+    const result: TranslateResult = try mmu_translate(&pt, 16, 4, ACCESS_R);
+    try assert_eq_i32(result.ppn as i32, 3);
+    try assert_eq_i32(result.offset as i32, 16);
+}
+
+test "pt_map_code_sets_executable_permissions" {
+    var pt: PageTable = PageTable{ entries: [] };
+    pt_init(&pt);
+
+    try pt_map_code(&pt, 0, 7);
+
+    const pte: u32 = pt.entries[0];
+    var has_r: i32 = 0;
+    var has_x: i32 = 0;
+    var has_u: i32 = 0;
+    var has_w: i32 = 0;
+    if (pte & PTE_R) != 0 { has_r = 1; }
+    if (pte & PTE_X) != 0 { has_x = 1; }
+    if (pte & PTE_U) != 0 { has_u = 1; }
+    if (pte & PTE_W) != 0 { has_w = 1; }
+    try assert_eq_i32(has_r, 1);
+    try assert_eq_i32(has_x, 1);
+    try assert_eq_i32(has_u, 1);
+    try assert_eq_i32(has_w, 0);
+}
+
+test "translate_unmapped_page_faults" {
+    var pt: PageTable = PageTable{ entries: [] };
+    pt_init(&pt);
+
+    // vpn=0 未映射，翻译应 fault
+    var faulted: i32 = 0;
+    const r: TranslateResult = mmu_translate(&pt, 0, 4, ACCESS_R) catch |err| {
+        faulted = 1;
+        TranslateResult{ ppn: 0, offset: 0 };
+    };
+    try assert_eq_i32(faulted, 1);
+}
+
+test "translate_permission_write_to_readonly" {
+    var pt: PageTable = PageTable{ entries: [] };
+    pt_init(&pt);
+
+    // 映射为只读
+    try pt_map(&pt, 0, 1, PTE_R | PTE_U);
+
+    // 读取应成功
+    const r1: TranslateResult = try mmu_translate(&pt, 0, 4, ACCESS_R);
+    try assert_eq_i32(r1.ppn as i32, 1);
+
+    // 写入应失败
+    var denied: i32 = 0;
+    const r2: TranslateResult = mmu_translate(&pt, 0, 4, ACCESS_W) catch |err| {
+        denied = 1;
+        TranslateResult{ ppn: 0, offset: 0 };
+    };
+    try assert_eq_i32(denied, 1);
+}
+
+test "translate_execute_data_page_fails" {
+    var pt: PageTable = PageTable{ entries: [] };
+    pt_init(&pt);
+
+    // 数据页：可读可写不可执行
+    try pt_map(&pt, 0, 2, PTE_R | PTE_W | PTE_U);
+
+    var denied: i32 = 0;
+    const r: TranslateResult = mmu_translate(&pt, 0, 4, ACCESS_X) catch |err| {
+        denied = 1;
+        TranslateResult{ ppn: 0, offset: 0 };
+    };
+    try assert_eq_i32(denied, 1);
+}
+
+test "translate_cross_page_boundary_fails" {
+    var pt: PageTable = PageTable{ entries: [] };
+    pt_init(&pt);
+
+    try pt_map(&pt, 0, 1, PTE_R | PTE_U);
+
+    // offset=65534, size=4 → 65538 > 65536, 跨页
+    var boundary: i32 = 0;
+    const r: TranslateResult = mmu_translate(&pt, 65534, 4, ACCESS_R) catch |err| {
+        boundary = 1;
+        TranslateResult{ ppn: 0, offset: 0 };
+    };
+    try assert_eq_i32(boundary, 1);
+}
+
+test "translate_vpn_out_of_range" {
+    var pt: PageTable = PageTable{ entries: [] };
+    pt_init(&pt);
+
+    // vpn=128, vaddr = 128 << 16 = 8388608
+    var faulted: i32 = 0;
+    const r: TranslateResult = mmu_translate(&pt, 8388608, 4, ACCESS_R) catch |err| {
+        faulted = 1;
+        TranslateResult{ ppn: 0, offset: 0 };
+    };
+    try assert_eq_i32(faulted, 1);
+}
+
+test "pt_unmap_invalidates" {
+    var pt: PageTable = PageTable{ entries: [] };
+    pt_init(&pt);
+
+    try pt_map(&pt, 2, 5, PTE_R | PTE_U);
+
+    // vpn=2 → vaddr = 2<<16 = 131072
+    const r1: TranslateResult = try mmu_translate(&pt, 131072, 4, ACCESS_R);
+    try assert_eq_i32(r1.ppn as i32, 5);
+
+    pt_unmap(&pt, 2);
+
+    var faulted: i32 = 0;
+    const r2: TranslateResult = mmu_translate(&pt, 131072, 4, ACCESS_R) catch |err| {
+        faulted = 1;
+        TranslateResult{ ppn: 0, offset: 0 };
+    };
+    try assert_eq_i32(faulted, 1);
+}
+
+test "translate_sets_accessed_dirty" {
+    var pt: PageTable = PageTable{ entries: [] };
+    pt_init(&pt);
+
+    try pt_map(&pt, 0, 1, PTE_R | PTE_W | PTE_U);
+
+    // 读 → A 位
+    const r1: TranslateResult = try mmu_translate(&pt, 0, 4, ACCESS_R);
+    var has_a: i32 = 0; if (pt.entries[0] & PTE_A) != 0 { has_a = 1; }
+    try assert_eq_i32(has_a, 1);
+
+    // 写 → D 位
+    const r2: TranslateResult = try mmu_translate(&pt, 0, 4, ACCESS_W);
+    var has_d: i32 = 0; if (pt.entries[0] & PTE_D) != 0 { has_d = 1; }
+    try assert_eq_i32(has_d, 1);
+}

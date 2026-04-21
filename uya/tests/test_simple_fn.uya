@@ -1,0 +1,19 @@
+// 最简单的函数声明测试
+use std.runtime.entry;
+struct Test {
+    x: i32,
+}
+
+fn test_simple(x: i32) i32 {
+    return x;
+}
+
+export fn main() i32 {
+    const result: i32 = test_simple(42);
+    if result == 42 {
+        return 0;  // 测试通过
+    }
+    return 1;  // 测试失败
+}
+
+

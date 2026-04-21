@@ -1,0 +1,33 @@
+// test_std_syscall_new.uya - 测试 libc 模块
+use std.runtime.entry;
+use libc.sys_write;
+use libc.sys_getpid;
+use libc.UYA_STDOUT_FILENO;
+
+export fn main() i32 {
+    // 测试 1: sys_write - 写入标准输出
+    const msg: &const byte = "Hello from std.syscall!\n" as &const byte;
+    const msg_len: usize = 24;
+    const result1: !isize = sys_write(UYA_STDOUT_FILENO as i32, msg, msg_len);
+    const written1: isize = result1 catch {
+        return 1;  // 写入失败
+    };
+    if written1 != msg_len as isize {
+        return 2;  // 写入字节数不匹配
+    }
+    
+    // 测试 2: sys_getpid - 获取进程 ID
+    const pid_result: !i64 = sys_getpid();
+    const pid: i64 = pid_result catch {
+        return 3;  // 获取 pid 失败
+    };
+    if pid <= 0 {
+        return 4;  // 进程 ID 应该大于 0
+    }
+    
+    // 测试 3: sys_exit - 退出进程（这里不实际调用，只测试函数存在）
+    // sys_exit 是 noreturn，不能在这里测试
+    
+    return 0;
+}
+

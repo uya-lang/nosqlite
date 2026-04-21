@@ -1,0 +1,123 @@
+// 锚点/别名安全上限：UnknownAlias、AnchorOverflow、AnchorTooDeep
+use std.runtime.entry;
+use std.yaml.parser.parse;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.mem.arena.arena_reset;
+
+fn expect_err(a: &Arena, ptr: &byte, n: usize) bool {
+    _ = parse(a, ptr, n) catch {
+        return true;
+    };
+    return false;
+}
+
+export fn main() i32 {
+    var arena_buf: [byte: 262144] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 262144);
+
+    var buf: [byte: 32768] = [];
+
+    // *z 无定义
+    buf[0] = 42;
+    buf[1] = 122;
+    if !expect_err(&a, &buf[0], 2) { return 1; }
+
+    arena_reset(&a);
+    // 65 个锚点：[&a0 0,&a1 0,..., &a64 0]
+    var off: usize = 0;
+    buf[off] = 91;
+    off = off + 1;
+    var k: usize = 0;
+    while k < 65 {
+        if k > 0 {
+            buf[off] = 44;
+            off = off + 1;
+        }
+        buf[off] = 38;
+        off = off + 1;
+        buf[off] = 97;
+        off = off + 1;
+        if k < 10 {
+            buf[off] = 48 + k as byte;
+            off = off + 1;
+        } else {
+            const tens: usize = k / 10;
+            const ones: usize = k - tens * 10;
+            buf[off] = 48 + tens as byte;
+            off = off + 1;
+            buf[off] = 48 + ones as byte;
+            off = off + 1;
+        }
+        buf[off] = 32;
+        off = off + 1;
+        buf[off] = 48;
+        off = off + 1;
+        k = k + 1;
+    }
+    buf[off] = 93;
+    off = off + 1;
+    if !expect_err(&a, &buf[0], off) { return 2; }
+
+    arena_reset(&a);
+    // 1025 次 *a：&a 1\n + [ *a,*a,... ]
+    off = 0;
+    buf[off] = 38;
+    off = off + 1;
+    buf[off] = 97;
+    off = off + 1;
+    buf[off] = 32;
+    off = off + 1;
+    buf[off] = 49;
+    off = off + 1;
+    buf[off] = 10;
+    off = off + 1;
+    buf[off] = 91;
+    off = off + 1;
+    var t: usize = 0;
+    while t < 1025 {
+        if t > 0 {
+            buf[off] = 44;
+            off = off + 1;
+        }
+        buf[off] = 42;
+        off = off + 1;
+        buf[off] = 97;
+        off = off + 1;
+        t = t + 1;
+    }
+    buf[off] = 93;
+    off = off + 1;
+    if !expect_err(&a, &buf[0], off) { return 3; }
+
+    arena_reset(&a);
+    // 65 层 &：&x0 &x1 ... &x64 1
+    off = 0;
+    var d: usize = 0;
+    while d < 65 {
+        buf[off] = 38;
+        off = off + 1;
+        buf[off] = 120;
+        off = off + 1;
+        if d < 10 {
+            buf[off] = 48 + d as byte;
+            off = off + 1;
+        } else {
+            const t2: usize = d / 10;
+            const o2: usize = d - t2 * 10;
+            buf[off] = 48 + t2 as byte;
+            off = off + 1;
+            buf[off] = 48 + o2 as byte;
+            off = off + 1;
+        }
+        buf[off] = 32;
+        off = off + 1;
+        d = d + 1;
+    }
+    buf[off] = 49;
+    off = off + 1;
+    if !expect_err(&a, &buf[0], off) { return 4; }
+
+    return 0;
+}

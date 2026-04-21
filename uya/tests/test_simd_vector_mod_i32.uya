@@ -1,0 +1,19 @@
+// 整数向量按通道取模 %%
+type Vec4i32 = @vector(i32, 4);
+type Mask4 = @mask(4);
+
+export fn main() i32 {
+    const a: Vec4i32 = @vector.splat(17);
+    const b: Vec4i32 = @vector.splat(5);
+    const r: Vec4i32 = a % b;
+    const ok1: Mask4 = r == @vector.splat(2);
+    if @vector.all(ok1) == false {
+        return 1;
+    }
+    const u: Vec4i32 = @vector.splat(7) % b;
+    const ok2: Mask4 = u == @vector.splat(2);
+    if @vector.all(ok2) == false {
+        return 2;
+    }
+    return 0;
+}

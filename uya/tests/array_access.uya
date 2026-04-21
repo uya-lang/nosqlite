@@ -1,0 +1,17 @@
+// 数组访问测试
+
+use std.testing.assert_eq_i32;
+
+test "test_array_access" {
+    const arr: [i32: 5] = [1, 2, 3, 4, 5];
+    const x: i32 = arr[0];
+    const y: i32 = arr[1];
+    const sum: i32 = x + y;
+    try assert_eq_i32(sum, 3);
+}
+
+test "test_array_element" {
+    const arr: [i32: 5] = [1, 2, 3, 4, 5];
+    try assert_eq_i32(arr[0], 1);
+    try assert_eq_i32(arr[4], 5);
+}

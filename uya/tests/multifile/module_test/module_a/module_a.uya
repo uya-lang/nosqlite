@@ -1,0 +1,23 @@
+// module_a.uya - 模块 A：导出函数和结构体
+
+// 导出函数
+export fn public_func() i32 {
+    return 42;
+}
+
+// 未导出的函数（私有）
+fn private_func() i32 {
+    return 0;
+}
+
+// 导出结构体
+export struct PublicStruct {
+    x: i32,
+    y: i32,
+}
+
+// 未导出的结构体（私有）
+struct PrivateStruct {
+    x: i32,
+}
+

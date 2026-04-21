@@ -1,0 +1,140 @@
+// test_async_multi_fd_concurrent.uya
+// 多 fd 并发调度测试：验证多个 Future 能被 epoll 正确唤醒并全部完成
+use std.async;
+use std.async_event;
+use std.async_scheduler;
+use std.testing.assert_eq_i32;
+
+// 追踪调度行为
+var sched_loop_polls: i32 = 0;
+var sched_registrations: i32 = 0;
+var sched_task_poll_counts: [i32: 3] = [];
+
+// 固定容量 waker 追踪数组（不动态删除，用 active 标记）
+var sched_wakers: [usize: 8] = [];
+var sched_waker_active: [i32: 8] = [];
+var sched_waker_count: i32 = 0;
+var sched_waker_capacity: i32 = 8;
+
+// MockEventLoop：管理 waker 注册/唤醒，poll 时唤醒所有活跃 waker
+struct MockEventLoop : EventLoop {
+    fn register(self: &Self, fd: i32, interest: EventKind, waker: &Waker) !i32 {
+        _ = fd;
+        _ = interest;
+        sched_registrations = sched_registrations + 1;
+        if sched_waker_count < sched_waker_capacity {
+            sched_wakers[sched_waker_count as usize] = (waker as &void) as usize;
+            sched_waker_active[sched_waker_count as usize] = 1;
+            sched_waker_count = sched_waker_count + 1;
+        }
+        return 0;
+    }
+
+    fn deregister(self: &Self, fd: i32) !i32 {
+        _ = self;
+        _ = fd;
+        // 不实际清理（OS 进程退出时自动清理），只需让调度器知道状态
+        return 0;
+    }
+
+    fn poll(self: &Self, timeout_ms: i32) !i32 {
+        _ = timeout_ms;
+        sched_loop_polls = sched_loop_polls + 1;
+        // 唤醒所有活跃的 waker
+        var i: i32 = 0;
+        while i < sched_waker_count {
+            if sched_waker_active[i as usize] != 0 {
+                const wp: &Waker = (sched_wakers[i as usize] as &void) as &Waker;
+                wp.wake();
+            }
+            i = i + 1;
+        }
+        return sched_waker_count;
+    }
+}
+
+// Future：被唤醒后返回 Ready（模拟真实 I/O future）
+struct WokenReadyFuture : Future<!i32> {
+    fd: i32,
+    value: i32,
+    task_id: i32,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        sched_task_poll_counts[self.task_id as usize] = sched_task_poll_counts[self.task_id as usize] + 1;
+        if sched_loop_polls != 0 {
+            return Poll<!i32>.Ready(ok<i32>(self.value));
+        }
+        waker.wait_readable(self.fd);
+        return Poll<!i32>.Pending({});
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+test "multi_fd_concurrent_two_tasks" {
+    sched_loop_polls = 0;
+    sched_registrations = 0;
+    sched_waker_count = 0;
+    sched_task_poll_counts[0] = 0;
+    sched_task_poll_counts[1] = 0;
+
+    var s: Scheduler = scheduler_new();
+    var queue: TaskQueue_i32 = task_queue_i32_new();
+
+    var task_a: WokenReadyFuture = WokenReadyFuture{ fd: 201, value: 100, task_id: 0 };
+    var task_b: WokenReadyFuture = WokenReadyFuture{ fd: 202, value: 200, task_id: 1 };
+
+    const boxed_a: Future<!i32> = task_a;
+    const boxed_b: Future<!i32> = task_b;
+    _ = try queue.push(boxed_a);
+    _ = try queue.push(boxed_b);
+
+    const loop: EventLoop = MockEventLoop{};
+    const completed: i32 = try scheduler_run_task_queue_i32_with_event_loop(&s, loop, &queue, 0);
+
+    try assert_eq_i32(completed, 2);
+    try assert_eq_i32(queue.result(0), 100);
+    try assert_eq_i32(queue.result(1), 200);
+    try assert_eq_i32(sched_loop_polls, 1);
+    try assert_eq_i32(sched_registrations, 4);
+    try assert_eq_i32(sched_task_poll_counts[0], 2);
+    try assert_eq_i32(sched_task_poll_counts[1], 2);
+}
+
+test "multi_fd_concurrent_three_tasks" {
+    sched_loop_polls = 0;
+    sched_registrations = 0;
+    sched_waker_count = 0;
+    sched_task_poll_counts[0] = 0;
+    sched_task_poll_counts[1] = 0;
+    sched_task_poll_counts[2] = 0;
+
+    var s: Scheduler = scheduler_new();
+    var queue: TaskQueue_i32 = task_queue_i32_new();
+
+    var task_a: WokenReadyFuture = WokenReadyFuture{ fd: 301, value: 10, task_id: 0 };
+    var task_b: WokenReadyFuture = WokenReadyFuture{ fd: 302, value: 20, task_id: 1 };
+    var task_c: WokenReadyFuture = WokenReadyFuture{ fd: 303, value: 30, task_id: 2 };
+
+    const boxed_a: Future<!i32> = task_a;
+    const boxed_b: Future<!i32> = task_b;
+    const boxed_c: Future<!i32> = task_c;
+    _ = try queue.push(boxed_a);
+    _ = try queue.push(boxed_b);
+    _ = try queue.push(boxed_c);
+
+    const loop: EventLoop = MockEventLoop{};
+    const completed: i32 = try scheduler_run_task_queue_i32_with_event_loop(&s, loop, &queue, 0);
+
+    try assert_eq_i32(completed, 3);
+    try assert_eq_i32(queue.result(0), 10);
+    try assert_eq_i32(queue.result(1), 20);
+    try assert_eq_i32(queue.result(2), 30);
+    try assert_eq_i32(sched_loop_polls, 1);
+    try assert_eq_i32(sched_registrations, 6);
+    try assert_eq_i32(sched_task_poll_counts[0], 2);
+    try assert_eq_i32(sched_task_poll_counts[1], 2);
+    try assert_eq_i32(sched_task_poll_counts[2], 2);
+}

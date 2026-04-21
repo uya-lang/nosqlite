@@ -1,0 +1,153 @@
+// test_tls_mpi.uya - TLS 大数（MPI）单元测试
+// 阶段 1.1 验收：已知值加减乘除、幂模、compare；通过 --c99 与 --uya --c99
+
+use std.runtime.entry;
+use tls.base.mpi;
+use std.mem.mem_set;
+
+export fn main() i32 {
+    var a: Mpi = Mpi{};
+    var b: Mpi = Mpi{};
+    var r: Mpi = Mpi{};
+    var r2: Mpi = Mpi{};
+    var buf: [byte: 32] = [];
+
+    // 1) 空 / 零
+    mpi_init(&a);
+    if mpi_byte_len(&a) != 0 {
+        return 1;
+    }
+    const cmp0: i32 = mpi_compare(&a, &a);
+    if cmp0 != 0 {
+        return 2;
+    }
+
+    // 2) from_bytes_be / to_bytes_be  roundtrip：单字节 0x01
+    buf[0] = 1;
+    mpi_from_bytes_be(&a, &buf[0], 1) catch |_| { return 3; };
+    if mpi_byte_len(&a) != 1 {
+        return 4;
+    }
+    mem_set(&buf[0], 0, 32);
+    _ = mpi_to_bytes_be(&a, &buf[0], 32) catch |_| { return 5; };
+    if buf[0] != 1 {
+        return 6;
+    }
+    // 2b) 多字节 roundtrip：0x0102
+    var two: [byte: 2] = [0x01, 0x02];
+    mpi_from_bytes_be(&a, &two[0], 2) catch |_| { return 37; };
+    mem_set(&buf[0], 0, 32);
+    _ = mpi_to_bytes_be(&a, &buf[0], 32) catch |_| { return 38; };
+    if buf[0] != 0x01 || buf[1] != 0x02 {
+        return 39;
+    }
+
+    // 3) 已知值：0x0A + 0x05 = 0x0F
+    buf[0] = 10;
+    mpi_from_bytes_be(&a, &buf[0], 1) catch |_| { return 7; };
+    buf[0] = 5;
+    mpi_from_bytes_be(&b, &buf[0], 1) catch |_| { return 8; };
+    mpi_add(&r, &a, &b) catch |_| { return 9; };
+    mem_set(&buf[0], 0, 32);
+    _ = mpi_to_bytes_be(&r, &buf[0], 32) catch |_| { return 10; };
+    if buf[0] != 15 {
+        return 11;
+    }
+
+    // 4) 减法：0x0F - 0x05 = 0x0A
+    mpi_sub(&r, &r, &b) catch |_| { return 12; };
+    mem_set(&buf[0], 0, 32);
+    _ = mpi_to_bytes_be(&r, &buf[0], 32) catch |_| { return 13; };
+    if buf[0] != 10 {
+        return 14;
+    }
+
+    // 5) 乘法：3 * 7 = 21
+    buf[0] = 3;
+    mpi_from_bytes_be(&a, &buf[0], 1) catch |_| { return 15; };
+    buf[0] = 7;
+    mpi_from_bytes_be(&b, &buf[0], 1) catch |_| { return 16; };
+    mpi_mul(&r, &a, &b) catch |_| { return 17; };
+    mem_set(&buf[0], 0, 32);
+    _ = mpi_to_bytes_be(&r, &buf[0], 32) catch |_| { return 18; };
+    if buf[0] != 21 {
+        return 19;
+    }
+    // 5b) 乘法跨 limb：2^63 * 2 = 2^64（结果应为 0x01 00..00，9 字节）
+    var a8: [byte: 8] = [0:8];
+    a8[0] = 0x80;
+    mpi_from_bytes_be(&a, &a8[0], 8) catch |_| { return 40; };
+    buf[0] = 2;
+    mpi_from_bytes_be(&b, &buf[0], 1) catch |_| { return 41; };
+    mpi_mul(&r2, &a, &b) catch |_| { return 42; };
+    mem_set(&buf[0], 0, 32);
+    const need64: usize = mpi_to_bytes_be(&r2, &buf[0], 32) catch |_| { return 43; };
+    if need64 != 9 {
+        return 44;
+    }
+    if buf[0] != 0x01 {
+        return 45;
+    }
+    var z: usize = 1;
+    while z < 9 {
+        if buf[z] != 0 {
+            return 46;
+        }
+        z = z + 1;
+    }
+
+    // 6) 除法/取模：21 / 5 = 4 余 1
+    var q: Mpi = Mpi{};
+    var rem: Mpi = Mpi{};
+    buf[0] = 5;
+    mpi_from_bytes_be(&b, &buf[0], 1) catch |_| { return 20; };
+    mpi_div_mod(&q, &rem, &r, &b) catch |_| { return 21; };
+    mem_set(&buf[0], 0, 32);
+    _ = mpi_to_bytes_be(&q, &buf[0], 32) catch |_| { return 22; };
+    if buf[0] != 4 {
+        return 23;
+    }
+    mem_set(&buf[0], 0, 32);
+    _ = mpi_to_bytes_be(&rem, &buf[0], 32) catch |_| { return 24; };
+    if buf[0] != 1 {
+        return 25;
+    }
+
+    // 7) 幂模：2^10 mod 7 = 2
+    var m: Mpi = Mpi{};
+    buf[0] = 2;
+    mpi_from_bytes_be(&a, &buf[0], 1) catch |_| { return 26; };
+    buf[0] = 10;
+    mpi_from_bytes_be(&b, &buf[0], 1) catch |_| { return 27; };
+    buf[0] = 7;
+    mpi_from_bytes_be(&m, &buf[0], 1) catch |_| { return 28; };
+    mpi_exp_mod(&r, &a, &b, &m) catch |_| { return 29; };
+    mem_set(&buf[0], 0, 32);
+    _ = mpi_to_bytes_be(&r, &buf[0], 32) catch |_| { return 30; };
+    if buf[0] != 2 {
+        return 31;
+    }
+
+    // 8) compare：a < b => -1, a > b => 1, a == b => 0
+    buf[0] = 1;
+    mpi_from_bytes_be(&a, &buf[0], 1) catch |_| { return 32; };
+    buf[0] = 2;
+    mpi_from_bytes_be(&b, &buf[0], 1) catch |_| { return 33; };
+    if mpi_compare(&a, &b) != -1 {
+        return 34;
+    }
+    if mpi_compare(&b, &a) != 1 {
+        return 35;
+    }
+    if mpi_compare(&a, &a) != 0 {
+        return 36;
+    }
+
+    mpi_clear(&a);
+    mpi_clear(&b);
+    mpi_clear(&r);
+    mpi_clear(&q);
+    mpi_clear(&rem);
+    mpi_clear(&m);
+    return 0;
+}

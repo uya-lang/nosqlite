@@ -1,0 +1,46 @@
+// test_async_for_await.uya — @async_fn 中 range for 内 @await 状态机
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+fn ready_7() Future<!i32> {
+    const p: Poll<!i32> = Poll<!i32>.Ready(ok<i32>(7));
+    return Future<!i32>{ state: p };
+}
+
+@async_fn
+fn sum_three_awaits_in_for() Future<!i32> {
+    var t: i32 = 0;
+    for 0..3 |k| {
+        const x: i32 = try @await ready_7();
+        t = t + x + (k as i32);
+    }
+    return t;
+}
+
+test "async_for_range_with_await" {
+    const f: Future<!i32> = sum_three_awaits_in_for();
+    const v: !i32 = block_on<i32>(f);
+    const got: i32 = v catch { 0 - 1; };
+    // (7+0)+(7+1)+(7+2) = 24
+    try assert_eq_i32(got, 24);
+}
+
+@async_fn
+fn sum_array_for_with_await() Future<!i32> {
+    var a: [i32: 3] = [1, 2, 3];
+    var t: i32 = 0;
+    for a |e| {
+        const x: i32 = try @await ready_7();
+        t = t + e + x;
+    }
+    return t;
+}
+
+test "async_for_array_with_await" {
+    const f2: Future<!i32> = sum_array_for_with_await();
+    const v2: !i32 = block_on<i32>(f2);
+    const got2: i32 = v2 catch { 0 - 1; };
+    // (1+7)+(2+7)+(3+7) = 27
+    try assert_eq_i32(got2, 27);
+}

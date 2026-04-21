@@ -1,0 +1,14 @@
+// 测试extern函数声明
+use std.runtime.entry;
+// 声明一个外部函数
+extern fn add(a: i32, b: i32) i32;
+
+// 在main函数中调用extern函数
+export fn main() i32 {
+    const result: i32 = add(10, 20);
+    if result == 30 {
+        return 0;  // 测试通过（如果链接了正确的实现）
+    }
+    return 1;
+}
+

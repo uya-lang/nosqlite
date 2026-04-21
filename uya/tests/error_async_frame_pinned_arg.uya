@@ -1,0 +1,26 @@
+// error_async_frame_pinned_arg.uya
+//
+// 预期：编译失败。不能将 pinned 的 @frame 类型按值传递给函数参数。
+
+use std.async;
+
+@async_fn
+fn inner_async() Future<!i32> {
+    return 1;
+}
+
+fn takes_frame(f: @frame(inner_async)) i32 {
+    _ = f;
+    return 0;
+}
+
+@async_fn
+fn caller() Future<!i32> {
+    var a: @frame(inner_async);
+    const r: i32 = takes_frame(a);  // 错误：按值传递 pinned 类型
+    _ = r;
+    return 0;
+}
+
+test "expect_compile_fail" {
+}

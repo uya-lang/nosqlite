@@ -1,0 +1,26 @@
+// 测试 std.json 编码：数组
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.value.JsonArray;
+use std.json.encoder.encode_to;
+
+export fn main() i32 {
+    var buf: [byte: 128] = [];
+
+    const empty_arr: JsonArray = JsonArray{ items: null, len: 0 };
+    const ve: JsonValue = JsonValue.arr(empty_arr);
+    const e_len: usize = encode_to(&ve, &buf[0], 128) catch { return 1; };
+    if e_len != 2 { return 2; }
+    if buf[0] != 91 || buf[1] != 93 { return 3; }
+
+    var items: [JsonValue: 4] = [];
+    items[0] = JsonValue.int_val(1);
+    items[1] = JsonValue.int_val(2);
+    const arr2: JsonArray = JsonArray{ items: &items[0], len: 2 };
+    const v2: JsonValue = JsonValue.arr(arr2);
+    const len2: usize = encode_to(&v2, &buf[0], 128) catch { return 4; };
+    if len2 != 5 { return 5; }
+    if buf[0] != 91 || buf[1] != 49 || buf[2] != 44 || buf[3] != 50 || buf[4] != 93 { return 6; }
+
+    return 0;
+}

@@ -1,0 +1,20 @@
+// 结构体方法（无接口）：Point 有 distance 方法
+
+use std.testing.expect;
+
+struct Point {
+  x: f32,
+  y: f32
+}
+
+Point {
+  fn distance(self: &Self) f32 {
+    return self.x + self.y;
+  }
+}
+
+test "struct method" {
+  const p: Point = Point{ x: 2.0, y: 3.0 };
+  const d: f32 = p.distance();
+  try expect(d >= 4.9 && d <= 5.1);
+}

@@ -1,0 +1,176 @@
+// 覆盖 async lowering / catch codegen 的几条高风险边路径：
+// 1) @async_fn 在无 @await 时，函数体中的同步副作用与 try 语句不能被跳过
+// 2) catch 直接作用于函数调用（含 !usize / !void）时，payload 推断要正确
+// 3) 手写 Future.poll 里直接对函数调用做 catch，错误分支的副作用不能丢
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+error Foo;
+error Bar;
+
+var g_no_await_side_effect: i32 = 0;
+
+fn may_fail(flag: i32) !usize {
+    if flag != 0 {
+        return error.Foo;
+    }
+    return 11 as usize;
+}
+
+fn may_fail_void(flag: i32) !void {
+    if flag != 0 {
+        return error.Bar;
+    }
+}
+
+fn catch_call_expr_value(flag: i32) i32 {
+    const x: usize = may_fail(flag) catch |err| {
+        _ = err;
+        return -1;
+    };
+    return x as i32;
+}
+
+fn catch_call_expr_void(flag: i32) i32 {
+    may_fail_void(flag) catch |err| {
+        _ = err;
+        return -2;
+    };
+    return 9;
+}
+
+fn try_void_then_value(flag: i32) !i32 {
+    try may_fail_void(flag);
+    return 7;
+}
+
+@async_fn
+fn no_await_with_side_effect() Future<!i32> {
+    g_no_await_side_effect = 5;
+    return 7;
+}
+
+@async_fn
+fn no_await_with_locals() Future<!i32> {
+    const a: i32 = 3;
+    const b: i32 = a + 4;
+    return b;
+}
+
+@async_fn
+fn async_try_sync_void_then_value(flag: i32) Future<!i32> {
+    try may_fail_void(flag);
+    return 7;
+}
+
+struct PollCatchCallFuture : Future<!usize> {
+    stage: i32,
+    fail: i32,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!usize> {
+        _ = waker;
+        if self.stage == 0 {
+            const n: usize = may_fail(self.fail) catch |err| {
+                _ = err;
+                self.stage = 1;
+                return async_poll_ready_ok_usize(99);
+            };
+            return async_poll_ready_ok_usize(n);
+        }
+        return async_poll_ready_ok_usize(7);
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+test "async_no_await_body_keeps_side_effects_and_locals" {
+    g_no_await_side_effect = 0;
+
+    const w: Waker = Waker{};
+    const f1: Future<!i32> = no_await_with_side_effect();
+    const p1: Poll<!i32> = f1.poll(&w);
+    var v1: i32 = -1;
+    match p1 {
+        .Ready(r1) => { v1 = r1 catch { -2; }; },
+        .Pending(_) => { v1 = -3; },
+    };
+    try assert_eq_i32(v1, 7);
+    try assert_eq_i32(g_no_await_side_effect, 5);
+
+    const f2: Future<!i32> = no_await_with_locals();
+    const p2: Poll<!i32> = f2.poll(&w);
+    var v2: i32 = -1;
+    match p2 {
+        .Ready(r2) => { v2 = r2 catch { -2; }; },
+        .Pending(_) => { v2 = -3; },
+    };
+    try assert_eq_i32(v2, 7);
+}
+
+test "async_no_await_try_sync_void_propagates_error" {
+    const w: Waker = Waker{};
+
+    const ok_f: Future<!i32> = async_try_sync_void_then_value(0);
+    const ok_p: Poll<!i32> = ok_f.poll(&w);
+    var ok_v: i32 = -1;
+    match ok_p {
+        .Ready(r) => { ok_v = r catch { -2; }; },
+        .Pending(_) => { ok_v = -3; },
+    };
+    try assert_eq_i32(ok_v, 7);
+
+    const err_f: Future<!i32> = async_try_sync_void_then_value(1);
+    const err_p: Poll<!i32> = err_f.poll(&w);
+    var err_seen: i32 = 0;
+    match err_p {
+        .Ready(r2) => {
+            _ = r2 catch {
+                err_seen = 1;
+                0;
+            };
+        },
+        .Pending(_) => { err_seen = -1; },
+    };
+    try assert_eq_i32(err_seen, 1);
+}
+
+test "catch_direct_call_expr_paths_work" {
+    try assert_eq_i32(catch_call_expr_value(0), 11);
+    try assert_eq_i32(catch_call_expr_value(1), -1);
+    try assert_eq_i32(catch_call_expr_void(0), 9);
+    try assert_eq_i32(catch_call_expr_void(1), -2);
+
+    const ok_v: i32 = try_void_then_value(0) catch { -9; };
+    try assert_eq_i32(ok_v, 7);
+    const err_v: i32 = try_void_then_value(1) catch { -8; };
+    try assert_eq_i32(err_v, -8);
+}
+
+test "poll_catch_direct_call_keeps_side_effect" {
+    var fut_err: PollCatchCallFuture = PollCatchCallFuture{ stage: 0, fail: 1 };
+    const w: Waker = Waker{};
+    var got_err: i32 = -10;
+    match fut_err.poll(&w) {
+        .Ready(r) => {
+            const as_i32: !i32 = (r catch { 0 as usize; }) as! i32;
+            got_err = as_i32 catch { -12; };
+        },
+        .Pending(_) => { got_err = -11; },
+    };
+    try assert_eq_i32(got_err, 99);
+    try assert_eq_i32(fut_err.stage, 1);
+
+    var fut_ok: PollCatchCallFuture = PollCatchCallFuture{ stage: 0, fail: 0 };
+    var got_ok: i32 = -10;
+    match fut_ok.poll(&w) {
+        .Ready(r2) => {
+            const as_i32_2: !i32 = (r2 catch { 0 as usize; }) as! i32;
+            got_ok = as_i32_2 catch { -12; };
+        },
+        .Pending(_) => { got_ok = -11; },
+    };
+    try assert_eq_i32(got_ok, 11);
+}

@@ -1,0 +1,40 @@
+// test_tls_drbg.uya - TLS HMAC-DRBG 测试（NIST SP 800-90A）
+// 阶段 2.5：固定 entropy+nonce，校验确定性及非零输出
+
+use std.runtime.entry;
+use tls.base.drbg;
+use tls.crypto.hmac;
+use tls.crypto.sha256;
+use tls.crypto.sha384;
+
+export fn main() i32 {
+    const entropy: [byte: 32] = [
+        0x06, 0x03, 0x2c, 0xd5, 0xee, 0xd3, 0x3f, 0x39, 0x26, 0x5f, 0x49, 0xec, 0xb1, 0x42, 0xc5, 0x11,
+        0xda, 0x9a, 0xff, 0x2a, 0xf7, 0x12, 0x03, 0xbf, 0xfa, 0xf3, 0x4a, 0x9c, 0xa5, 0xbd, 0x9c, 0x0d,
+    ];
+    const nonce: [byte: 16] = [
+        0x0e, 0x66, 0xf7, 0x1e, 0xdc, 0x43, 0xe4, 0x2a, 0x45, 0xad, 0x3c, 0x6f, 0xc6, 0xcd, 0xc4, 0xdf,
+    ];
+    var ctx: DrbgCtx = DrbgCtx{ key: [0:32], v: [0:32] };
+    drbg_init(&ctx, &entropy[0], 32, &nonce[0], 16) catch |_| { return 1; };
+    var out1: [byte: 32] = [];
+    drbg_fill_random(&ctx, &out1[0], 32) catch |_| { return 3; };
+    var any_nonzero: usize = 0;
+    var i: usize = 0;
+    while i < 32 {
+        if out1[i] != 0 {
+            any_nonzero = 1;
+        }
+        i = i + 1;
+    }
+    if any_nonzero == 0 { return 10; }
+    drbg_init(&ctx, &entropy[0], 32, &nonce[0], 16) catch |_| { return 11; };
+    var out2: [byte: 32] = [];
+    drbg_fill_random(&ctx, &out2[0], 32) catch |_| { return 12; };
+    i = 0;
+    while i < 32 {
+        if out1[i] != out2[i] { return 20; }
+        i = i + 1;
+    }
+    return 0;
+}

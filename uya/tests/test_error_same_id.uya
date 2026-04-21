@@ -1,0 +1,18 @@
+// 相同错误名在任意位置得到相同 error_id
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+error SameName;
+
+fn ret_a() !i32 { return error.SameName; }
+fn ret_b() !i32 { return error.SameName; }
+
+test "test_same_error_id" {
+    const a: i32 = ret_a() catch { 1; };
+    const b: i32 = ret_b() catch { 2; };
+    // 验证两个函数返回相同的错误
+    try assert_eq_i32(a, 1);
+    try assert_eq_i32(b, 2);
+}

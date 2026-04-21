@@ -1,0 +1,66 @@
+// std.protobuf：截断 varint、超长 varint、field 0、非法 bool
+use std.runtime.entry;
+use std.protobuf.decode.decode_demo_user;
+use std.protobuf.wire.PbCursor;
+use std.protobuf.wire.pb_cursor;
+use std.protobuf.wire.pb_read_varint_u64;
+use std.protobuf.wire.pb_validate_field_number;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.protobuf.demo.DemoUser;
+
+fn decode_demo_user_fails(a: &Arena, p: &byte, n: usize) bool {
+    const _x: DemoUser = decode_demo_user(a, p, n) catch {
+        return true;
+    };
+    return false;
+}
+
+export fn main() i32 {
+    var arena_buf: [byte: 64] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 64);
+
+    var b1: [byte: 1] = [ 128 ];
+    var c1: PbCursor = pb_cursor(&b1[0], 1);
+    var got_trunc: bool = false;
+    pb_read_varint_u64(&c1) catch {
+        got_trunc = true;
+    };
+    if !got_trunc {
+        return 1;
+    }
+
+    var b2: [byte: 11] = [];
+    var j: usize = 0;
+    while j < 11 {
+        b2[j] = 255;
+        j = j + 1;
+    }
+    var c2: PbCursor = pb_cursor(&b2[0], 11);
+    var got_inv: bool = false;
+    pb_read_varint_u64(&c2) catch {
+        got_inv = true;
+    };
+    if !got_inv {
+        return 2;
+    }
+
+    var got_f0: bool = false;
+    pb_validate_field_number(0) catch {
+        got_f0 = true;
+    };
+    if !got_f0 {
+        return 3;
+    }
+
+    // field 3 (bool), varint payload 2 → InvalidBool
+    var b4: [byte: 2] = [];
+    b4[0] = 24;
+    b4[1] = 2;
+    if !decode_demo_user_fails(&a, &b4[0], 2) {
+        return 4;
+    }
+
+    return 0;
+}

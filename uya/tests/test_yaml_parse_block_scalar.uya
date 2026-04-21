@@ -1,0 +1,81 @@
+// 块标量 | 字面 / > 折叠
+use std.runtime.entry;
+use std.yaml.value.YamlValue;
+use std.yaml.parser.parse;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.mem.arena.arena_reset;
+
+export fn main() i32 {
+    var arena_buf: [byte: 8192] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 8192);
+
+    var buf: [byte: 128] = [];
+    // t: |\n  hi\n  lo\n
+    buf[0] = 116;
+    buf[1] = 58;
+    buf[2] = 32;
+    buf[3] = 124;
+    buf[4] = 10;
+    buf[5] = 32;
+    buf[6] = 32;
+    buf[7] = 104;
+    buf[8] = 105;
+    buf[9] = 10;
+    buf[10] = 32;
+    buf[11] = 32;
+    buf[12] = 108;
+    buf[13] = 111;
+    buf[14] = 10;
+    const vl: YamlValue = parse(&a, &buf[0], 15) catch { return 1; };
+    match vl {
+        .y_obj(o) => {
+            if o.len != 1 { return 2; }
+            match o.pairs[0].value {
+                .y_str(s) => {
+                    if s.len != 5 { return 3; }
+                    if s.ptr[0] != 104 || s.ptr[1] != 105 || s.ptr[2] != 10 || s.ptr[3] != 108 || s.ptr[4] != 111 { return 4; }
+                },
+                else => { return 5; },
+            }
+        },
+        else => { return 6; },
+    }
+
+    // t: >\n  one\n  two\n
+    buf[0] = 116;
+    buf[1] = 58;
+    buf[2] = 32;
+    buf[3] = 62;
+    buf[4] = 10;
+    buf[5] = 32;
+    buf[6] = 32;
+    buf[7] = 111;
+    buf[8] = 110;
+    buf[9] = 101;
+    buf[10] = 10;
+    buf[11] = 32;
+    buf[12] = 32;
+    buf[13] = 116;
+    buf[14] = 119;
+    buf[15] = 111;
+    buf[16] = 10;
+    arena_reset(&a);
+    const vf: YamlValue = parse(&a, &buf[0], 17) catch { return 7; };
+    match vf {
+        .y_obj(o2) => {
+            if o2.len != 1 { return 8; }
+            match o2.pairs[0].value {
+                .y_str(s2) => {
+                    if s2.len != 7 { return 9; }
+                    if s2.ptr[0] != 111 || s2.ptr[1] != 110 || s2.ptr[2] != 101 || s2.ptr[3] != 32 || s2.ptr[4] != 116 || s2.ptr[5] != 119 || s2.ptr[6] != 111 { return 10; }
+                },
+                else => { return 11; },
+            }
+        },
+        else => { return 12; },
+    }
+
+    return 0;
+}

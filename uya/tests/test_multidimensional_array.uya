@@ -1,0 +1,174 @@
+// 多维数组测试程序
+use std.runtime.entry;
+// 测试多维数组的定义、初始化、访问、sizeof、len
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn sum_2d_array(arr: [[i32: 2]: 3]) i32 {
+    var total: i32 = 0;
+    var i3: i32 = 0;
+    while i3 < @len(arr) {
+        var j3: i32 = 0;
+        while j3 < @len(arr[i3]) {
+            total = total + arr[i3][j3];
+            j3 = j3 + 1;
+        }
+        i3 = i3 + 1;
+    }
+    return total;
+}
+
+fn test_2d_init() !void {
+    var arr2d: [[i32: 2]: 3] = [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+    ];
+    
+    try assert_eq_i32(arr2d[0][0], 1);
+    try assert_eq_i32(arr2d[0][1], 2);
+    try assert_eq_i32(arr2d[1][0], 3);
+    try assert_eq_i32(arr2d[1][1], 4);
+    try assert_eq_i32(arr2d[2][0], 5);
+    try assert_eq_i32(arr2d[2][1], 6);
+}
+
+fn test_2d_modify() !void {
+    var arr2d: [[i32: 2]: 3] = [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+    ];
+    
+    arr2d[0][0] = 10;
+    arr2d[1][1] = 40;
+    
+    try assert_eq_i32(arr2d[0][0], 10);
+    try assert_eq_i32(arr2d[1][1], 40);
+}
+
+fn test_2d_sizeof() !void {
+    var arr2d: [[i32: 2]: 3] = [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+    ];
+    
+    const arr2d_type_size: i32 = @size_of([[i32: 2]: 3]);
+    try assert_eq_i32(arr2d_type_size, 24);
+    
+    const arr2d_var_size: i32 = @size_of(arr2d);
+    try assert_eq_i32(arr2d_var_size, 24);
+    
+    const arr1d_size: i32 = @size_of(arr2d[0]);
+    try assert_eq_i32(arr1d_size, 8);
+}
+
+fn test_2d_len() !void {
+    var arr2d: [[i32: 2]: 3] = [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+    ];
+    
+    const arr2d_len: i32 = @len(arr2d);
+    try assert_eq_i32(arr2d_len, 3);
+    
+    const arr1d_len: i32 = @len(arr2d[0]);
+    try assert_eq_i32(arr1d_len, 2);
+}
+
+fn test_3d_array() !void {
+    var arr3d: [[[i32: 2]: 2]: 2] = [
+        [
+            [1, 2],
+            [3, 4],
+        ],
+        [
+            [5, 6],
+            [7, 8],
+        ],
+    ];
+    
+    try assert_eq_i32(arr3d[0][0][0], 1);
+    try assert_eq_i32(arr3d[0][0][1], 2);
+    try assert_eq_i32(arr3d[1][1][0], 7);
+    try assert_eq_i32(arr3d[1][1][1], 8);
+    
+    const arr3d_size: i32 = @size_of(arr3d);
+    try assert_eq_i32(arr3d_size, 32);
+    
+    const arr3d_len: i32 = @len(arr3d);
+    try assert_eq_i32(arr3d_len, 2);
+    
+    const arr2d_inner_len: i32 = @len(arr3d[0]);
+    try assert_eq_i32(arr2d_inner_len, 2);
+}
+
+fn test_2d_loop() !void {
+    var arr2d: [[i32: 2]: 3] = [
+        [10, 2],
+        [3, 40],
+        [5, 6],
+    ];
+    
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    while i < @len(arr2d) {
+        var j: i32 = 0;
+        while j < @len(arr2d[i]) {
+            sum = sum + arr2d[i][j];
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    try assert_eq_i32(sum, 66);
+    
+    var sum2: i32 = 0;
+    for arr2d |row| {
+        var j2: i32 = 0;
+        while j2 < @len(row) {
+            sum2 = sum2 + row[j2];
+            j2 = j2 + 1;
+        }
+    }
+    try assert_eq_i32(sum2, 66);
+}
+
+fn test_2d_function_param() !void {
+    var arr2d2: [[i32: 2]: 3] = [
+        [1, 1],
+        [1, 1],
+        [1, 1],
+    ];
+    var total: i32 = sum_2d_array(arr2d2);
+    try assert_eq_i32(total, 6);
+}
+
+fn test_2d_align() !void {
+    var arr2d: [[i32: 2]: 3] = [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+    ];
+    
+    const arr2d_align: i32 = @align_of(arr2d);
+    try assert_eq_i32(arr2d_align, 4);
+}
+
+export fn main() i32 {
+    test_suite_begin("Multidimensional Array Tests");
+    run_test("2d init", test_2d_init);
+    run_test("2d modify", test_2d_modify);
+    run_test("2d sizeof", test_2d_sizeof);
+    run_test("2d len", test_2d_len);
+    run_test("3d array", test_3d_array);
+    run_test("2d loop", test_2d_loop);
+    run_test("2d function param", test_2d_function_param);
+    run_test("2d align", test_2d_align);
+    return test_suite_end();
+}

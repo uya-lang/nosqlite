@@ -1,0 +1,68 @@
+// test_async_compound_try_await.uya
+// 回归：复合表达式中的 try @await 必须能在 poll/resume 间正确重放。
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+struct FlipPending : Future<!i32> {
+    polled: i32,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        _ = waker;
+        if self.polled == 0 {
+            self.polled = 1;
+            return Poll<!i32>.Pending({});
+        }
+        return Poll<!i32>.Ready(ok<i32>(2));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+fn flip_pending() Future<!i32> {
+    return FlipPending{ polled: 0 };
+}
+
+@async_fn
+fn compound_assign_then_return() Future<!i32> {
+    var total: i32 = 1;
+    total = total + (try @await flip_pending());
+    return total;
+}
+
+@async_fn
+fn compound_return_expr() Future<!i32> {
+    return 1 + (try @await flip_pending());
+}
+
+fn assert_pending_then_ready_three(f: Future<!i32>) !void {
+    const w: Waker = Waker{};
+
+    const p1: Poll<!i32> = f.poll(&w);
+    var pending_seen: i32 = 0;
+    match p1 {
+        .Pending(_) => { pending_seen = 1; },
+        .Ready(_) => { pending_seen = 0; },
+    };
+    try assert_eq_i32(pending_seen, 1);
+
+    const p2: Poll<!i32> = f.poll(&w);
+    var result: i32 = 0 - 1;
+    match p2 {
+        .Pending(_) => { result = 0 - 2; },
+        .Ready(r) => { result = r catch { 0 - 3; }; },
+    };
+    try assert_eq_i32(result, 3);
+}
+
+test "async_compound_assign_try_await_replays" {
+    const f: Future<!i32> = compound_assign_then_return();
+    try assert_pending_then_ready_three(f);
+}
+
+test "async_compound_return_try_await_replays" {
+    const f: Future<!i32> = compound_return_expr();
+    try assert_pending_then_ready_three(f);
+}

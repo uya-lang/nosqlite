@@ -1,0 +1,93 @@
+// test_byte.uya - byte 类型测试
+use std.runtime.entry;
+// 使用 lib/std/testing.uya 测试框架
+
+use std.testing.assert;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+fn test_byte_const() !void {
+    const byte_const: byte = 0 as byte;
+    try assert(byte_const == 0 as byte, "byte const should be 0");
+    
+    const byte_const2: byte = 255 as byte;
+    try assert(byte_const2 == 255 as byte, "byte const should be 255");
+}
+
+fn test_byte_var() !void {
+    var byte_var: byte = 42 as byte;
+    try assert(byte_var == 42 as byte, "byte var should be 42");
+    
+    byte_var = 100 as byte;
+    try assert(byte_var == 100 as byte, "byte var should be 100 after assignment");
+}
+
+fn test_byte_sizeof() !void {
+    const byte_size: i32 = @size_of(byte);
+    try assert_eq_i32(byte_size, 1);
+    
+    var byte_var: byte = 42 as byte;
+    const byte_var_size: i32 = @size_of(byte_var);
+    try assert_eq_i32(byte_var_size, 1);
+}
+
+fn test_byte_pointer_size() !void {
+    const ptr_byte_size: i32 = @size_of(&byte);
+    try assert_eq_i32(ptr_byte_size, 8);
+}
+
+fn test_byte_pointer() !void {
+    var byte_var: byte = 100 as byte;
+    var byte_ptr: &byte = &byte_var;
+    try assert(byte_ptr != null, "pointer should not be null");
+    
+    // 通过指针读取
+    const byte_val: byte = *byte_ptr;
+    try assert(byte_val == 100 as byte, "pointer deref should be 100");
+    
+    // 通过指针修改
+    *byte_ptr = 200 as byte;
+    try assert(byte_var == 200 as byte, "byte var should be 200 after pointer write");
+}
+
+fn test_null_pointer() !void {
+    var null_byte_ptr: &byte = null;
+    try assert(null_byte_ptr == null, "null pointer should be null");
+}
+
+fn test_pointer_compare() !void {
+    var byte_var: byte = 100 as byte;
+    var byte_var2: byte = 50 as byte;
+    
+    var byte_ptr: &byte = &byte_var;
+    var byte_ptr2: &byte = &byte_var2;
+    
+    try assert(byte_ptr != byte_ptr2, "different pointers should not be equal");
+    
+    var byte_ptr3: &byte = &byte_var;
+    try assert(byte_ptr == byte_ptr3, "same address pointers should be equal");
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    test_suite_begin("Byte Type Tests");
+    
+    run_test("byte_const", test_byte_const);
+    run_test("byte_var", test_byte_var);
+    run_test("byte_sizeof", test_byte_sizeof);
+    run_test("byte_pointer_size", test_byte_pointer_size);
+    run_test("byte_pointer", test_byte_pointer);
+    run_test("null_pointer", test_null_pointer);
+    run_test("pointer_compare", test_pointer_compare);
+    
+    return test_suite_end();
+}

@@ -1,0 +1,12 @@
+// 测试导出变量功能
+use std.runtime.entry;
+
+// 导出 Uya 变量给 C
+export var debug_mode: i32 = 0;
+
+export fn main() i32 {
+    // 写入导出变量
+    debug_mode = 1;
+    
+    return 0;
+}

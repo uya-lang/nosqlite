@@ -1,0 +1,22 @@
+// error_async_frame_pinned_struct_init.uya
+//
+// 预期：编译失败。结构体字段不能按值包含 @frame 类型（pinned type）。
+
+use std.async;
+
+@async_fn
+fn inner_async() Future<!i32> {
+    return 1;
+}
+
+struct Box {
+    frame: @frame(inner_async),
+}
+
+fn make_box() Box {
+    var f: @frame(inner_async);
+    return Box{ frame: f };  // 错误：按值搬入 pinned 字段
+}
+
+test "expect_compile_fail" {
+}

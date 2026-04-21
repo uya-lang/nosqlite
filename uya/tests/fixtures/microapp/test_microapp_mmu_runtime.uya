@@ -1,0 +1,6 @@
+export fn main() i32 {
+    var a: u8 = 1u8;
+    var b: &u8 = &a;
+    *b = 2u8;
+    return a as i32;
+}

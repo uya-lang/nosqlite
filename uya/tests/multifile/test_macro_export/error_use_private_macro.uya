@@ -1,0 +1,10 @@
+// 测试私有宏不能被导入（预期编译失败）
+// private_macro 在 macro_lib 中没有 export 标记
+
+use macro_lib.private_macro;
+
+fn main() i32 {
+    const val: i32 = private_macro();
+    return val - 999;
+}
+

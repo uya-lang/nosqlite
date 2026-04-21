@@ -1,0 +1,17 @@
+// 最简单的测试：只测试 *const byte 类型
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_const_byte_ptr() !void {
+    try expect(true);
+}
+
+export fn main() i32 {
+    test_suite_begin("Const Simple Tests");
+    run_test("const byte ptr", test_const_byte_ptr);
+    return test_suite_end();
+}

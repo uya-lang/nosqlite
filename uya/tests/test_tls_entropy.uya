@@ -1,0 +1,22 @@
+// test_tls_entropy.uya - TLS 熵源验收：fill_entropy 输出非全零，或平台不支持时跳过
+// 阶段 1.2 验收；make tests 通过：有 /dev/urandom 则校验非全零，否则跳过（返回 0）
+
+use std.runtime.entry;
+use tls.base.entropy;
+use std.mem.mem.mem_set;
+
+export fn main() i32 {
+    var buf: [byte: 64] = [];
+    mem_set(&buf[0], 0, 64);
+    fill_entropy(&buf[0], 64) catch |_| {
+        return 0;
+    };
+    var i: usize = 0;
+    while i < 64 {
+        if buf[i] != 0 {
+            return 0;
+        }
+        i = i + 1;
+    }
+    return 2;
+}

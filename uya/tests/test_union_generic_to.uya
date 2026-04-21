@@ -1,0 +1,42 @@
+// 测试 union + 泛型基础
+use std.runtime.entry;
+
+struct IdentifierData {
+    name: &[byte],
+}
+
+struct NumberData {
+    value: i32,
+}
+
+union NodeData {
+    identifier: IdentifierData,
+    number: NumberData,
+}
+
+struct Node {
+    data: NodeData,
+}
+
+// 简单测试：不带泛型的 match
+fn get_identifier_name(node: &Node) &[byte] {
+    match node.data {
+        .identifier(d) => {
+            return d.name;
+        }
+        .number(d) => {
+            const empty: &[byte] = &[0: 0];
+            return empty;
+        }
+    }
+}
+
+export fn main() i32 {
+    var node: Node = Node{
+        data: NodeData.identifier(IdentifierData{ name: "foo" }),
+    };
+
+    const name: &[byte] = get_identifier_name(&node);
+
+    return 0;
+}

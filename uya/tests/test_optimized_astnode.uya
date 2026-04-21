@@ -1,0 +1,195 @@
+// 测试优化后的 ASTNode 大小
+use std.runtime.entry;
+// 目标：从 1416 字节减少到 100-150 字节
+
+use std.testing.assert_true;
+
+// ========== 新的 ASTNode 结构定义 ==========
+
+// 节点类型枚举（简化版）
+enum OptimizedASTNodeType {
+    OPT_PROGRAM,
+    OPT_FN_DECL,
+    OPT_STRUCT_DECL,
+    OPT_VAR_DECL,
+    OPT_BINARY_EXPR,
+    OPT_CALL_EXPR,
+    OPT_IDENTIFIER,
+    OPT_NUMBER,
+    OPT_STRING,
+    OPT_IF_STMT,
+    OPT_WHILE_STMT,
+    OPT_FOR_STMT,
+    OPT_BLOCK,
+}
+
+// 各节点类型的数据结构
+struct ProgramData {
+    decls: *void,        // **ASTNode (FFI 指针)
+    decl_count: i32,
+}
+
+struct FnDeclData {
+    name: *byte,
+    params: *void,       // **ASTNode
+    param_count: i32,
+    return_type: *void,  // *ASTNode
+    body: *void,         // *ASTNode
+    is_export: i32,
+    is_extern: i32,
+    is_varargs: i32,
+    is_async: i32,
+    extern_lib_name: *byte,
+    type_params: *void,  // *TypeParam
+    type_param_count: i32,
+}
+
+struct StructDeclData {
+    name: *byte,
+    fields: *void,       // **ASTNode
+    field_count: i32,
+    methods: *void,      // **ASTNode
+    method_count: i32,
+    interfaces: *void,   // **byte
+    interface_count: i32,
+    type_params: *void,  // *TypeParam
+    type_param_count: i32,
+    is_export: i32,
+}
+
+struct VarDeclData {
+    name: *byte,
+    var_type: *void,     // *ASTNode
+    init: *void,         // *ASTNode
+    is_const: i32,
+    is_export: i32,
+    was_moved: i32,
+}
+
+struct BinaryExprData {
+    left: *void,         // *ASTNode
+    op: i32,
+    right: *void,        // *ASTNode
+}
+
+struct CallExprData {
+    callee: *void,       // *ASTNode
+    args: *void,         // **ASTNode
+    arg_count: i32,
+    type_args: *void,    // **ASTNode
+    type_arg_count: i32,
+    has_ellipsis: i32,
+}
+
+struct IdentifierData {
+    name: *byte,
+}
+
+struct NumberData {
+    value: i32,
+}
+
+struct StringData {
+    value: *byte,
+}
+
+struct IfStmtData {
+    condition: *void,    // *ASTNode
+    then_branch: *void,  // *ASTNode
+    else_branch: *void,  // *ASTNode
+}
+
+struct WhileStmtData {
+    condition: *void,    // *ASTNode
+    body: *void,         // *ASTNode
+}
+
+struct ForStmtData {
+    array: *void,        // *ASTNode
+    var_name: *byte,
+    is_ref: i32,
+    is_range: i32,
+    range_start: *void,  // *ASTNode
+    range_end: *void,    // *ASTNode
+    body: *void,         // *ASTNode
+}
+
+struct BlockData {
+    stmts: *void,        // **ASTNode
+    stmt_count: i32,
+}
+
+// Union 组合所有数据
+union OptimizedASTNodeData {
+    program: ProgramData,
+    fn_decl: FnDeclData,
+    struct_decl: StructDeclData,
+    var_decl: VarDeclData,
+    binary_expr: BinaryExprData,
+    call_expr: CallExprData,
+    identifier: IdentifierData,
+    number: NumberData,
+    string: StringData,
+    if_stmt: IfStmtData,
+    while_stmt: WhileStmtData,
+    for_stmt: ForStmtData,
+    block: BlockData,
+}
+
+// 优化后的 ASTNode
+struct OptimizedASTNode {
+    type: OptimizedASTNodeType,
+    line: i32,
+    column: i32,
+    filename: *byte,
+    data: OptimizedASTNodeData,
+}
+
+// ========== 测试 ==========
+
+fn test_optimized_astnode_size() !void {
+    const node_size: usize = @size_of(OptimizedASTNode);
+    const node_align: usize = @align_of(OptimizedASTNode);
+
+    printf("OptimizedASTNode size: %zu bytes\n", node_size);
+    printf("OptimizedASTNode align: %zu bytes\n", node_align);
+    printf("Target: 100-150 bytes\n");
+
+    // 目标：小于 200 字节
+    const is_within_target: bool = node_size < 200;
+    if !is_within_target {
+        printf("ERROR: OptimizedASTNode is too large! Expected < 200 bytes\n");
+        return error.AssertionFailed;
+    }
+}
+
+fn test_union_size() !void {
+    // Note: @size_of(union) in Uya returns the tagged union wrapper size
+    // The actual union size can be calculated as: @size_of(OptimizedASTNode) - 20 (公共字段)
+    const node_size: usize = @size_of(OptimizedASTNode);
+    const union_size: usize = node_size - 20;  // 减去 type(4) + line(4) + column(4) + filename(8)
+    printf("Estimated union size: %zu bytes\n", union_size);
+}
+
+fn test_individual_struct_sizes() !void {
+    printf("Individual struct sizes:\n");
+    printf("  ProgramData: %zu bytes\n", @size_of(ProgramData));
+    printf("  FnDeclData: %zu bytes\n", @size_of(FnDeclData));
+    printf("  StructDeclData: %zu bytes\n", @size_of(StructDeclData));
+    printf("  VarDeclData: %zu bytes\n", @size_of(VarDeclData));
+    printf("  BinaryExprData: %zu bytes\n", @size_of(BinaryExprData));
+    printf("  CallExprData: %zu bytes\n", @size_of(CallExprData));
+    printf("  IdentifierData: %zu bytes\n", @size_of(IdentifierData));
+    printf("  NumberData: %zu bytes\n", @size_of(NumberData));
+}
+
+export fn main() i32 {
+    printf("=== ASTNode Optimization Size Test ===\n");
+    printf("Original ASTNode: 1416 bytes\n\n");
+
+    test_optimized_astnode_size() catch { return 1; };
+    test_union_size() catch { };
+    test_individual_struct_sizes() catch { };
+
+    return 0;
+}

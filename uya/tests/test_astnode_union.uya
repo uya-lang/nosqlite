@@ -1,0 +1,113 @@
+// 测试 ASTNode 使用 union 优化内存的可行性
+use std.runtime.entry;
+// 验证：数据结构体 + union + 公共字段的结构是否可行
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 模拟 ASTNodeType 枚举
+enum MockASTType {
+    MOCK_PROGRAM,
+    MOCK_BINARY_EXPR,
+    MOCK_NUMBER,
+}
+
+// 数据结构体：Program
+struct MockProgramData {
+    decls: &i32,        // 模拟指针
+    decl_count: i32,
+}
+
+// 数据结构体：BinaryExpr
+struct MockBinaryExprData {
+    left: &i32,         // 模拟指针
+    right: &i32,
+    op: i32,
+}
+
+// 数据结构体：Number
+struct MockNumberData {
+    value: i32,
+}
+
+// Union：包含所有数据结构体变体
+union MockASTData {
+    program: MockProgramData,
+    binary_expr: MockBinaryExprData,
+    number: MockNumberData,
+}
+
+// 最终结构：公共字段 + union
+struct MockASTNode {
+    type_id: MockASTType,
+    line: i32,
+    column: i32,
+    data: MockASTData,
+}
+
+fn test_astnode_program() !void {
+    var node: MockASTNode = MockASTNode{
+        type_id: MockASTType.MOCK_PROGRAM,
+        line: 10,
+        column: 5,
+        data: MockASTData.program(MockProgramData{ 
+            decls: null, 
+            decl_count: 42 
+        }),
+    };
+    
+    // 通过 match 访问 union 变体
+    const result: i32 = match node.data {
+        .program(p) => p.decl_count,
+        .binary_expr(b) => b.op,
+        .number(n) => n.value,
+    };
+    try assert_eq_i32(result, 42);
+}
+
+fn test_astnode_binary() !void {
+    var node: MockASTNode = MockASTNode{
+        type_id: MockASTType.MOCK_BINARY_EXPR,
+        line: 20,
+        column: 10,
+        data: MockASTData.binary_expr(MockBinaryExprData{
+            left: null,
+            right: null,
+            op: 100,
+        }),
+    };
+    
+    const result: i32 = match node.data {
+        .program(p) => p.decl_count,
+        .binary_expr(b) => b.op,
+        .number(n) => n.value,
+    };
+    try assert_eq_i32(result, 100);
+}
+
+fn test_astnode_number() !void {
+    var node: MockASTNode = MockASTNode{
+        type_id: MockASTType.MOCK_NUMBER,
+        line: 30,
+        column: 15,
+        data: MockASTData.number(MockNumberData{ value: 999 }),
+    };
+    
+    const result: i32 = match node.data {
+        .program(p) => p.decl_count,
+        .binary_expr(b) => b.op,
+        .number(n) => n.value,
+    };
+    try assert_eq_i32(result, 999);
+}
+
+export fn main() i32 {
+    test_suite_begin("ASTNode Union Tests");
+    run_test("astnode program", test_astnode_program);
+    run_test("astnode binary", test_astnode_binary);
+    run_test("astnode number", test_astnode_number);
+    return test_suite_end();
+}

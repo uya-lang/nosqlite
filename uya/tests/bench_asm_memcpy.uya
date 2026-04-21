@@ -1,0 +1,195 @@
+// bench_asm_memcpy.uya - 内存复制性能基准测试
+// 对比纯 Uya 实现与标准库 memcpy 的性能
+//
+// 注意：此文件最初使用了 @asm { "nop" ... } 占位符实现，虽然不会死循环，
+// 但没有实际复制数据。已修复为使用实际的 Uya 代码实现。
+
+extern "libc" fn printf(fmt: *byte, ...) i32;
+extern "libc" fn clock() i64;
+extern "libc" fn malloc(size: usize) *void;
+extern "libc" fn free(ptr: *void) void;
+extern "libc" fn memcpy(dest: *void, src: *const void, n: usize) *void;
+
+// 使用纯 Uya 实现简单的内存复制（字节级）
+fn asm_memcpy_byte(dest: &byte, src: &const byte, n: usize) void {
+    var i: usize = 0;
+    while i < n {
+        dest[i] = src[i];
+        i = i + 1;
+    }
+}
+
+// 批量复制优化（一次复制 8 字节）
+fn asm_memcpy_u64(dest: &u64, src: &const u64, n: usize) void {
+    var i: usize = 0;
+    while i < n {
+        dest[i] = src[i];
+        i = i + 1;
+    }
+}
+
+// 测试小数据量复制（32 字节）
+test "bench memcpy small (32 bytes)" {
+    const size: usize = 32;
+    var src: [byte: 32] = [];
+    var dest: [byte: 32] = [];
+    
+    // 初始化源数据
+    var i: usize = 0;
+    while i < size {
+        src[i] = ((i % (256 as usize)) as! byte).value;
+        i = i + 1;
+    }
+    
+    // 使用 @asm 复制
+    const start_asm: i64 = clock();
+    asm_memcpy_byte(&dest[0], &src[0] as &const byte, size);
+    const end_asm: i64 = clock();
+    const time_asm: i64 = end_asm - start_asm;
+    
+    // 使用标准 memcpy
+    const start_std: i64 = clock();
+    memcpy(&dest[0] as *void, &src[0] as *const void, size);
+    const end_std: i64 = clock();
+    const time_std: i64 = end_std - start_std;
+    
+    printf("小数据量 (32B): asm=%ld ticks, std=%ld ticks\n", time_asm, time_std);
+}
+
+// 测试中等数据量复制（1KB）
+test "bench memcpy medium (1KB)" {
+    const size: usize = 1024;
+    var src: [byte: 1024] = [];
+    var dest: [byte: 1024] = [];
+    
+    // 初始化源数据
+    var i: usize = 0;
+    while i < size {
+        src[i] = ((i % (256 as usize)) as! byte).value;
+        i = i + 1;
+    }
+    
+    // 使用 @asm 复制
+    const start_asm: i64 = clock();
+    asm_memcpy_byte(&dest[0], &src[0] as &const byte, size);
+    const end_asm: i64 = clock();
+    const time_asm: i64 = end_asm - start_asm;
+    
+    // 使用标准 memcpy
+    const start_std: i64 = clock();
+    memcpy(&dest[0] as *void, &src[0] as *const void, size);
+    const end_std: i64 = clock();
+    const time_std: i64 = end_std - start_std;
+    
+    printf("中等数据量 (1KB): asm=%ld ticks, std=%ld ticks\n", time_asm, time_std);
+}
+
+// 测试大数据量复制（64KB）
+test "bench memcpy large (64KB)" {
+    const size: usize = 65536;
+    const src_ptr: *void = malloc(size);
+    const dest_ptr: *void = malloc(size);
+    
+    // 初始化源数据
+    var i: usize = 0;
+    while i < size {
+        var p: &byte = src_ptr as &byte;
+        p[i] = ((i % (256 as usize)) as! byte).value;
+        i = i + 1;
+    }
+    
+    // 使用 @asm 复制
+    const start_asm: i64 = clock();
+    asm_memcpy_byte(dest_ptr as &byte, src_ptr as &const byte, size);
+    const end_asm: i64 = clock();
+    const time_asm: i64 = end_asm - start_asm;
+    
+    // 使用标准 memcpy
+    const start_std: i64 = clock();
+    memcpy(dest_ptr, src_ptr, size);
+    const end_std: i64 = clock();
+    const time_std: i64 = end_std - start_std;
+    
+    printf("大数据量 (64KB): asm=%ld ticks, std=%ld ticks\n", time_asm, time_std);
+    
+    // 清理
+    free(src_ptr);
+    free(dest_ptr);
+}
+
+// 测试 u64 批量复制
+test "bench memcpy u64 batch" {
+    const count: usize = 1024;  // 1024 * 8 = 8KB
+    var src: [u64: 1024] = [];
+    var dest: [u64: 1024] = [];
+    
+    // 初始化源数据
+    var i: usize = 0;
+    while i < count {
+        src[i] = i as u64;
+        i = i + 1;
+    }
+    
+    // 使用 u64 批量复制
+    const start_asm: i64 = clock();
+    asm_memcpy_u64(&dest[0], &src[0] as &const u64, count);
+    const end_asm: i64 = clock();
+    const time_asm: i64 = end_asm - start_asm;
+    
+    // 使用标准 memcpy
+    const start_std: i64 = clock();
+    memcpy(&dest[0] as *void, &src[0] as *const void, count * 8);
+    const end_std: i64 = clock();
+    const time_std: i64 = end_std - start_std;
+    
+    printf("u64 批量复制 (8KB): asm=%ld ticks, std=%ld ticks\n", time_asm, time_std);
+}
+
+// 多次运行取平均值
+test "bench memcpy repeated runs" {
+    const size: usize = 4096;  // 4KB
+    const runs: usize = 100;
+    
+    var src: [byte: 4096] = [];
+    var dest: [byte: 4096] = [];
+    
+    // 初始化源数据
+    var i: usize = 0;
+    while i < size {
+        src[i] = ((i % (256 as usize)) as! byte).value;
+        i = i + 1;
+    }
+    
+    var total_asm: i64 = 0;
+    var total_std: i64 = 0;
+    
+    var run: usize = 0;
+    while run < runs {
+        // @asm 复制
+        const start_asm: i64 = clock();
+        asm_memcpy_byte(&dest[0], &src[0] as &const byte, size);
+        const end_asm: i64 = clock();
+        total_asm = total_asm + (end_asm - start_asm);
+        
+        // 标准复制
+        const start_std: i64 = clock();
+        memcpy(&dest[0] as *void, &src[0] as *const void, size);
+        const end_std: i64 = clock();
+        total_std = total_std + (end_std - start_std);
+        
+        run = run + 1;
+    }
+    
+    const avg_asm: i64 = total_asm / (runs as i64);
+    const avg_std: i64 = total_std / (runs as i64);
+    
+    printf("重复运行 %d 次 (4KB): 平均 asm=%ld ticks, 平均 std=%ld ticks\n", runs, avg_asm, avg_std);
+}
+
+// 性能对比总结
+test "bench memcpy summary" {
+    printf("\n=== 内存复制性能对比总结 ===\n");
+    printf("注意：当前实现使用纯 Uya 代码\n");
+    printf("实际性能取决于编译器优化程度\n");
+    printf("预期：经过编译器优化后，性能应与标准库接近\n");
+}

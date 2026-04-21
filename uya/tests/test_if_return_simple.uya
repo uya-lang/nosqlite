@@ -1,0 +1,10 @@
+use std.testing.expect;
+
+test "if return simple" {
+    const pos: bool = true;
+    var result: i32 = 1;
+    if pos {
+        result = 0;
+    }
+    try expect(result == 0);
+}

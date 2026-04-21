@@ -1,0 +1,25 @@
+// 测试 std.json encode_into_arena：在 arena 中编码并返回 JsonStrView
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.value.JsonStrView;
+use std.json.encoder.encode_into_arena;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 131072] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 131072);
+
+    const v: JsonValue = JsonValue.int_val(42);
+    const view: JsonStrView = encode_into_arena(&a, &v) catch { return 1; };
+    if view.ptr == null || view.len != 2 { return 2; }
+    if view.ptr[0] != 52 || view.ptr[1] != 50 { return 3; }
+
+    const vn: JsonValue = JsonValue.json_null();
+    const vn_view: JsonStrView = encode_into_arena(&a, &vn) catch { return 4; };
+    if vn_view.len != 4 { return 5; }
+    if vn_view.ptr[0] != 110 || vn_view.ptr[1] != 117 || vn_view.ptr[2] != 108 || vn_view.ptr[3] != 108 { return 6; }
+
+    return 0;
+}

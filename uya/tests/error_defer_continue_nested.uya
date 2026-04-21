@@ -1,0 +1,11 @@
+// defer 块内嵌套语句中的 continue 也应被禁止
+// 预期：编译失败（递归识别 defer 内的 continue）
+fn main() i32 {
+    defer {
+        var i: i32 = 0;
+        while i < 10 {
+            continue;
+        }
+    }
+    return 0;
+}

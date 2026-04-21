@@ -1,0 +1,27 @@
+// SIMD：向量/掩码作为函数参数与返回值（第一阶段）
+type Vec4i32 = @vector(i32, 4);
+type Mask4 = @mask(4);
+
+fn scale(v: Vec4i32, k: i32) Vec4i32 {
+    const kk: Vec4i32 = @vector.splat(k);
+    return v * kk;
+}
+
+fn cmp_lt(a: Vec4i32, b: Vec4i32) Mask4 {
+    return a < b;
+}
+
+export fn main() i32 {
+    const one: Vec4i32 = @vector.splat(1);
+    const four: Vec4i32 = @vector.splat(4);
+    const two: Vec4i32 = scale(one, 2);
+    const m: Mask4 = cmp_lt(two, four);
+    if @vector.all(m) == false {
+        return 1;
+    }
+    const m2: Mask4 = cmp_lt(four, two);
+    if @vector.any(m2) != false {
+        return 2;
+    }
+    return 0;
+}

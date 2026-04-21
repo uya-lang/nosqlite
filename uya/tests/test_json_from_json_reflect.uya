@@ -1,0 +1,83 @@
+// 测试 std.json from_json 反射：标量与多字段结构体往返（严格长度检查）
+// 含复杂结构体定义：Point、Rect（嵌套）、WithArray（数组）、Record（多标量）
+use std.runtime.entry;
+use std.json.value.JsonStrView;
+use std.json.encoder.to_json;
+use std.json.encoder.from_json;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+struct User {
+    id: i64,
+    name: JsonStrView,
+}
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+struct Rect {
+    top_left: Point,
+    w: i64,
+    h: i64,
+}
+
+struct WithArray {
+    id: i64,
+    ids: [i64: 3],
+}
+
+struct Record {
+    id: i64,
+    name: JsonStrView,
+    active: bool,
+    score: f64,
+}
+
+export fn main() i32 {
+    var arena_buf: [byte: 1048576] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 1048576);
+    var name_buf: [byte: 4] = [];
+    name_buf[0] = 97;
+    name_buf[1] = 98;
+    name_buf[2] = 99;
+    const u: User = User{ id: 42, name: JsonStrView{ ptr: &name_buf[0], len: 3 } };
+    const slice: &[byte] = to_json<User>(&a, u) catch { return 1; };
+    if slice.len != 22 { return 2; }
+    const u2: User = from_json<User>(&a, slice) catch { return 3; };
+    if u2.id != 42 { return 4; }
+    if u2.name.len != 3 { return 5; }
+    if u2.name.ptr[0] != 97 || u2.name.ptr[1] != 98 || u2.name.ptr[2] != 99 { return 6; }
+    const slice2: &[byte] = to_json<User>(&a, u2) catch { return 7; };
+    if slice2.len != 22 { return 8; }
+
+    var rec_name: [byte: 6] = [];
+    rec_name[0] = 104;
+    rec_name[1] = 101;
+    rec_name[2] = 108;
+    rec_name[3] = 108;
+    rec_name[4] = 111;
+    rec_name[5] = 0;
+    const rec: Record = Record{ id: 1, name: JsonStrView{ ptr: &rec_name[0], len: 5 }, active: true, score: 3.14 };
+    const rec_slice: &[byte] = to_json<Record>(&a, rec) catch { return 9; };
+    if rec_slice.len < 20 { return 10; }
+    const rec2: Record = from_json<Record>(&a, rec_slice) catch { return 11; };
+    if rec2.id != 1 || rec2.active != true || rec2.score != 3.14 { return 12; }
+    if rec2.name.len != 5 { return 13; }
+
+    const rect: Rect = Rect{ top_left: Point{ x: 1, y: 2 }, w: 10, h: 20 };
+    const rect_slice: &[byte] = to_json<Rect>(&a, rect) catch { return 14; };
+    const rect2: Rect = from_json<Rect>(&a, rect_slice) catch { return 15; };
+    if rect2.top_left.x != 1 || rect2.top_left.y != 2 { return 16; }
+    if rect2.w != 10 || rect2.h != 20 { return 17; }
+
+    const with_arr: WithArray = WithArray{ id: 7, ids: [10, 20, 30] };
+    const arr_slice: &[byte] = to_json<WithArray>(&a, with_arr) catch { return 18; };
+    const with_arr2: WithArray = from_json<WithArray>(&a, arr_slice) catch { return 19; };
+    if with_arr2.id != 7 { return 20; }
+    if with_arr2.ids[0] != 10 || with_arr2.ids[1] != 20 || with_arr2.ids[2] != 30 { return 21; }
+
+    return 0;
+}

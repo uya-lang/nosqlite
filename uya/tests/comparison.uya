@@ -1,0 +1,40 @@
+// 比较运算符测试
+// 测试所有比较运算符（<, >, <=, >=, ==, !=）
+
+use std.testing.expect;
+
+test "test_less_than" {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    try expect(a < b);
+}
+
+test "test_greater_than" {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    try expect(b > a);
+}
+
+test "test_less_equal" {
+    const a: i32 = 10;
+    const c: i32 = 10;
+    try expect(a <= c);
+}
+
+test "test_greater_equal" {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    try expect(b >= a);
+}
+
+test "test_equal" {
+    const a: i32 = 10;
+    const c: i32 = 10;
+    try expect(a == c);
+}
+
+test "test_not_equal" {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    try expect(a != b);
+}

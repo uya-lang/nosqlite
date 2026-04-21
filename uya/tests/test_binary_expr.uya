@@ -1,0 +1,46 @@
+// 测试二元表达式
+use std.runtime.entry;
+// 验证各种二元运算符
+
+fn test_binary_ops() i32 {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    
+    // 算术运算
+    const sum: i32 = a + b;
+    const diff: i32 = b - a;
+    const prod: i32 = a * b;
+    const quot: i32 = b / a;
+    const rem: i32 = b % a;
+    
+    if sum != 30 || diff != 10 || prod != 200 || quot != 2 || rem != 0 {
+        return 1;
+    }
+    
+    // 比较运算
+    const eq: bool = a == a;
+    const ne: bool = a != b;
+    const lt: bool = a < b;
+    const gt: bool = b > a;
+    const le: bool = a <= b;
+    const ge: bool = b >= a;
+    
+    if !eq || !ne || !lt || !gt || !le || !ge {
+        return 1;
+    }
+    
+    // 逻辑运算
+    const and_result: bool = true && false;
+    const or_result: bool = true || false;
+    
+    if and_result != false || or_result != true {
+        return 1;
+    }
+    
+    return 0;
+}
+
+export fn main() i32 {
+    return test_binary_ops();
+}
+

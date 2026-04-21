@@ -1,0 +1,46 @@
+// 相互递归函数测试
+use std.runtime.entry;
+// 测试两个函数相互调用（编译器多遍扫描应支持）
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn is_odd(n: i32) bool {
+    if n == 0 {
+        return false;
+    } else {
+        return is_even(n - 1);
+    }
+}
+
+fn is_even(n: i32) bool {
+    if n == 0 {
+        return true;
+    } else {
+        return is_odd(n - 1);
+    }
+}
+
+fn test_is_even() !void {
+    try expect(is_even(0));
+    try expect(!is_even(1));
+    try expect(is_even(2));
+    try expect(!is_even(5));
+    try expect(is_even(8));
+}
+
+fn test_is_odd() !void {
+    try expect(!is_odd(0));
+    try expect(is_odd(1));
+    try expect(is_odd(3));
+    try expect(!is_odd(6));
+}
+
+export fn main() i32 {
+    test_suite_begin("Recursive Mutual Tests");
+    run_test("is even", test_is_even);
+    run_test("is odd", test_is_odd);
+    return test_suite_end();
+}

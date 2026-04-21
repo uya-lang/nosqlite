@@ -1,0 +1,14 @@
+// 测试全局 [byte: N] 数组用字符串字面量初始化
+use std.runtime.entry;
+
+var global_buf: [byte: 10] = "hello";
+
+export fn main() i32 {
+    if global_buf[0] != 104 { return 1; }  // 'h'
+    if global_buf[1] != 101 { return 2; }  // 'e'
+    if global_buf[2] != 108 { return 3; }  // 'l'
+    if global_buf[3] != 108 { return 4; }  // 'l'
+    if global_buf[4] != 111 { return 5; }  // 'o'
+    if global_buf[5] != 0   { return 6; }  // '\0'
+    return 0;
+}

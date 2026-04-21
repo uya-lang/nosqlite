@@ -1,0 +1,98 @@
+// std.protobuf Phase 3：oneof、enum（varint）、optional
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.protobuf.demo.DemoColor_green;
+use std.protobuf.demo.DemoOneofKind_num;
+use std.protobuf.demo.DemoOneofKind_txt;
+use std.protobuf.demo.DemoOneofMsg;
+use std.protobuf.demo.DemoOptScores;
+use std.protobuf.demo.DemoPaint;
+use std.protobuf.demo.PbStrView;
+use std.protobuf.decode.decode_demo_oneof_msg;
+use std.protobuf.decode.decode_demo_opt_scores;
+use std.protobuf.decode.decode_demo_paint;
+use std.protobuf.encode.encode_demo_oneof_msg_to;
+use std.protobuf.encode.encode_demo_opt_scores_to;
+use std.protobuf.encode.encode_demo_paint_to;
+
+export fn main() i32 {
+    var arena_buf: [byte: 512] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 512);
+
+    var b1: [byte: 32] = [];
+    var z: [byte: 1] = [ 0 ];
+    const om_num: DemoOneofMsg = DemoOneofMsg{
+        which: DemoOneofKind_num,
+        num: 42 as i32,
+        txt: PbStrView{ ptr: &z[0], len: 0 },
+    };
+    const n1: usize = encode_demo_oneof_msg_to(&om_num, &b1[0], 32) catch {
+        return 1;
+    };
+    const d1: DemoOneofMsg = decode_demo_oneof_msg(&a, &b1[0], n1) catch {
+        return 2;
+    };
+    if d1.which != DemoOneofKind_num || d1.num != 42 as i32 {
+        return 3;
+    }
+
+    var tx: [byte: 8] = [ 104, 105, 0, 0, 0, 0, 0, 0 ];
+    const om_txt: DemoOneofMsg = DemoOneofMsg{
+        which: DemoOneofKind_txt,
+        num: 0 as i32,
+        txt: PbStrView{ ptr: &tx[0], len: 2 },
+    };
+    var b2: [byte: 32] = [];
+    const n2: usize = encode_demo_oneof_msg_to(&om_txt, &b2[0], 32) catch {
+        return 4;
+    };
+    const d2: DemoOneofMsg = decode_demo_oneof_msg(&a, &b2[0], n2) catch {
+        return 5;
+    };
+    if d2.which != DemoOneofKind_txt {
+        return 6;
+    }
+    if d2.txt.len != 2 || d2.txt.ptr[0] != 104 || d2.txt.ptr[1] != 105 {
+        return 7;
+    }
+
+    const pt: DemoPaint = DemoPaint{ color: DemoColor_green };
+    var b3: [byte: 16] = [];
+    const n3: usize = encode_demo_paint_to(&pt, &b3[0], 16) catch {
+        return 8;
+    };
+    const dp: DemoPaint = decode_demo_paint(&a, &b3[0], n3) catch {
+        return 9;
+    };
+    if dp.color != DemoColor_green {
+        return 10;
+    }
+
+    const sc0: DemoOptScores = DemoOptScores{ id: 5 as i32, has_bonus: false, bonus: 0 as i32 };
+    var b4: [byte: 32] = [];
+    const n4: usize = encode_demo_opt_scores_to(&sc0, &b4[0], 32) catch {
+        return 11;
+    };
+    const ds0: DemoOptScores = decode_demo_opt_scores(&a, &b4[0], n4) catch {
+        return 12;
+    };
+    if ds0.id != 5 as i32 || ds0.has_bonus {
+        return 13;
+    }
+
+    const sc1: DemoOptScores = DemoOptScores{ id: 7 as i32, has_bonus: true, bonus: 99 as i32 };
+    var b5: [byte: 32] = [];
+    const n5: usize = encode_demo_opt_scores_to(&sc1, &b5[0], 32) catch {
+        return 14;
+    };
+    const ds1: DemoOptScores = decode_demo_opt_scores(&a, &b5[0], n5) catch {
+        return 15;
+    };
+    if ds1.id != 7 as i32 || !ds1.has_bonus || ds1.bonus != 99 as i32 {
+        return 16;
+    }
+
+    return 0;
+}

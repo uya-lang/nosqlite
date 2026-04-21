@@ -1,0 +1,22 @@
+// 测试LLVM IR生成
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn get_true() bool {
+    return true;
+}
+
+fn test_llvm_ir() !void {
+    const b: bool = get_true();
+    try expect(b);
+}
+
+export fn main() i32 {
+    test_suite_begin("LLVM IR Tests");
+    run_test("llvm ir", test_llvm_ir);
+    return test_suite_end();
+}

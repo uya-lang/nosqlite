@@ -1,0 +1,126 @@
+// test_std_io_buffering.uya - std.io FILE 流应继承缓冲写出语义
+use std.runtime.entry;
+
+use std.io.FILE;
+use std.io.fopen;
+use std.io.fclose;
+use std.io.fflush;
+use std.io.fputs;
+use std.io.fputc;
+use std.io.fread;
+use libc.unlink;
+
+export fn main() i32 {
+    const test_file: &const byte = "/tmp/uya_test_std_io_buffering.txt\0" as &const byte;
+    const mode_w: &const byte = "w\0" as &const byte;
+    const mode_r: &const byte = "r\0" as &const byte;
+
+    _ = unlink(test_file);
+
+    const writer: &FILE = fopen(test_file, mode_w);
+    if writer == null {
+        return 1;
+    }
+
+    if fputs("abc\0" as &const byte, writer) < 0 {
+        _ = fclose(writer);
+        _ = unlink(test_file);
+        return 2;
+    }
+
+    const reader_before_flush: &FILE = fopen(test_file, mode_r);
+    if reader_before_flush == null {
+        _ = fclose(writer);
+        _ = unlink(test_file);
+        return 3;
+    }
+
+    var before_buf: [byte: 8] = [];
+    const before_len: usize = fread(&before_buf[0], 1, 7, reader_before_flush);
+    _ = fclose(reader_before_flush);
+    if before_len != 0 {
+        _ = fclose(writer);
+        _ = unlink(test_file);
+        return 4;
+    }
+
+    if fflush(writer) != 0 {
+        _ = fclose(writer);
+        _ = unlink(test_file);
+        return 5;
+    }
+
+    const reader_after_flush: &FILE = fopen(test_file, mode_r);
+    if reader_after_flush == null {
+        _ = fclose(writer);
+        _ = unlink(test_file);
+        return 6;
+    }
+
+    var after_buf: [byte: 8] = [];
+    const after_len: usize = fread(&after_buf[0], 1, 7, reader_after_flush);
+    _ = fclose(reader_after_flush);
+    _ = fclose(writer);
+    _ = unlink(test_file);
+
+    if after_len != 3 {
+        return 7;
+    }
+    if after_buf[0] != 97 as byte || after_buf[1] != 98 as byte || after_buf[2] != 99 as byte {
+        return 8;
+    }
+
+    const writer_char: &FILE = fopen(test_file, mode_w);
+    if writer_char == null {
+        return 9;
+    }
+    if fputc(90, writer_char) != 90 {
+        _ = fclose(writer_char);
+        _ = unlink(test_file);
+        return 10;
+    }
+
+    const reader_char_before_flush: &FILE = fopen(test_file, mode_r);
+    if reader_char_before_flush == null {
+        _ = fclose(writer_char);
+        _ = unlink(test_file);
+        return 11;
+    }
+
+    var char_before_buf: [byte: 4] = [];
+    const char_before_len: usize = fread(&char_before_buf[0], 1, 3, reader_char_before_flush);
+    _ = fclose(reader_char_before_flush);
+    if char_before_len != 0 {
+        _ = fclose(writer_char);
+        _ = unlink(test_file);
+        return 12;
+    }
+
+    if fflush(writer_char) != 0 {
+        _ = fclose(writer_char);
+        _ = unlink(test_file);
+        return 13;
+    }
+
+    const reader_char_after_flush: &FILE = fopen(test_file, mode_r);
+    if reader_char_after_flush == null {
+        _ = fclose(writer_char);
+        _ = unlink(test_file);
+        return 14;
+    }
+
+    var char_after_buf: [byte: 4] = [];
+    const char_after_len: usize = fread(&char_after_buf[0], 1, 3, reader_char_after_flush);
+    _ = fclose(reader_char_after_flush);
+    _ = fclose(writer_char);
+    _ = unlink(test_file);
+
+    if char_after_len != 1 {
+        return 15;
+    }
+    if char_after_buf[0] != 90 as byte {
+        return 16;
+    }
+
+    return 0;
+}

@@ -1,0 +1,33 @@
+use std.runtime.entry;
+use std.microapp.io.write_stdout_bytes;
+
+var g_counter: u32 = 0u32;
+var g_bytes: [byte: 16] = [];
+
+export fn main() i32 {
+    if g_counter != 0u32 {
+        return 1;
+    }
+    if g_bytes[0] != 0 as byte {
+        return 2;
+    }
+    if g_bytes[15] != 0 as byte {
+        return 3;
+    }
+    g_counter = 7u32;
+    g_bytes[0] = 66 as byte;
+    g_bytes[15] = 90 as byte;
+    if g_counter != 7u32 {
+        return 4;
+    }
+    if g_bytes[0] != 66 as byte {
+        return 5;
+    }
+    if g_bytes[15] != 90 as byte {
+        return 6;
+    }
+    _ = write_stdout_bytes("bss ok\n", 7) catch {
+        return 7;
+    };
+    return 0;
+}

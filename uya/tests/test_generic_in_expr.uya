@@ -1,0 +1,49 @@
+// 测试泛型 - 在表达式中使用
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn identity<T>(x: T) T {
+    return x;
+}
+
+fn test_in_var_init() !void {
+    const a: i32 = identity<i32>(10) + identity<i32>(20);
+    try assert_eq_i32(a, 30);
+}
+
+fn test_in_conditional() !void {
+    const cond: bool = identity<bool>(true);
+    try expect(cond);
+}
+
+fn test_in_comparison() !void {
+    const x1: i32 = identity<i32>(10);
+    const x2: i32 = identity<i32>(20);
+    try expect(x1 < x2);
+}
+
+fn test_in_assignment() !void {
+    var x: i32 = 0;
+    x = identity<i32>(42);
+    try assert_eq_i32(x, 42);
+}
+
+fn test_compound_expr() !void {
+    const b: i32 = (identity<i32>(5) * 2) + identity<i32>(3);
+    try assert_eq_i32(b, 13);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic In Expr Tests");
+    run_test("in var init", test_in_var_init);
+    run_test("in conditional", test_in_conditional);
+    run_test("in comparison", test_in_comparison);
+    run_test("in assignment", test_in_assignment);
+    run_test("compound expr", test_compound_expr);
+    return test_suite_end();
+}

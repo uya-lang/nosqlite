@@ -1,0 +1,23 @@
+use std.runtime.entry;
+use std.microapp.io.write_stdout_bytes;
+use std.microapp.mem.alloc;
+use std.microapp.task.yield_now;
+
+export fn main() i32 {
+    const msg: &const byte = "alloc yield ok\n";
+    const buf: &byte = alloc(15) catch {
+        return 1;
+    };
+    var i: usize = 0;
+    while i < 15 {
+        buf[i] = msg[i];
+        i = i + 1;
+    }
+    _ = yield_now() catch {
+        return 2;
+    };
+    _ = write_stdout_bytes(buf, 15) catch {
+        return 3;
+    };
+    return 0;
+}

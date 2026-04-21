@@ -1,0 +1,80 @@
+// test_mem_allocator.uya - std.mem.allocator（MallocAllocator / IAllocator）
+
+use std.testing;
+
+use std.mem.allocator.get_allocator;
+use std.mem.allocator.MallocAllocator;
+
+test "malloc_allocator_get_allocator_non_null" {
+    const a: &MallocAllocator = get_allocator();
+    try assert_true(a != null);
+}
+
+test "malloc_allocator_alloc_write_dealloc" {
+    const a: &MallocAllocator = get_allocator();
+    const p: &byte = try a.alloc(32 as usize);
+    const b: &u8 = p as &u8;
+    b[0] = 0xAB as u8;
+    b[1] = 0xCD as u8;
+    try assert_eq_i32(b[0] as i32, 0xAB as i32);
+    try assert_eq_i32(b[1] as i32, 0xCD as i32);
+    a.dealloc(p);
+}
+
+test "malloc_allocator_alloc_zero_is_error" {
+    const a: &MallocAllocator = get_allocator();
+    var saw: bool = false;
+    _ = a.alloc(0 as usize) catch {
+        saw = true;
+        null as &byte;
+    };
+    try assert_true(saw);
+}
+
+test "malloc_allocator_dealloc_null_safe" {
+    const a: &MallocAllocator = get_allocator();
+    a.dealloc(null);
+}
+
+test "malloc_allocator_realloc_grows_and_preserves" {
+    const a: &MallocAllocator = get_allocator();
+    const p: &byte = try a.alloc(8 as usize);
+    const u: &u8 = p as &u8;
+    u[0] = 7 as u8;
+    u[7] = 9 as u8;
+    const q: &byte = try a.realloc(p, 64 as usize);
+    const v: &u8 = q as &u8;
+    try assert_eq_i32(v[0] as i32, 7);
+    try assert_eq_i32(v[7] as i32, 9);
+    a.dealloc(q);
+}
+
+test "malloc_allocator_realloc_null_like_alloc" {
+    const a: &MallocAllocator = get_allocator();
+    const p: &byte = try a.realloc(null, 16 as usize);
+    const u: &u8 = p as &u8;
+    u[0] = 1 as u8;
+    try assert_eq_i32(u[0] as i32, 1);
+    a.dealloc(p);
+}
+
+test "malloc_allocator_realloc_zero_deallocs_and_errors" {
+    const a: &MallocAllocator = get_allocator();
+    const p: &byte = try a.alloc(4 as usize);
+    var saw: bool = false;
+    _ = a.realloc(p, 0 as usize) catch {
+        saw = true;
+        null as &byte;
+    };
+    try assert_true(saw);
+}
+
+test "malloc_allocator_local_instance" {
+    var ma: MallocAllocator = MallocAllocator{};
+    const a: &MallocAllocator = &ma;
+    const p: &byte = try a.alloc(12 as usize);
+    const u: &u8 = p as &u8;
+    u[0] = 55 as u8;
+    try assert_eq_i32(u[0] as i32, 55);
+    a.dealloc(p);
+}

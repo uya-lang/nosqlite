@@ -1,0 +1,111 @@
+// 测试宏：嵌套调用和组合使用
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 基础宏
+mc get_10() expr {
+    @mc_code(@mc_ast(10));
+}
+
+mc get_20() expr {
+    @mc_code(@mc_ast(20));
+}
+
+mc get_30() expr {
+    @mc_code(@mc_ast(30));
+}
+
+// 宏结果用于表达式
+fn add_macros() i32 {
+    return get_10() + get_20();
+}
+
+fn mul_macros() i32 {
+    return get_10() * get_30();
+}
+
+// 宏结果用于条件判断
+fn compare_macros() bool {
+    return get_10() < get_20();
+}
+
+// 宏结果用于数组索引
+fn use_macro_as_index() i32 {
+    var arr: [i32: 50] = [0: 50];
+    arr[10] = 100;
+    arr[20] = 200;
+    arr[30] = 300;
+    return arr[get_10()] + arr[get_20()] + arr[get_30()];
+}
+
+// 宏结果用于循环边界
+fn use_macro_in_loop() i32 {
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    while i < get_10() {
+        sum = sum + i;
+        i = i + 1;
+    }
+    return sum;  // 0+1+2+...+9 = 45
+}
+
+// 宏结果用于 if 条件（用 acc 承接分支，避免 if 被证成常量后 C 后端在 return 后仍生成不可达分支、重复 _uya_ret）
+fn use_macro_in_if() i32 {
+    var acc: i32 = 0;
+    if get_10() < get_20() {
+        acc = get_30();
+    } else {
+        acc = 0;
+    }
+    return acc;
+}
+
+// 多个宏组合在复杂表达式中
+fn complex_macro_expr() i32 {
+    return (get_10() + get_20()) * get_30() - get_10();  // (10+20)*30 - 10 = 900 - 10 = 890
+}
+
+fn test_add_macros() !void {
+    try assert_eq_i32(add_macros(), 30);
+}
+
+fn test_mul_macros() !void {
+    try assert_eq_i32(mul_macros(), 300);
+}
+
+fn test_compare_macros() !void {
+    try expect(compare_macros());
+}
+
+fn test_macro_as_index() !void {
+    try assert_eq_i32(use_macro_as_index(), 600);
+}
+
+fn test_macro_in_loop() !void {
+    try assert_eq_i32(use_macro_in_loop(), 45);
+}
+
+fn test_macro_in_if() !void {
+    try assert_eq_i32(use_macro_in_if(), 30);
+}
+
+fn test_complex_macro_expr() !void {
+    try assert_eq_i32(complex_macro_expr(), 890);
+}
+
+export fn main() i32 {
+    test_suite_begin("Macro Nested Tests");
+    run_test("add macros", test_add_macros);
+    run_test("mul macros", test_mul_macros);
+    run_test("compare macros", test_compare_macros);
+    run_test("macro as index", test_macro_as_index);
+    run_test("macro in loop", test_macro_in_loop);
+    run_test("macro in if", test_macro_in_if);
+    run_test("complex macro expr", test_complex_macro_expr);
+    return test_suite_end();
+}

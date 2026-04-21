@@ -1,0 +1,182 @@
+// test_unistd.uya - unistd 模块测试
+use std.runtime.entry;
+// TDD: 先写测试，再实现
+
+use libc.read;
+use libc.write;
+use libc.close;
+use libc.lseek;
+use libc.getpid;
+use libc.getppid;
+use libc.access;
+use libc.unlink;
+use libc.mkdir;
+use libc.rmdir;
+use libc.chdir;
+use libc.getcwd;
+use libc.dup;
+use libc.dup2;
+use libc.STDIN_FILENO;
+use libc.STDOUT_FILENO;
+use libc.STDERR_FILENO;
+use libc.SEEK_SET;
+use libc.SEEK_CUR;
+use libc.SEEK_END;
+use libc.F_OK;
+use libc.R_OK;
+use libc.W_OK;
+use libc.X_OK;
+use libc.PATH_MAX;
+use libc.fprintf;
+use libc.stdout;
+use libc.errno;
+
+// ============================================================
+// 常量测试
+// ============================================================
+
+fn test_constants() void {
+    fprintf(stdout, "test constants: ");
+    var passed: i32 = 1;
+    
+    if STDIN_FILENO != 0 { passed = 0; }
+    if STDOUT_FILENO != 1 { passed = 0; }
+    if STDERR_FILENO != 2 { passed = 0; }
+    if SEEK_SET != 0 { passed = 0; }
+    if SEEK_CUR != 1 { passed = 0; }
+    if SEEK_END != 2 { passed = 0; }
+    if F_OK != 0 { passed = 0; }
+    if R_OK != 4 { passed = 0; }
+    if W_OK != 2 { passed = 0; }
+    if X_OK != 1 { passed = 0; }
+    if PATH_MAX != 4096 { passed = 0; }
+    
+    if passed != 0 {
+        fprintf(stdout, "PASS\n");
+    } else {
+        fprintf(stdout, "FAIL\n");
+    }
+}
+
+// ============================================================
+// getpid 测试
+// ============================================================
+
+fn test_getpid() void {
+    fprintf(stdout, "test getpid: ");
+    var passed: i32 = 1;
+    
+    const pid: i32 = getpid();
+    // 进程 ID 应该大于 0
+    if pid <= 0 { passed = 0; }
+    
+    if passed != 0 {
+        fprintf(stdout, "PASS\n");
+    } else {
+        fprintf(stdout, "FAIL\n");
+    }
+}
+
+// ============================================================
+// getppid 测试
+// ============================================================
+
+fn test_getppid() void {
+    fprintf(stdout, "test getppid: ");
+    var passed: i32 = 1;
+    
+    const ppid: i32 = getppid();
+    // 父进程 ID 应该大于 0
+    if ppid <= 0 { passed = 0; }
+    
+    if passed != 0 {
+        fprintf(stdout, "PASS\n");
+    } else {
+        fprintf(stdout, "FAIL\n");
+    }
+}
+
+// ============================================================
+// read/write 测试
+// ============================================================
+
+fn test_read_write() void {
+    fprintf(stdout, "test read/write: ");
+    var passed: i32 = 1;
+    
+    // 测试写入到 stdout
+    var buf: [byte: 16] = [];
+    buf[0] = 72 as byte;  // 'H'
+    buf[1] = 105 as byte; // 'i'
+    buf[2] = 10 as byte;  // '\n'
+    
+    const written: i64 = write(STDOUT_FILENO, &buf[0] as &const byte, 3);
+    if written != 3 { passed = 0; }
+    
+    if passed != 0 {
+        fprintf(stdout, "PASS\n");
+    } else {
+        fprintf(stdout, "FAIL\n");
+    }
+}
+
+// ============================================================
+// access 测试
+// ============================================================
+
+fn test_access() void {
+    fprintf(stdout, "test access: ");
+    var passed: i32 = 1;
+    
+    // 测试检查根目录是否存在
+    const ret: i32 = access("/\0" as &const byte, F_OK);
+    if ret != 0 { passed = 0; }
+    
+    // 测试检查不存在的文件
+    const ret2: i32 = access("/nonexistent_file_12345\0" as &const byte, F_OK);
+    if ret2 == 0 { passed = 0; } // 应该失败
+    
+    if passed != 0 {
+        fprintf(stdout, "PASS\n");
+    } else {
+        fprintf(stdout, "FAIL\n");
+    }
+}
+
+// ============================================================
+// getcwd 测试
+// ============================================================
+
+fn test_getcwd() void {
+    fprintf(stdout, "test getcwd: ");
+    var passed: i32 = 1;
+    
+    var buf: [byte: 4096] = [];
+    const result: &byte = getcwd(&buf[0] as &byte, PATH_MAX);
+    
+    if result == null as &byte { passed = 0; }
+    
+    if passed != 0 {
+        fprintf(stdout, "PASS\n");
+    } else {
+        fprintf(stdout, "FAIL\n");
+    }
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    fprintf(stdout, "=== libc.unistd tests ===\n");
+    
+    test_constants();
+    test_getpid();
+    test_getppid();
+    test_read_write();
+    test_access();
+    test_getcwd();
+    
+    fprintf(stdout, "=== done ===\n");
+    return 0;
+}

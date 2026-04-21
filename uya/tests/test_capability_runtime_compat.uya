@@ -1,0 +1,940 @@
+// test_capability_runtime_compat.uya - capability 兼容层最小 TDD 基线
+
+use std.testing.assert_true;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_i64;
+use std.testing.assert_eq_u64;
+use std.testing.run_test;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+
+use std.runtime.capability.abi.CapabilityStatusCode;
+use std.runtime.capability.abi.CapabilityExecutionContext;
+use std.runtime.capability.abi.capability_execution_context_init;
+use std.runtime.capability.adapter.CapabilityBackendAdapter;
+use std.runtime.capability.adapter.capability_backend_adapter_default;
+use std.runtime.capability.adapter.capability_backend_adapter_init;
+use std.runtime.capability.adapter.capability_backend_adapter_invoke;
+use std.runtime.capability.adapter.capability_backend_adapter_load_module;
+use std.runtime.capability.backend.CapabilityBackendMetrics;
+use std.runtime.capability.backend.CapabilityBackendConfig;
+use std.runtime.capability.backend.CapabilityBackendSession;
+use std.runtime.capability.benchmark.CapabilityBenchmarkCase;
+use std.runtime.capability.benchmark.CapabilityBenchmarkCaseKind;
+use std.runtime.capability.benchmark.CapabilityBenchmarkResult;
+use std.runtime.capability.benchmark.capability_benchmark_backend_name;
+use std.runtime.capability.benchmark.capability_benchmark_case_latency_us;
+use std.runtime.capability.benchmark.capability_benchmark_case_name;
+use std.runtime.capability.benchmark.capability_benchmark_relative_ratio;
+use std.runtime.capability.benchmark.capability_benchmark_run_manager_case;
+use std.runtime.capability.benchmark.capability_benchmark_result_from_session;
+use std.runtime.capability.fake_backend.CapabilityFakeBackend;
+use std.runtime.capability.fake_backend.capability_fake_backend_init;
+use std.runtime.capability.fake_backend.capability_fake_backend_invoke;
+use std.runtime.capability.fake_backend.capability_fake_backend_load_module;
+use std.runtime.capability.hostapi.CapabilityHostApi;
+use std.runtime.capability.hostapi.CapabilityHostTime;
+use std.runtime.capability.loader.capability_loader_activate;
+use std.runtime.capability.loader.capability_loader_disable;
+use std.runtime.capability.loader.capability_loader_fail;
+use std.runtime.capability.loader.capability_loader_install;
+use std.runtime.capability.loader.capability_loader_rollback;
+use std.runtime.capability.manager.CapabilityManager;
+use std.runtime.capability.manager.capability_manager_activate;
+use std.runtime.capability.manager.capability_manager_default;
+use std.runtime.capability.manager.capability_manager_disable;
+use std.runtime.capability.manager.capability_manager_init;
+use std.runtime.capability.manager.capability_manager_install;
+use std.runtime.capability.manager.capability_manager_invoke;
+use std.runtime.capability.manager.capability_manager_load;
+use std.runtime.capability.manager.capability_manager_rollback;
+use std.runtime.capability.manager.capability_manager_unload;
+use std.runtime.capability.manifest.CapabilityManifest;
+use std.runtime.capability.manifest.capability_manifest_init;
+use std.runtime.capability.manifest.capability_manifest_validate;
+use std.runtime.capability.native_backend.CapabilityNativeBackend;
+use std.runtime.capability.native_backend.capability_native_backend_init;
+use std.runtime.capability.native_backend.capability_native_backend_invoke;
+use std.runtime.capability.native_backend.capability_native_backend_load_module;
+use std.runtime.capability.policy.CapabilityPermissionSet;
+use std.runtime.capability.policy.capability_permission_is_granted;
+use std.runtime.capability.policy.capability_permission_require;
+use std.runtime.capability.policy.capability_permission_set_declare;
+use std.runtime.capability.policy.capability_permission_set_grant;
+use std.runtime.capability.registry.CapabilityRegistry;
+use std.runtime.capability.registry.capability_registry_init;
+use std.runtime.capability.types.CapabilityBackendKind;
+use std.runtime.capability.types.CapabilityPermissionId;
+use std.runtime.capability.types.CapabilityState;
+use std.runtime.capability.types.CAPABILITY_MAX_REGISTRY_ENTRIES;
+use std.runtime.capability.wamr_backend.CapabilityWamrBackend;
+use std.runtime.capability.wamr_backend.capability_wamr_backend_init;
+use std.runtime.capability.wamr_backend.capability_wamr_backend_invoke;
+use std.runtime.capability.wamr_backend.capability_wamr_backend_load_module;
+
+fn make_valid_manifest(id0: byte, backend_kind: CapabilityBackendKind) CapabilityManifest {
+    var manifest: CapabilityManifest = capability_manifest_init();
+    manifest.id_len = 1 as usize;
+    manifest.id[0] = id0;
+    manifest.entry_len = 4 as usize;
+    manifest.entry[0] = 'm' as byte;
+    manifest.entry[1] = 'a' as byte;
+    manifest.entry[2] = 'i' as byte;
+    manifest.entry[3] = 'n' as byte;
+    manifest.backend_kind = backend_kind;
+    return manifest;
+}
+
+fn make_ctx_with_permission(permission: CapabilityPermissionId, grant: bool) CapabilityExecutionContext {
+    var ctx: CapabilityExecutionContext = capability_execution_context_init(1u32, capability_manifest_init().limits);
+    capability_permission_set_declare(&ctx.permissions, permission);
+    if grant {
+        _ = capability_permission_set_grant(&ctx.permissions, permission) catch {};
+    }
+    return ctx;
+}
+
+fn test_capability_manifest_defaults_are_valid() !void {
+    var manifest: CapabilityManifest = make_valid_manifest('a' as byte, CapabilityBackendKind.NativeUya);
+    try capability_manifest_validate(&manifest);
+    try assert_true(manifest.backend_kind == CapabilityBackendKind.NativeUya);
+}
+
+fn test_capability_manifest_invalid_backend_rejected() !void {
+    var manifest: CapabilityManifest = make_valid_manifest('a' as byte, CapabilityBackendKind.Invalid);
+
+    var saw: bool = false;
+    _ = capability_manifest_validate(&manifest) catch {
+        saw = true;
+    };
+    try assert_true(saw);
+}
+
+fn test_capability_permission_declare_grant_require() !void {
+    var permissions: CapabilityPermissionSet = CapabilityPermissionSet{};
+    capability_permission_set_declare(&permissions, CapabilityPermissionId.TimeRead);
+    try capability_permission_set_grant(&permissions, CapabilityPermissionId.TimeRead);
+    try capability_permission_require(&permissions, CapabilityPermissionId.TimeRead);
+    try assert_true(capability_permission_is_granted(&permissions, CapabilityPermissionId.TimeRead));
+}
+
+fn test_capability_permission_grant_undeclared_is_error() !void {
+    var permissions: CapabilityPermissionSet = CapabilityPermissionSet{};
+    var saw: bool = false;
+    _ = capability_permission_set_grant(&permissions, CapabilityPermissionId.TimeRead) catch {
+        saw = true;
+    };
+    try assert_true(saw);
+}
+
+fn test_capability_fake_backend_load_and_invoke() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var backend: CapabilityFakeBackend = CapabilityFakeBackend{};
+
+    try capability_fake_backend_init(&backend, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.Fake,
+        host_api: &host,
+    });
+
+    var manifest: CapabilityManifest = make_valid_manifest('f' as byte, CapabilityBackendKind.Fake);
+
+    var payload: [byte: 1] = [];
+    payload[0] = 'x' as byte;
+
+    var session: CapabilityBackendSession = try capability_fake_backend_load_module(&backend, &payload[0] as &const byte, 1 as usize, manifest);
+    const status: CapabilityStatusCode = try capability_fake_backend_invoke(&backend, &session, 0);
+
+    try assert_true(session.kind == CapabilityBackendKind.Fake);
+    try assert_true(status == CapabilityStatusCode.Ok);
+}
+
+fn test_capability_wamr_backend_load_and_invoke() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var backend: CapabilityWamrBackend = CapabilityWamrBackend{};
+
+    try capability_wamr_backend_init(&backend, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.Wamr,
+        host_api: &host,
+    });
+
+    var manifest: CapabilityManifest = make_valid_manifest('w' as byte, CapabilityBackendKind.Wamr);
+    var payload: [byte: 4] = [];
+    payload[0] = 0 as byte;
+    payload[1] = 'a' as byte;
+    payload[2] = 's' as byte;
+    payload[3] = 'm' as byte;
+
+    var session: CapabilityBackendSession = try capability_wamr_backend_load_module(&backend, &payload[0] as &const byte, 4 as usize, manifest);
+    const status: CapabilityStatusCode = try capability_wamr_backend_invoke(&backend, &session, 0);
+
+    try assert_true(session.kind == CapabilityBackendKind.Wamr);
+    try assert_true(status == CapabilityStatusCode.Ok);
+}
+
+fn test_capability_wamr_backend_invalid_payload_rejected() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var backend: CapabilityWamrBackend = CapabilityWamrBackend{};
+
+    try capability_wamr_backend_init(&backend, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.Wamr,
+        host_api: &host,
+    });
+
+    const manifest: CapabilityManifest = make_valid_manifest('m' as byte, CapabilityBackendKind.Wamr);
+    var payload: [byte: 3] = [];
+    payload[0] = 'b' as byte;
+    payload[1] = 'a' as byte;
+    payload[2] = 'd' as byte;
+
+    var saw: bool = false;
+    _ = capability_wamr_backend_load_module(&backend, &payload[0] as &const byte, 3 as usize, manifest) catch {
+        saw = true;
+        return;
+    };
+    try assert_true(saw);
+}
+
+fn test_capability_wamr_backend_negative_trigger_maps_invalid_argument() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var backend: CapabilityWamrBackend = CapabilityWamrBackend{};
+
+    try capability_wamr_backend_init(&backend, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.Wamr,
+        host_api: &host,
+    });
+
+    var manifest: CapabilityManifest = make_valid_manifest('t' as byte, CapabilityBackendKind.Wamr);
+    var payload: [byte: 4] = [];
+    payload[0] = 0 as byte;
+    payload[1] = 'a' as byte;
+    payload[2] = 's' as byte;
+    payload[3] = 'm' as byte;
+
+    var session: CapabilityBackendSession = try capability_wamr_backend_load_module(&backend, &payload[0] as &const byte, 4 as usize, manifest);
+    const status: CapabilityStatusCode = try capability_wamr_backend_invoke(&backend, &session, -1);
+
+    try assert_true(status == CapabilityStatusCode.InvalidArgument);
+}
+
+fn test_capability_native_backend_load_and_invoke() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var backend: CapabilityNativeBackend = CapabilityNativeBackend{};
+
+    try capability_native_backend_init(&backend, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.NativeUya,
+        host_api: &host,
+    });
+
+    var manifest: CapabilityManifest = make_valid_manifest('n' as byte, CapabilityBackendKind.NativeUya);
+    var payload: [byte: 4] = [];
+    payload[0] = 'U' as byte;
+    payload[1] = 'Y' as byte;
+    payload[2] = 'A' as byte;
+    payload[3] = '!' as byte;
+
+    var session: CapabilityBackendSession = try capability_native_backend_load_module(&backend, &payload[0] as &const byte, 4 as usize, manifest);
+    const status: CapabilityStatusCode = try capability_native_backend_invoke(&backend, &session, 0);
+
+    try assert_true(session.kind == CapabilityBackendKind.NativeUya);
+    try assert_true(status == CapabilityStatusCode.Ok);
+}
+
+fn test_capability_native_backend_invalid_payload_rejected() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var backend: CapabilityNativeBackend = CapabilityNativeBackend{};
+
+    try capability_native_backend_init(&backend, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.NativeUya,
+        host_api: &host,
+    });
+
+    const manifest: CapabilityManifest = make_valid_manifest('p' as byte, CapabilityBackendKind.NativeUya);
+    var payload: [byte: 4] = [];
+    payload[0] = 'B' as byte;
+    payload[1] = 'A' as byte;
+    payload[2] = 'D' as byte;
+    payload[3] = '!' as byte;
+
+    var saw: bool = false;
+    _ = capability_native_backend_load_module(&backend, &payload[0] as &const byte, 4 as usize, manifest) catch {
+        saw = true;
+        return;
+    };
+    try assert_true(saw);
+}
+
+fn test_capability_backend_adapter_dispatches_native_backend() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var adapter: CapabilityBackendAdapter = capability_backend_adapter_default();
+    try capability_backend_adapter_init(&adapter, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.NativeUya,
+        host_api: &host,
+    });
+
+    var manifest: CapabilityManifest = make_valid_manifest('k' as byte, CapabilityBackendKind.NativeUya);
+    var payload: [byte: 4] = [];
+    payload[0] = 'U' as byte;
+    payload[1] = 'Y' as byte;
+    payload[2] = 'A' as byte;
+    payload[3] = '!' as byte;
+
+    var session: CapabilityBackendSession = try capability_backend_adapter_load_module(&adapter, &payload[0] as &const byte, 4 as usize, manifest);
+    const status: CapabilityStatusCode = try capability_backend_adapter_invoke(&adapter, &session, 0);
+
+    try assert_true(session.kind == CapabilityBackendKind.NativeUya);
+    try assert_true(status == CapabilityStatusCode.Ok);
+}
+
+fn test_capability_backend_adapter_dispatches_fake_backend() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var adapter: CapabilityBackendAdapter = capability_backend_adapter_default();
+    try capability_backend_adapter_init(&adapter, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.Fake,
+        host_api: &host,
+    });
+
+    var manifest: CapabilityManifest = make_valid_manifest('g' as byte, CapabilityBackendKind.Fake);
+    var payload: [byte: 1] = [];
+    payload[0] = 'x' as byte;
+
+    var session: CapabilityBackendSession = try capability_backend_adapter_load_module(&adapter, &payload[0] as &const byte, 1 as usize, manifest);
+    const status: CapabilityStatusCode = try capability_backend_adapter_invoke(&adapter, &session, 0);
+
+    try assert_true(session.kind == CapabilityBackendKind.Fake);
+    try assert_true(status == CapabilityStatusCode.Ok);
+}
+
+fn test_capability_backend_adapter_dispatches_wamr_backend() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var adapter: CapabilityBackendAdapter = capability_backend_adapter_default();
+    try capability_backend_adapter_init(&adapter, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.Wamr,
+        host_api: &host,
+    });
+
+    var manifest: CapabilityManifest = make_valid_manifest('h' as byte, CapabilityBackendKind.Wamr);
+    var payload: [byte: 4] = [];
+    payload[0] = 0 as byte;
+    payload[1] = 'a' as byte;
+    payload[2] = 's' as byte;
+    payload[3] = 'm' as byte;
+
+    var session: CapabilityBackendSession = try capability_backend_adapter_load_module(&adapter, &payload[0] as &const byte, 4 as usize, manifest);
+    const status: CapabilityStatusCode = try capability_backend_adapter_invoke(&adapter, &session, 0);
+
+    try assert_true(session.kind == CapabilityBackendKind.Wamr);
+    try assert_true(status == CapabilityStatusCode.Ok);
+}
+
+fn test_capability_backend_adapter_rejects_kind_mismatch() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var adapter: CapabilityBackendAdapter = capability_backend_adapter_default();
+    try capability_backend_adapter_init(&adapter, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.Fake,
+        host_api: &host,
+    });
+
+    var manifest: CapabilityManifest = make_valid_manifest('j' as byte, CapabilityBackendKind.Wamr);
+    var payload: [byte: 1] = [];
+    payload[0] = 'x' as byte;
+
+    var saw: bool = false;
+    _ = capability_backend_adapter_load_module(&adapter, &payload[0] as &const byte, 1 as usize, manifest) catch {
+        saw = true;
+        return;
+    };
+    try assert_true(saw);
+}
+
+fn test_capability_manager_install_load_activate_invoke_fake() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var manager: CapabilityManager = capability_manager_default();
+    try capability_manager_init(&manager, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.Fake,
+        host_api: &host,
+    });
+
+    const manifest: CapabilityManifest = make_valid_manifest('m' as byte, CapabilityBackendKind.Fake);
+    const index: i32 = try capability_manager_install(&manager, manifest);
+    var payload: [byte: 1] = [];
+    payload[0] = 'x' as byte;
+
+    try capability_manager_load(&manager, index, &payload[0] as &const byte, 1 as usize);
+    try capability_manager_activate(&manager, index);
+    const status: CapabilityStatusCode = try capability_manager_invoke(&manager, index, 0);
+
+    try assert_true(status == CapabilityStatusCode.Ok);
+    if index >= 0 && index < @len(manager.registry.entries) {
+        try assert_true(manager.registry.entries[index].state == CapabilityState.Active);
+        try assert_true(manager.registry.entries[index].last_status == CapabilityStatusCode.Ok);
+        return;
+    }
+    return error.AssertionFailed;
+}
+
+fn test_capability_manager_invoke_requires_load_and_active() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var manager: CapabilityManager = capability_manager_default();
+    try capability_manager_init(&manager, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.Fake,
+        host_api: &host,
+    });
+
+    const manifest: CapabilityManifest = make_valid_manifest('o' as byte, CapabilityBackendKind.Fake);
+    const index: i32 = try capability_manager_install(&manager, manifest);
+    var payload: [byte: 1] = [];
+    payload[0] = 'x' as byte;
+
+    var invoke_before_load_failed: bool = false;
+    _ = capability_manager_invoke(&manager, index, 0) catch {
+        invoke_before_load_failed = true;
+        return;
+    };
+    try assert_true(invoke_before_load_failed);
+
+    try capability_manager_load(&manager, index, &payload[0] as &const byte, 1 as usize);
+
+    var invoke_before_activate_failed: bool = false;
+    _ = capability_manager_invoke(&manager, index, 0) catch {
+        invoke_before_activate_failed = true;
+        return;
+    };
+    try assert_true(invoke_before_activate_failed);
+}
+
+fn test_capability_manager_invoke_non_ok_marks_failed() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var manager: CapabilityManager = capability_manager_default();
+    try capability_manager_init(&manager, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.Wamr,
+        host_api: &host,
+    });
+
+    const manifest: CapabilityManifest = make_valid_manifest('r' as byte, CapabilityBackendKind.Wamr);
+    const index: i32 = try capability_manager_install(&manager, manifest);
+    var payload: [byte: 4] = [];
+    payload[0] = 0 as byte;
+    payload[1] = 'a' as byte;
+    payload[2] = 's' as byte;
+    payload[3] = 'm' as byte;
+
+    try capability_manager_load(&manager, index, &payload[0] as &const byte, 4 as usize);
+    try capability_manager_activate(&manager, index);
+
+    const status: CapabilityStatusCode = try capability_manager_invoke(&manager, index, -1);
+    try assert_true(status == CapabilityStatusCode.InvalidArgument);
+    if index >= 0 && index < @len(manager.registry.entries) as i32 {
+        try assert_true(manager.registry.entries[index].state == CapabilityState.Failed);
+        try assert_true(manager.registry.entries[index].last_status == CapabilityStatusCode.InvalidArgument);
+        return;
+    }
+    return error.AssertionFailed;
+}
+
+fn test_capability_manager_disable_and_rollback_delegate_to_loader() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var manager: CapabilityManager = capability_manager_default();
+    try capability_manager_init(&manager, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.NativeUya,
+        host_api: &host,
+    });
+
+    const manifest: CapabilityManifest = make_valid_manifest('s' as byte, CapabilityBackendKind.NativeUya);
+    const index: i32 = try capability_manager_install(&manager, manifest);
+    var payload: [byte: 4] = [];
+    payload[0] = 'U' as byte;
+    payload[1] = 'Y' as byte;
+    payload[2] = 'A' as byte;
+    payload[3] = '!' as byte;
+
+    try capability_manager_load(&manager, index, &payload[0] as &const byte, 4 as usize);
+    try capability_manager_activate(&manager, index);
+    try capability_manager_disable(&manager, index);
+    if index >= 0 && index < @len(manager.registry.entries) as i32 {
+        try assert_true(manager.registry.entries[index].state == CapabilityState.Disabled);
+
+        try capability_loader_fail(&manager.registry, index, CapabilityStatusCode.InvalidArgument);
+        try capability_manager_rollback(&manager, index);
+        try assert_true(manager.registry.entries[index].state == CapabilityState.Disabled);
+        return;
+    }
+    return error.AssertionFailed;
+}
+
+fn test_capability_manager_unload_clears_loaded_session() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var manager: CapabilityManager = capability_manager_default();
+    try capability_manager_init(&manager, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.NativeUya,
+        host_api: &host,
+    });
+
+    const manifest: CapabilityManifest = make_valid_manifest('u' as byte, CapabilityBackendKind.NativeUya);
+    const index: i32 = try capability_manager_install(&manager, manifest);
+    var payload: [byte: 4] = [];
+    payload[0] = 'U' as byte;
+    payload[1] = 'Y' as byte;
+    payload[2] = 'A' as byte;
+    payload[3] = '!' as byte;
+
+    try capability_manager_load(&manager, index, &payload[0] as &const byte, 4 as usize);
+    try capability_manager_activate(&manager, index);
+    try capability_manager_unload(&manager, index);
+    if index >= 0 && index < @len(manager.registry.entries) as i32 && index < @len(manager.session_loaded) as i32 {
+        try assert_true(manager.session_loaded[index] == false);
+        try assert_true(manager.registry.entries[index].state == CapabilityState.Disabled);
+
+        var invoke_failed: bool = false;
+        _ = capability_manager_invoke(&manager, index, 0) catch {
+            invoke_failed = true;
+            return;
+        };
+        try assert_true(invoke_failed);
+        return;
+    }
+    return error.AssertionFailed;
+}
+
+fn test_capability_manager_unload_requires_loaded_session() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var manager: CapabilityManager = capability_manager_default();
+    try capability_manager_init(&manager, CapabilityBackendConfig{
+        kind: CapabilityBackendKind.Fake,
+        host_api: &host,
+    });
+
+    const manifest: CapabilityManifest = make_valid_manifest('v' as byte, CapabilityBackendKind.Fake);
+    const index: i32 = try capability_manager_install(&manager, manifest);
+
+    var saw: bool = false;
+    _ = capability_manager_unload(&manager, index) catch {
+        saw = true;
+    };
+    try assert_true(saw);
+}
+
+fn test_capability_loader_install_records_installed_entry() !void {
+    var registry: CapabilityRegistry = capability_registry_init();
+    const manifest: CapabilityManifest = make_valid_manifest('i' as byte, CapabilityBackendKind.NativeUya);
+
+    const index: i32 = try capability_loader_install(&registry, manifest);
+
+    try assert_eq_i32(index, 0);
+    try assert_eq_i32(registry.count, 1);
+    if index >= 0 && index < @len(registry.entries) as i32 {
+        try assert_true(registry.entries[index].in_use);
+        try assert_true(registry.entries[index].state == CapabilityState.Installed);
+        try assert_true(registry.entries[index].last_status == CapabilityStatusCode.Ok);
+        return;
+    }
+    return error.AssertionFailed;
+}
+
+fn test_capability_loader_install_rejects_invalid_manifest() !void {
+    var registry: CapabilityRegistry = capability_registry_init();
+    const manifest: CapabilityManifest = make_valid_manifest('x' as byte, CapabilityBackendKind.Invalid);
+
+    var saw: bool = false;
+    const index: i32 = capability_loader_install(&registry, manifest) catch {
+        saw = true;
+        -1;
+    };
+
+    try assert_true(saw);
+    try assert_eq_i32(index, -1);
+    try assert_eq_i32(registry.count, 0);
+}
+
+fn test_capability_loader_activate_transitions_to_active() !void {
+    var registry: CapabilityRegistry = capability_registry_init();
+    const manifest: CapabilityManifest = make_valid_manifest('a' as byte, CapabilityBackendKind.NativeUya);
+    const index: i32 = try capability_loader_install(&registry, manifest);
+
+    try capability_loader_activate(&registry, index);
+    if index >= 0 && index < @len(registry.entries) as i32 {
+        try assert_true(registry.entries[index].state == CapabilityState.Active);
+        try assert_true(registry.entries[index].last_status == CapabilityStatusCode.Ok);
+        return;
+    }
+    return error.AssertionFailed;
+}
+
+fn test_capability_loader_disable_marks_disabled() !void {
+    var registry: CapabilityRegistry = capability_registry_init();
+    const manifest: CapabilityManifest = make_valid_manifest('d' as byte, CapabilityBackendKind.NativeUya);
+    const index: i32 = try capability_loader_install(&registry, manifest);
+
+    try capability_loader_activate(&registry, index);
+    try capability_loader_disable(&registry, index);
+    if index >= 0 && index < @len(registry.entries) as i32 {
+        try assert_true(registry.entries[index].state == CapabilityState.Disabled);
+        try assert_true(registry.entries[index].last_status == CapabilityStatusCode.Disabled);
+        return;
+    }
+    return error.AssertionFailed;
+}
+
+fn test_capability_loader_rollback_disables_failed_entry() !void {
+    var registry: CapabilityRegistry = capability_registry_init();
+    const manifest: CapabilityManifest = make_valid_manifest('r' as byte, CapabilityBackendKind.NativeUya);
+    const index: i32 = try capability_loader_install(&registry, manifest);
+
+    try capability_loader_activate(&registry, index);
+    try capability_loader_fail(&registry, index, CapabilityStatusCode.PermissionDenied);
+    if index >= 0 && index < @len(registry.entries) as i32 {
+        try assert_true(registry.entries[index].state == CapabilityState.Failed);
+        try assert_true(registry.entries[index].last_status == CapabilityStatusCode.PermissionDenied);
+
+        try capability_loader_rollback(&registry, index);
+
+        try assert_true(registry.entries[index].state == CapabilityState.Disabled);
+        try assert_true(registry.entries[index].last_status == CapabilityStatusCode.Disabled);
+        return;
+    }
+    return error.AssertionFailed;
+}
+
+fn test_capability_registry_add_rejects_when_full() !void {
+    var registry: CapabilityRegistry = capability_registry_init();
+    var i: i32 = 0;
+    while i < CAPABILITY_MAX_REGISTRY_ENTRIES {
+        const manifest: CapabilityManifest = make_valid_manifest((65 + i) as byte, CapabilityBackendKind.NativeUya);
+        try assert_eq_i32(try capability_loader_install(&registry, manifest), i);
+        i = i + 1;
+    }
+
+    var saw: bool = false;
+    const overflow_manifest: CapabilityManifest = make_valid_manifest('z' as byte, CapabilityBackendKind.NativeUya);
+    const overflow_index: i32 = capability_loader_install(&registry, overflow_manifest) catch {
+        saw = true;
+        -1;
+    };
+
+    try assert_true(saw);
+    try assert_eq_i32(overflow_index, -1);
+    try assert_eq_i32(registry.count, CAPABILITY_MAX_REGISTRY_ENTRIES);
+}
+
+fn test_capability_registry_disable_invalid_index_is_error() !void {
+    var registry: CapabilityRegistry = capability_registry_init();
+    const manifest: CapabilityManifest = make_valid_manifest('n' as byte, CapabilityBackendKind.NativeUya);
+    _ = try capability_loader_install(&registry, manifest);
+
+    var negative_failed: bool = false;
+    _ = capability_loader_disable(&registry, -1) catch {
+        negative_failed = true;
+    };
+    try assert_true(negative_failed);
+
+    var overflow_failed: bool = false;
+    _ = capability_loader_disable(&registry, registry.count) catch {
+        overflow_failed = true;
+    };
+    try assert_true(overflow_failed);
+}
+
+fn test_capability_loader_activate_invalid_or_unused_entry_is_error() !void {
+    var registry: CapabilityRegistry = capability_registry_init();
+
+    var empty_failed: bool = false;
+    _ = capability_loader_activate(&registry, 0) catch {
+        empty_failed = true;
+    };
+    try assert_true(empty_failed);
+
+    const manifest: CapabilityManifest = make_valid_manifest('u' as byte, CapabilityBackendKind.NativeUya);
+    const index: i32 = try capability_loader_install(&registry, manifest);
+    if index >= 0 && index < @len(registry.entries) as i32 {
+        registry.entries[index].in_use = false;
+
+        var unused_failed: bool = false;
+        _ = capability_loader_activate(&registry, index) catch {
+            unused_failed = true;
+        };
+        try assert_true(unused_failed);
+        try assert_true(registry.entries[index].state == CapabilityState.Installed);
+        return;
+    }
+    return error.AssertionFailed;
+}
+
+fn test_capability_loader_fail_invalid_index_is_error() !void {
+    var registry: CapabilityRegistry = capability_registry_init();
+
+    var failed: bool = false;
+    _ = capability_loader_fail(&registry, 0, CapabilityStatusCode.Failed) catch {
+        failed = true;
+    };
+    try assert_true(failed);
+}
+
+fn test_capability_loader_rollback_invalid_or_unused_entry_is_error() !void {
+    var registry: CapabilityRegistry = capability_registry_init();
+
+    var empty_failed: bool = false;
+    _ = capability_loader_rollback(&registry, 0) catch {
+        empty_failed = true;
+    };
+    try assert_true(empty_failed);
+
+    const manifest: CapabilityManifest = make_valid_manifest('q' as byte, CapabilityBackendKind.NativeUya);
+    const index: i32 = try capability_loader_install(&registry, manifest);
+    if index >= 0 && index < @len(registry.entries) as i32 {
+        registry.entries[index].in_use = false;
+
+        var unused_failed: bool = false;
+        _ = capability_loader_rollback(&registry, index) catch {
+            unused_failed = true;
+        };
+        try assert_true(unused_failed);
+        return;
+    }
+    return error.AssertionFailed;
+}
+
+fn test_capability_hostapi_time_now_requires_permission() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    var denied_ctx: CapabilityExecutionContext = capability_execution_context_init(1u32, capability_manifest_init().limits);
+
+    var denied: bool = false;
+    const denied_time: CapabilityHostTime = host.time_now(&denied_ctx) catch {
+        denied = true;
+        CapabilityHostTime{};
+    };
+
+    try assert_true(denied);
+    try assert_eq_i32(denied_time.epoch_sec as i32, 0);
+
+    var granted_ctx: CapabilityExecutionContext = make_ctx_with_permission(CapabilityPermissionId.TimeRead, true);
+    const granted_time: CapabilityHostTime = host.time_now(&granted_ctx) catch {
+        return error.AssertionFailed;
+    };
+    try assert_eq_i32(granted_time.epoch_sec as i32, 0);
+    try assert_eq_i32(granted_time.epoch_ms as i32, 0);
+}
+
+fn test_capability_hostapi_log_and_kv_permissions() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    const msg: &[byte] = &"hi"[0: 2];
+    const key: &[byte] = &"k"[0: 1];
+    const value: &[byte] = &"v"[0: 1];
+
+    var log_denied_ctx: CapabilityExecutionContext = capability_execution_context_init(1u32, capability_manifest_init().limits);
+    var log_denied: bool = false;
+    _ = host.log_write(&log_denied_ctx, 1, msg.ptr) catch {
+        log_denied = true;
+    };
+    try assert_true(log_denied);
+
+    var log_granted_ctx: CapabilityExecutionContext = make_ctx_with_permission(CapabilityPermissionId.LogWrite, true);
+    _ = host.log_write(&log_granted_ctx, 1, msg.ptr) catch {
+        return error.AssertionFailed;
+    };
+
+    var kv_read_denied_ctx: CapabilityExecutionContext = capability_execution_context_init(1u32, capability_manifest_init().limits);
+    var kv_read_denied: bool = false;
+    const kv_read_value: i32 = host.kv_get(&kv_read_denied_ctx, key.ptr) catch {
+        kv_read_denied = true;
+        -1;
+    };
+    try assert_true(kv_read_denied);
+    try assert_eq_i32(kv_read_value, -1);
+
+    var kv_read_granted_ctx: CapabilityExecutionContext = make_ctx_with_permission(CapabilityPermissionId.StorageKvRead, true);
+    const kv_read_granted_value: i32 = host.kv_get(&kv_read_granted_ctx, key.ptr) catch {
+        return error.AssertionFailed;
+    };
+    try assert_eq_i32(kv_read_granted_value, 0);
+
+    var kv_write_denied_ctx: CapabilityExecutionContext = capability_execution_context_init(1u32, capability_manifest_init().limits);
+    var kv_write_denied: bool = false;
+    _ = host.kv_set(&kv_write_denied_ctx, key.ptr, value.ptr) catch {
+        kv_write_denied = true;
+    };
+    try assert_true(kv_write_denied);
+
+    var kv_write_granted_ctx: CapabilityExecutionContext = make_ctx_with_permission(CapabilityPermissionId.StorageKvWrite, true);
+    _ = host.kv_set(&kv_write_granted_ctx, key.ptr, value.ptr) catch {
+        return error.AssertionFailed;
+    };
+}
+
+fn test_capability_benchmark_result_reflects_session() !void {
+    const case_info: CapabilityBenchmarkCase = CapabilityBenchmarkCase{
+        backend: CapabilityBackendKind.Fake,
+        case_kind: CapabilityBenchmarkCaseKind.InvokeWarm,
+        iterations: 100,
+        payload_size: 256 as usize,
+    };
+    const manifest: CapabilityManifest = make_valid_manifest('b' as byte, CapabilityBackendKind.Fake);
+    const metrics: CapabilityBackendMetrics = CapabilityBackendMetrics{
+        install_us: 11u64,
+        activate_us: 22u64,
+        first_invoke_us: 33u64,
+        avg_invoke_us: 44u64,
+        p99_invoke_us: 55u64,
+        host_call_overhead_us: 66u64,
+        failure_count: 2u32,
+        timeout_count: 1u32,
+    };
+    const session: CapabilityBackendSession = CapabilityBackendSession{
+        kind: CapabilityBackendKind.Fake,
+        manifest: manifest,
+        ctx: capability_execution_context_init(7u32, manifest.limits),
+        status: CapabilityStatusCode.Ok,
+        metrics: metrics,
+    };
+
+    const result: CapabilityBenchmarkResult = capability_benchmark_result_from_session(case_info, &session);
+
+    try assert_true(result.status_ok);
+    try assert_true(result.case_info.backend == CapabilityBackendKind.Fake);
+    try assert_true(result.case_info.case_kind == CapabilityBenchmarkCaseKind.InvokeWarm);
+    try assert_eq_i32(result.case_info.iterations, 100);
+    try assert_eq_i32(result.case_info.payload_size as i32, 256);
+    try assert_eq_i32(result.metrics.install_us as i32, 11);
+    try assert_eq_i32(result.metrics.activate_us as i32, 22);
+    try assert_eq_i32(result.metrics.first_invoke_us as i32, 33);
+    try assert_eq_i32(result.metrics.avg_invoke_us as i32, 44);
+    try assert_eq_i32(result.metrics.p99_invoke_us as i32, 55);
+    try assert_eq_i32(result.metrics.host_call_overhead_us as i32, 66);
+    try assert_eq_i32(result.metrics.failure_count as i32, 2);
+    try assert_eq_i32(result.metrics.timeout_count as i32, 1);
+}
+
+fn test_capability_benchmark_manager_invoke_loop_fake() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    const manifest: CapabilityManifest = make_valid_manifest('y' as byte, CapabilityBackendKind.Fake);
+    var payload: [byte: 1] = [];
+    payload[0] = 'x' as byte;
+
+    const result: CapabilityBenchmarkResult = try capability_benchmark_run_manager_case(
+        CapabilityBenchmarkCase{
+            backend: CapabilityBackendKind.Fake,
+            case_kind: CapabilityBenchmarkCaseKind.InvokeLoop,
+            iterations: 4,
+            payload_size: 0 as usize,
+        },
+        CapabilityBackendConfig{
+            kind: CapabilityBackendKind.Fake,
+            host_api: &host,
+        },
+        manifest,
+        &payload[0] as &const byte,
+        1 as usize,
+        0,
+    );
+
+    try assert_true(result.status_ok);
+    try assert_true(result.case_info.backend == CapabilityBackendKind.Fake);
+    try assert_true(result.case_info.case_kind == CapabilityBenchmarkCaseKind.InvokeLoop);
+    try assert_eq_i32(result.case_info.payload_size as i32, 1);
+    try assert_eq_i32(result.case_info.iterations, 4);
+    try assert_eq_i32(result.metrics.failure_count as i32, 0);
+    try assert_eq_i32(result.metrics.timeout_count as i32, 0);
+    try assert_true(result.metrics.p99_invoke_us >= result.metrics.avg_invoke_us);
+}
+
+fn test_capability_benchmark_manager_failure_propagates_status() !void {
+    var host: CapabilityHostApi = CapabilityHostApi{};
+    const manifest: CapabilityManifest = make_valid_manifest('z' as byte, CapabilityBackendKind.Wamr);
+    var payload: [byte: 4] = [];
+    payload[0] = 0 as byte;
+    payload[1] = 'a' as byte;
+    payload[2] = 's' as byte;
+    payload[3] = 'm' as byte;
+
+    const result: CapabilityBenchmarkResult = try capability_benchmark_run_manager_case(
+        CapabilityBenchmarkCase{
+            backend: CapabilityBackendKind.Wamr,
+            case_kind: CapabilityBenchmarkCaseKind.InvokeCold,
+            iterations: 1,
+            payload_size: 0 as usize,
+        },
+        CapabilityBackendConfig{
+            kind: CapabilityBackendKind.Wamr,
+            host_api: &host,
+        },
+        manifest,
+        &payload[0] as &const byte,
+        4 as usize,
+        -1,
+    );
+
+    try assert_true(result.status_ok == false);
+    try assert_true(result.case_info.backend == CapabilityBackendKind.Wamr);
+    try assert_eq_u64(result.metrics.failure_count as u64, 1u64);
+    try assert_eq_u64(result.metrics.timeout_count as u64, 0u64);
+}
+
+fn test_capability_benchmark_name_helpers() !void {
+    try assert_true(capability_benchmark_backend_name(CapabilityBackendKind.Fake)[0] == 'f' as byte);
+    try assert_true(capability_benchmark_backend_name(CapabilityBackendKind.Wamr)[0] == 'w' as byte);
+    try assert_true(capability_benchmark_case_name(CapabilityBenchmarkCaseKind.InvokeLoop)[0] == 'i' as byte);
+    try assert_true(capability_benchmark_case_name(CapabilityBenchmarkCaseKind.PermissionDenied)[0] == 'p' as byte);
+}
+
+fn test_capability_benchmark_latency_and_ratio_helpers() !void {
+    const result: CapabilityBenchmarkResult = CapabilityBenchmarkResult{
+        case_info: CapabilityBenchmarkCase{
+            backend: CapabilityBackendKind.NativeUya,
+            case_kind: CapabilityBenchmarkCaseKind.InvokeWarm,
+            iterations: 10,
+            payload_size: 4 as usize,
+        },
+        status_ok: true,
+        metrics: CapabilityBackendMetrics{
+            install_us: 10u64,
+            activate_us: 20u64,
+            first_invoke_us: 30u64,
+            avg_invoke_us: 40u64,
+            p99_invoke_us: 50u64,
+        },
+    };
+
+    try assert_eq_u64(capability_benchmark_case_latency_us(&result), 40u64);
+    try assert_eq_i64((capability_benchmark_relative_ratio(20u64, 50u64) * 100.0) as i64, 250);
+    try assert_eq_i64((capability_benchmark_relative_ratio(0u64, 50u64) * 100.0) as i64, 0);
+}
+
+export fn main() i32 {
+    test_suite_begin("Capability Runtime Compat Tests");
+    run_test("manifest defaults valid", test_capability_manifest_defaults_are_valid);
+    run_test("manifest invalid backend rejected", test_capability_manifest_invalid_backend_rejected);
+    run_test("permission declare grant require", test_capability_permission_declare_grant_require);
+    run_test("permission undeclared grant error", test_capability_permission_grant_undeclared_is_error);
+    run_test("fake backend load and invoke", test_capability_fake_backend_load_and_invoke);
+    run_test("native backend load and invoke", test_capability_native_backend_load_and_invoke);
+    run_test("native backend invalid payload rejected", test_capability_native_backend_invalid_payload_rejected);
+    run_test("wamr backend load and invoke", test_capability_wamr_backend_load_and_invoke);
+    run_test("wamr backend invalid payload rejected", test_capability_wamr_backend_invalid_payload_rejected);
+    run_test("wamr backend negative trigger invalid argument", test_capability_wamr_backend_negative_trigger_maps_invalid_argument);
+    run_test("backend adapter dispatches fake backend", test_capability_backend_adapter_dispatches_fake_backend);
+    run_test("backend adapter dispatches native backend", test_capability_backend_adapter_dispatches_native_backend);
+    run_test("backend adapter dispatches wamr backend", test_capability_backend_adapter_dispatches_wamr_backend);
+    run_test("backend adapter rejects kind mismatch", test_capability_backend_adapter_rejects_kind_mismatch);
+    run_test("manager install load activate invoke fake", test_capability_manager_install_load_activate_invoke_fake);
+    run_test("manager invoke requires load and active", test_capability_manager_invoke_requires_load_and_active);
+    run_test("manager invoke non ok marks failed", test_capability_manager_invoke_non_ok_marks_failed);
+    run_test("manager disable and rollback delegate", test_capability_manager_disable_and_rollback_delegate_to_loader);
+    run_test("manager unload clears loaded session", test_capability_manager_unload_clears_loaded_session);
+    run_test("manager unload requires loaded session", test_capability_manager_unload_requires_loaded_session);
+    run_test("loader install records installed entry", test_capability_loader_install_records_installed_entry);
+    run_test("loader install rejects invalid manifest", test_capability_loader_install_rejects_invalid_manifest);
+    run_test("loader activate transitions to active", test_capability_loader_activate_transitions_to_active);
+    run_test("loader disable marks disabled", test_capability_loader_disable_marks_disabled);
+    run_test("loader rollback disables failed entry", test_capability_loader_rollback_disables_failed_entry);
+    run_test("registry add rejects when full", test_capability_registry_add_rejects_when_full);
+    run_test("registry disable invalid index error", test_capability_registry_disable_invalid_index_is_error);
+    run_test("loader activate invalid or unused entry error", test_capability_loader_activate_invalid_or_unused_entry_is_error);
+    run_test("loader fail invalid index error", test_capability_loader_fail_invalid_index_is_error);
+    run_test("loader rollback invalid or unused entry error", test_capability_loader_rollback_invalid_or_unused_entry_is_error);
+    run_test("hostapi time_now requires permission", test_capability_hostapi_time_now_requires_permission);
+    run_test("hostapi log and kv permissions", test_capability_hostapi_log_and_kv_permissions);
+    run_test("benchmark result reflects session", test_capability_benchmark_result_reflects_session);
+    run_test("benchmark manager invoke loop fake", test_capability_benchmark_manager_invoke_loop_fake);
+    run_test("benchmark manager failure propagates status", test_capability_benchmark_manager_failure_propagates_status);
+    run_test("benchmark name helpers", test_capability_benchmark_name_helpers);
+    run_test("benchmark latency and ratio helpers", test_capability_benchmark_latency_and_ratio_helpers);
+    return test_suite_end();
+}

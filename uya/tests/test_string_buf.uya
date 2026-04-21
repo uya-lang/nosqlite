@@ -1,0 +1,193 @@
+// test_string_buf.uya - StringBuf：追加、清空、与 Vec 一致的 drop 释放
+
+use std.testing;
+
+use std.collections.string_buf.StringBuf;
+use std.collections.string_buf.string_buf_new;
+use std.mem.allocator.IAllocator;
+use std.mem.allocator.MallocAllocator;
+use std.mem.allocator.get_allocator;
+
+var g_string_buf_dealloc_count: i32 = 0;
+var g_string_buf_alloc_count: i32 = 0;
+var g_string_buf_realloc_count: i32 = 0;
+
+struct CountingMallocWrapper : IAllocator {
+    inner: &MallocAllocator,
+
+    fn alloc(self: &Self, size: usize) !&byte {
+        g_string_buf_alloc_count = g_string_buf_alloc_count + 1;
+        return self.inner.alloc(size);
+    },
+
+    fn dealloc(self: &Self, ptr: &byte) void {
+        g_string_buf_dealloc_count = g_string_buf_dealloc_count + 1;
+        self.inner.dealloc(ptr);
+    },
+
+    fn realloc(self: &Self, ptr: &byte, new_size: usize) !&byte {
+        g_string_buf_realloc_count = g_string_buf_realloc_count + 1;
+        return self.inner.realloc(ptr, new_size);
+    },
+}
+
+test "string_buf_append_cstr_and_bytes" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var sb: StringBuf = string_buf_new(w);
+    const hi: *const byte = "Hi" as *const byte;
+    try sb.append_cstr(hi as &const byte);
+    try assert_eq_i32(sb.len() as i32, 2);
+    const b0r: !byte = sb.get_byte(0);
+    const b1r: !byte = sb.get_byte(1);
+    var b0: byte = try b0r;
+    var b1: byte = try b1r;
+    try assert_eq_i32(b0 as i32, 72);
+    try assert_eq_i32(b1 as i32, 105);
+    try sb.push_byte(33);
+    try assert_eq_i32(sb.len() as i32, 3);
+    const b2r: !byte = sb.get_byte(2);
+    var b2: byte = try b2r;
+    try assert_eq_i32(b2 as i32, 33);
+}
+
+test "string_buf_append_slice_and_clear" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var sb: StringBuf = string_buf_new(w);
+    // 字符串字面量可由类型检查接受为 &[const byte]；C 后端须生成按值 uya_slice（见 c99_emit_call_arg_expr）
+    try sb.append_slice("abcd");
+    try assert_eq_i32(sb.len() as i32, 4);
+    sb.clear();
+    try assert_eq_i32(sb.len() as i32, 0);
+}
+
+test "string_buf_cap_and_try_reserve" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var sb: StringBuf = string_buf_new(w);
+    try assert_eq_i32(sb.cap() as i32, 0);
+    try sb.try_reserve(10);
+    try assert_eq_i32(sb.len() as i32, 0);
+    try assert_eq_i32(sb.cap() as i32, 16);
+    try sb.push_byte(1);
+    try assert_eq_i32(sb.len() as i32, 1);
+    try assert_eq_i32(sb.cap() as i32, 16);
+}
+
+test "string_buf_append_slice_pre_reserve_no_realloc" {
+    g_string_buf_alloc_count = 0;
+    g_string_buf_realloc_count = 0;
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var sb: StringBuf = string_buf_new(w);
+    try sb.append_slice("01234567890123456789");
+    try assert_eq_i32(sb.len() as i32, 20);
+    try assert_eq_i32(g_string_buf_alloc_count, 1);
+    try assert_eq_i32(g_string_buf_realloc_count, 0);
+}
+
+test "string_buf_drop_one_dealloc" {
+    g_string_buf_dealloc_count = 0;
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    {
+        var sb: StringBuf = string_buf_new(w);
+        try sb.append_cstr("x" as &const byte);
+    }
+    try assert_eq_i32(g_string_buf_dealloc_count, 1);
+}
+
+test "string_buf_is_empty_and_pop_byte" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var sb: StringBuf = string_buf_new(w);
+    try assert_eq_bool(sb.is_empty(), true);
+    try sb.push_byte(65);
+    try sb.push_byte(66);
+    try assert_eq_bool(sb.is_empty(), false);
+    const b1r: !byte = sb.pop_byte();
+    var b1: byte = try b1r;
+    try assert_eq_i32(b1 as i32, 66);
+    const b0r: !byte = sb.pop_byte();
+    var b0: byte = try b0r;
+    try assert_eq_i32(b0 as i32, 65);
+    try assert_eq_bool(sb.is_empty(), true);
+}
+
+test "string_buf_as_slice_view" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var sb: StringBuf = string_buf_new(w);
+    try sb.append_slice("xyz");
+    const s: &[const byte] = sb.as_slice();
+    try assert_eq_i32(s.len as i32, 3);
+    try assert_eq_i32(s.ptr[0] as i32, 120);
+    try assert_eq_i32(s.ptr[1] as i32, 121);
+    try assert_eq_i32(s.ptr[2] as i32, 122);
+}
+
+test "string_buf_truncate_ok_and_error" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var sb: StringBuf = string_buf_new(w);
+    try sb.append_slice("abcd");
+    try sb.truncate(2);
+    try assert_eq_i32(sb.len() as i32, 2);
+    const b0r: !byte = sb.get_byte(0);
+    const b1r: !byte = sb.get_byte(1);
+    var b0: byte = try b0r;
+    var b1: byte = try b1r;
+    try assert_eq_i32(b0 as i32, 97);
+    try assert_eq_i32(b1 as i32, 98);
+    var got_err: bool = false;
+    _ = sb.truncate(3) catch {
+        got_err = true;
+    };
+    try assert_eq_bool(got_err, true);
+}
+
+test "string_buf_starts_with_and_ends_with" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var sb: StringBuf = string_buf_new(w);
+    try sb.append_slice("hello_uya");
+    try assert_eq_bool(sb.starts_with("hello"), true);
+    try assert_eq_bool(sb.starts_with("ello"), false);
+    try assert_eq_bool(sb.ends_with("uya"), true);
+    try assert_eq_bool(sb.ends_with("uyaa"), false);
+}
+
+test "string_buf_pop_empty_error" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var sb: StringBuf = string_buf_new(w);
+    const r: !byte = sb.pop_byte();
+    match r {
+        error.StringBufEmpty => {},
+        else => {
+            try assert_eq_i32(0, 1);
+        },
+    }
+}
+
+test "string_buf_set_and_contains_byte" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var sb: StringBuf = string_buf_new(w);
+    try sb.append_slice("abc");
+    try assert_eq_bool(sb.contains_byte(98), true);
+    try assert_eq_bool(sb.contains_byte(120), false);
+    try sb.set_byte(1, 90);
+    const b1r: !byte = sb.get_byte(1);
+    var b1: byte = try b1r;
+    try assert_eq_i32(b1 as i32, 90);
+    try assert_eq_bool(sb.contains_byte(98), false);
+    try assert_eq_bool(sb.contains_byte(90), true);
+    var got_err: bool = false;
+    _ = sb.set_byte(3, 0) catch {
+        got_err = true;
+    };
+    try assert_eq_bool(got_err, true);
+}
+
+test "string_buf_compat_aliases" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var sb: StringBuf = string_buf_new(w);
+    try sb.push(65);
+    try sb.push_str("bc" as &const byte);
+    const s: &[const byte] = sb.as_str();
+    try assert_eq_i32(s.len as i32, 3);
+    try assert_eq_i32(s.ptr[0] as i32, 65);
+    try assert_eq_i32(s.ptr[1] as i32, 98);
+    try assert_eq_i32(s.ptr[2] as i32, 99);
+}

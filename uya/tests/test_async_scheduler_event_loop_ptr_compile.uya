@@ -1,0 +1,24 @@
+use std.async_scheduler.Scheduler;
+use std.async_scheduler.scheduler_new;
+use std.async_scheduler.TaskQueue_i32;
+use std.async_scheduler.task_queue_i32_new;
+use std.async_scheduler.scheduler_run_task_queue_i32_with_event_loop;
+use std.async_event.LinuxEpoll;
+use std.async_event.linux_epoll_create;
+
+// 回归：EventLoop 接口形参在调用点传 &LinuxEpoll 时，C99 后端应正确装箱为接口值。
+export fn main() i32 {
+    const s: Scheduler = scheduler_new();
+    const loop: LinuxEpoll = linux_epoll_create(0) catch {
+        return 2;
+    };
+    var q: TaskQueue_i32 = task_queue_i32_new();
+    const r: !i32 = scheduler_run_task_queue_i32_with_event_loop(&s, &loop, &q, 0);
+    const done: i32 = r catch {
+        return 3;
+    };
+    if done != 0 {
+        return 4;
+    }
+    return 0;
+}

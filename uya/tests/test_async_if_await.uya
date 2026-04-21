@@ -1,0 +1,41 @@
+// 测试 @async_fn 中 if/else 分支内的 @await
+// 使用返回类型与函数返回类型匹配的 await，避免 per-state poll 类型推断问题
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+@async_fn fn helper_10() Future<!i32> {
+    return 10;
+}
+
+@async_fn fn helper_20() Future<!i32> {
+    return 20;
+}
+
+@async_fn fn async_if_branch(choose_a: i32) Future<!i32> {
+    var result: i32 = 0;
+    if choose_a != 0 {
+        const x: i32 = try @await helper_10();
+        result = x + 100;
+    } else {
+        const y: i32 = try @await helper_20();
+        result = y + 200;
+    }
+    return result;
+}
+
+test "async_if_then_await" {
+    const f: Future<!i32> = async_if_branch(1);
+    const res: !i32 = block_on<i32>(f);
+    const v: i32 = res catch { -1; };
+    // helper_10 → 10, result = 10 + 100 = 110
+    try assert_eq_i32(v, 110);
+}
+
+test "async_if_else_await" {
+    const f: Future<!i32> = async_if_branch(0);
+    const res: !i32 = block_on<i32>(f);
+    const v: i32 = res catch { -1; };
+    // helper_20 → 20, result = 20 + 200 = 220
+    try assert_eq_i32(v, 220);
+}

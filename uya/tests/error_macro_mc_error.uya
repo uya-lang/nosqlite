@@ -1,0 +1,12 @@
+// 测试 @mc_error 编译时错误 - 这个测试应该编译失败
+
+mc always_error() expr {
+    @mc_error("这是一个编译时错误");
+    @mc_code(@mc_ast(0));
+}
+
+fn main() i32 {
+    const x: i32 = always_error();
+    return x;
+}
+

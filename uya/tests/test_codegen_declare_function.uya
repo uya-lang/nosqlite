@@ -1,0 +1,64 @@
+// 测试 codegen_declare_function 函数声明功能
+use std.runtime.entry;
+// 这个测试程序用于验证函数声明的代码生成是否正确
+// 
+// 注意：这个测试程序主要用于验证 codegen_declare_function 中修复的
+// params 变量未定义错误（应该使用 fn_decl.fn_decl_params[i]）
+//
+// 修复说明：
+// 在 codegen_declare_function 函数中，原来的代码使用了未定义的变量 params：
+//   const param: &ASTNode = params[i];  // 错误：params 未定义
+// 修复后应该使用：
+//   const param: &ASTNode = fn_decl.fn_decl_params[i];  // 正确
+
+// 简化的测试：只测试数组访问逻辑，模拟 codegen_declare_function 的修复
+struct SimpleNode {
+    params: [i32: 10],
+    param_count: i32,
+}
+
+// 模拟 codegen_declare_function 中的关键修复
+// 使用简单的结构体来测试参数数组访问
+fn test_params_access_like_codegen(node: &SimpleNode) i32 {
+    if node == null {
+        return -1;
+    }
+    
+    // 模拟 codegen_declare_function 中的修复：
+    // 原来：const param = params[i];  // 错误：params 未定义
+    // 修复：const param = node.params[i];  // 正确：使用 node.params
+    const param_count: i32 = node.param_count;
+    if param_count < 0 || param_count > 10 {
+        return -1;
+    }
+    
+    var i: i32 = 0;
+    while i < param_count {
+        // 正确访问：使用 node.params[i]（修复了原来的 params[i] 错误）
+        // 这是 codegen_declare_function 中修复的关键代码
+        // 边界安全：i < param_count 且 param_count <= 10，所以 i < 10
+        if i >= 0 && i < 10 {
+            const param: i32 = node.params[i];
+            if param < 0 {
+                return -1;
+            }
+        }
+        i = i + 1;
+    }
+    
+    return 0;
+}
+
+export fn main() i32 {
+    // 测试参数访问（模拟 codegen_declare_function 的修复）
+    // 使用空数组初始化，然后通过函数测试逻辑
+    var node: SimpleNode = SimpleNode{ param_count: 0, params: [] };
+    
+    // 测试空参数列表
+    const result: i32 = test_params_access_like_codegen(&node);
+    if result != 0 {
+        return 1;
+    }
+    
+    return 0;
+}

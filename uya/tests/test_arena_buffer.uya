@@ -1,0 +1,35 @@
+// 测试程序：验证 arena.buffer[index] 场景
+use std.runtime.entry;
+// 模拟 arena.uya 中的实际使用场景
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Arena {
+    buffer: &byte,
+    size: i32,
+    offset: i32,
+}
+
+fn test_arena_buffer() !void {
+    var buffer: [byte: 100] = [];
+    var arena: Arena = Arena {
+        buffer: &buffer[0] as &byte,
+        size: 100,
+        offset: 0,
+    };
+    
+    // 测试：使用 arena.buffer 进行数组访问
+    const buffer_ptr: &byte = arena.buffer;
+    const temp: byte = buffer_ptr[0];
+    
+    try expect(temp == 0);
+}
+
+export fn main() i32 {
+    test_suite_begin("Arena Buffer Tests");
+    run_test("arena buffer access", test_arena_buffer);
+    return test_suite_end();
+}

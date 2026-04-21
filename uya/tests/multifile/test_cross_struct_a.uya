@@ -1,0 +1,6 @@
+// test_cross_struct_a.uya - 定义结构体 StructA
+// 被 test_cross_struct_b.uya 引用
+
+struct StructA {
+    value: i32,
+}

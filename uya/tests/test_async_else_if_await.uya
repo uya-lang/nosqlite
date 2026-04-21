@@ -1,0 +1,48 @@
+// else-if branches are AST_IF_STMT else branches; async lowering must not skip them.
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+fn ready_i32_else_if(v: i32) Future<!i32> {
+    return Future<!i32>{ state: Poll<!i32>.Ready(ok<i32>(v)) };
+}
+
+@async_fn
+fn async_else_if_await(mode: i32) Future<!i32> {
+    var copied: i32 = 0;
+    var body_total: i32 = 0;
+
+    if mode == 1 {
+        const a: i32 = try @await ready_i32_else_if(2);
+        copied = a;
+        body_total = 10;
+    } else if mode == 2 {
+        body_total = 100;
+        while copied < 3 {
+            const n: i32 = try @await ready_i32_else_if(1);
+            copied = copied + n;
+        }
+        body_total = copied;
+        if body_total == 3 {
+            body_total = body_total + 40;
+        }
+    } else {
+        body_total = 5;
+    }
+
+    return body_total;
+}
+
+test "async_else_if_branch_with_await_continues_after_branch" {
+    const r1: !i32 = block_on<i32>(async_else_if_await(1));
+    const v1: i32 = r1 catch { 0 - 1; };
+    try assert_eq_i32(v1, 10);
+
+    const r2: !i32 = block_on<i32>(async_else_if_await(2));
+    const v2: i32 = r2 catch { 0 - 1; };
+    try assert_eq_i32(v2, 43);
+
+    const r3: !i32 = block_on<i32>(async_else_if_await(3));
+    const v3: i32 = r3 catch { 0 - 1; };
+    try assert_eq_i32(v3, 5);
+}

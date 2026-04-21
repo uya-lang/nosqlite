@@ -1,0 +1,36 @@
+error Foo;
+error Bar;
+
+fn fail_foo() !void {
+    return error.Foo;
+}
+
+export fn main() i32 {
+    if !(error.Foo == error.Foo) {
+        return 1;
+    }
+    if error.Foo == error.Bar {
+        return 2;
+    }
+    if !(error.Foo != error.Bar) {
+        return 3;
+    }
+
+    _ = fail_foo() catch |err| {
+        if !(err == error.Foo) {
+            return 4;
+        }
+        if error.Foo != err {
+            return 5;
+        }
+        if err == error.Bar {
+            return 6;
+        }
+        if !(error.Bar != err) {
+            return 7;
+        }
+        return 0;
+    };
+
+    return 8;
+}

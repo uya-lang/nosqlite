@@ -1,0 +1,101 @@
+// 测试 std.yaml Flow 解析：null、YAML 布尔、JSON 布尔、数字、字符串
+use std.runtime.entry;
+use std.yaml.value.YamlValue;
+use std.yaml.parser.parse;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 4096] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 4096);
+
+    var buf: [byte: 64] = [];
+    buf[0] = 110;
+    buf[1] = 117;
+    buf[2] = 108;
+    buf[3] = 108;
+    const vn: YamlValue = parse(&a, &buf[0], 4) catch { return 1; };
+    match vn {
+        .yaml_null(_) => {},
+        else => { return 2; },
+    }
+
+    buf[0] = 121;
+    buf[1] = 101;
+    buf[2] = 115;
+    const vy: YamlValue = parse(&a, &buf[0], 3) catch { return 3; };
+    match vy {
+        .bool_val(x) => { if !x { return 4; } },
+        else => { return 5; },
+    }
+
+    buf[0] = 110;
+    buf[1] = 111;
+    const vno: YamlValue = parse(&a, &buf[0], 2) catch { return 6; };
+    match vno {
+        .bool_val(x) => { if x { return 7; } },
+        else => { return 8; },
+    }
+
+    buf[0] = 111;
+    buf[1] = 110;
+    const von: YamlValue = parse(&a, &buf[0], 2) catch { return 9; };
+    match von {
+        .bool_val(x) => { if !x { return 10; } },
+        else => { return 11; },
+    }
+
+    buf[0] = 111;
+    buf[1] = 102;
+    buf[2] = 102;
+    const voff: YamlValue = parse(&a, &buf[0], 3) catch { return 12; };
+    match voff {
+        .bool_val(x) => { if x { return 13; } },
+        else => { return 14; },
+    }
+
+    buf[0] = 116;
+    buf[1] = 114;
+    buf[2] = 117;
+    buf[3] = 101;
+    const vt: YamlValue = parse(&a, &buf[0], 4) catch { return 15; };
+    match vt {
+        .bool_val(x) => { if !x { return 16; } },
+        else => { return 17; },
+    }
+
+    buf[0] = 102;
+    buf[1] = 97;
+    buf[2] = 108;
+    buf[3] = 115;
+    buf[4] = 101;
+    const vf: YamlValue = parse(&a, &buf[0], 5) catch { return 18; };
+    match vf {
+        .bool_val(x) => { if x { return 19; } },
+        else => { return 20; },
+    }
+
+    buf[0] = 52;
+    buf[1] = 50;
+    const vi: YamlValue = parse(&a, &buf[0], 2) catch { return 21; };
+    match vi {
+        .int_val(x) => { if x != 42 { return 22; } },
+        else => { return 23; },
+    }
+
+    buf[0] = 34;
+    buf[1] = 104;
+    buf[2] = 105;
+    buf[3] = 34;
+    const vs: YamlValue = parse(&a, &buf[0], 4) catch { return 24; };
+    match vs {
+        .y_str(v) => {
+            if v.len != 2 { return 25; }
+            if v.ptr[0] != 104 || v.ptr[1] != 105 { return 26; }
+        },
+        else => { return 27; },
+    }
+
+    return 0;
+}

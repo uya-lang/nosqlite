@@ -1,0 +1,728 @@
+// lib/std/async.uya - 异步运行时类型与接口
+//
+// 模块路径：use std.async
+// 提供：Waker、interface Future<T>、struct Future<T> 占位、Task<T>、Poll<T>。
+
+use libc.heap;
+use libc.errno;
+use libc.pthread;
+use libc.syscall;
+use std.async_frame;
+use std.mem.allocator.IAllocator;
+use std.string.strlen;
+
+/// 线程本地 async frame 分配器（通过 pthread TSD 绑定）
+var _uya_async_frame_allocator_once: pthread_once_t = pthread_once_t{ state: 0 };
+var _uya_async_frame_allocator_key: pthread_key_t = pthread_key_t{ seq: 0, destructor: null };
+
+fn _uya_init_async_frame_allocator_key(_unused: &void) &void {
+    _ = _unused;
+    _ = pthread_key_create(&_uya_async_frame_allocator_key, null as &void);
+    return null as &void;
+}
+
+/// 设置当前线程的 async frame 分配器
+export fn set_async_frame_allocator(alloc: &IAllocator) void {
+    pthread_once(&_uya_async_frame_allocator_once, &_uya_init_async_frame_allocator_key as &void);
+    if _uya_async_frame_allocator_key.seq <= 0 {
+        return;
+    }
+    _ = pthread_setspecific(_uya_async_frame_allocator_key, alloc as &void);
+}
+
+/// 获取当前线程的 async frame 分配器；未设置或初始化失败时返回 null。
+export fn get_async_frame_allocator() &IAllocator {
+    pthread_once(&_uya_async_frame_allocator_once, &_uya_init_async_frame_allocator_key as &void);
+    if _uya_async_frame_allocator_key.seq <= 0 {
+        return null;
+    }
+    return pthread_getspecific(_uya_async_frame_allocator_key) as &IAllocator;
+}
+
+/// 供接口 box / async helper 复用的分配入口：优先当前线程的 async frame allocator。
+export fn async_box_alloc_current(size: usize) &byte {
+    const header_size: usize = @size_of(usize) * 2;
+    const total_size: usize = header_size + size;
+    const alloc: &IAllocator = get_async_frame_allocator();
+    var raw_ptr: &byte = null;
+    if alloc != null {
+        const boxed: !&byte = alloc.alloc(total_size);
+        raw_ptr = boxed catch {
+            return null;
+        };
+    } else {
+        raw_ptr = malloc(total_size) as &byte;
+        if raw_ptr == null {
+            return null;
+        }
+    }
+    const header: &usize = raw_ptr as &usize;
+    *header = @usize_from_ptr(alloc as &void);
+    header[1] = size;
+    return (raw_ptr as usize + header_size) as &byte;
+}
+
+/// 与 `async_box_alloc_current` 配对的释放入口。
+export fn async_box_free_current(ptr: &byte) void {
+    if ptr == null {
+        return;
+    }
+    const header_size: usize = @size_of(usize) * 2;
+    const raw_ptr: &byte = (ptr as usize - header_size) as &byte;
+    const header: &usize = raw_ptr as &usize;
+    const alloc_ptr: usize = *header;
+    if alloc_ptr != 0 {
+        const alloc: &IAllocator = @ptr_from_usize(alloc_ptr) as &IAllocator;
+        alloc.dealloc(raw_ptr);
+        return;
+    }
+    free(raw_ptr as &void);
+}
+
+/// 异步运行时统一错误类型
+export error EventLoopSlotsFull;
+export error TaskQueueFull;
+export error SchedulerStopped;
+export error FutureNotReady;
+export error AsyncFramePoolFull;
+export error Cancelled;
+export error WriteZero;
+
+fn waker_eventfd_notify(fd: i32) void {
+    if fd < 0 {
+        return;
+    }
+    var one: u64 = 1 as u64;
+    const write_result: !isize = sys_write(fd, (&one) as *const byte, @size_of(one));
+    _ = write_result catch |err| {
+        const err_id: i32 = @error_id(err) as i32;
+        if err_id == EAGAIN || err_id == EWOULDBLOCK {
+            return;
+        }
+        return;
+    };
+}
+
+fn waker_eventfd_drain(fd: i32) void {
+    if fd < 0 {
+        return;
+    }
+    while true {
+        var value: u64 = 0 as u64;
+        const read_result: !isize = sys_read(fd, (&value) as *byte, @size_of(value));
+        const n: isize = read_result catch |err| {
+            const err_id: i32 = @error_id(err) as i32;
+            if err_id == EAGAIN || err_id == EWOULDBLOCK {
+                return;
+            }
+            return;
+        };
+        if n != @size_of(value) as isize {
+            return;
+        }
+    }
+}
+
+/// 最小唤醒器。
+/// 当前仅维护“是否被唤醒”的可观察状态，供 Future 在 poll 内请求立即重试。
+/// 后续可在此基础上扩展到事件循环注册、任务队列与跨线程唤醒。
+export struct Waker {
+    _wake_count: atomic i32,
+    _io_fd: i32,
+    _io_interest: i32,
+    _event_fd: i32,
+    _event_fd_bound: atomic i32,
+    _cancelled: atomic i32,
+
+    fn wake(self: &Self) void {
+        self._wake_count = self._wake_count + 1;
+        if self._event_fd_bound != 0 && self._event_fd >= 0 {
+            waker_eventfd_notify(self._event_fd);
+        }
+    }
+
+    fn reset(self: &Self) void {
+        self._wake_count = 0;
+        if self._event_fd_bound != 0 && self._event_fd >= 0 {
+            waker_eventfd_drain(self._event_fd);
+        }
+    }
+
+    fn is_woken(self: &Self) bool {
+        return self._wake_count != 0;
+    }
+
+    fn wait_readable(self: &Self, fd: i32) void {
+        self._io_fd = fd;
+        self._io_interest = 1;
+    }
+
+    fn wait_writable(self: &Self, fd: i32) void {
+        self._io_fd = fd;
+        self._io_interest = 2;
+    }
+
+    fn clear_io_interest(self: &Self) void {
+        self._io_fd = 0 - 1;
+        self._io_interest = 0;
+    }
+
+    fn has_io_interest(self: &Self) bool {
+        return self._io_interest != 0;
+    }
+
+    fn io_fd(self: &Self) i32 {
+        return self._io_fd;
+    }
+
+    fn io_interest_code(self: &Self) i32 {
+        return self._io_interest;
+    }
+
+    fn event_fd(self: &Self) i32 {
+        if self._event_fd_bound == 0 || self._event_fd < 0 {
+            return 0 - 1;
+        }
+        return self._event_fd;
+    }
+
+    fn has_event_fd(self: &Self) bool {
+        return self._event_fd_bound != 0 && self._event_fd >= 0;
+    }
+
+    fn bind_event_fd(self: &Self, fd: i32) void {
+        self._event_fd = fd;
+        if fd >= 0 {
+            self._event_fd_bound = 1;
+            return;
+        }
+        self._event_fd_bound = 0;
+    }
+
+    fn clear_event_fd(self: &Self) void {
+        self._event_fd = 0 - 1;
+        self._event_fd_bound = 0;
+    }
+
+    fn close_event_fd(self: &Self) void {
+        if self._event_fd_bound != 0 && self._event_fd >= 0 {
+            _ = sys_close(self._event_fd) catch {};
+        }
+        self.clear_event_fd();
+    }
+
+    fn cancel(self: &Self) void {
+        self._cancelled = 1;
+        self.wake();
+    }
+
+    fn clear_cancelled(self: &Self) void {
+        self._cancelled = 0;
+    }
+
+    fn is_cancelled(self: &Self) bool {
+        return self._cancelled != 0;
+    }
+}
+
+/// 显式取消检查辅助函数，供 Future 实现在 poll 中复用。
+export fn is_cancelled(waker: &Waker) bool {
+    if waker == null as &Waker {
+        return false;
+    }
+    return waker.is_cancelled();
+}
+
+/// 异步轮询结果。语言核心类型 union Poll<T>（Pending/Ready）。
+export union Poll<T> {
+    Pending: void,
+    Ready: T,
+}
+
+/// 异步计算抽象。实现此接口的类型可被 poll。
+export interface Future<T> {
+    fn poll(self: &Self, waker: &Waker) Poll<T>;
+    fn release(self: &Self) void;
+}
+
+/// Future 占位。@async_fn 函数当前返回此类型；实现 interface Future<T> 以便类型兼容。
+export struct Future<T> : Future<T> {
+    state: Poll<T>,
+
+    fn poll(self: &Self, waker: &Waker) Poll<T> {
+        return self.state;
+    }
+
+    fn release(self: &Self) void {
+        async_box_free_current(self as &byte);
+    }
+}
+
+/// 异步任务包装。实现 Future<T>，可持有 Poll 状态并供 poll。
+export struct Task<T> : Future<T> {
+    state: Poll<T>,
+
+    fn poll(self: &Self, waker: &Waker) Poll<T> {
+        return self.state;
+    }
+
+    fn release(self: &Self) void {
+        async_box_free_current(self as &byte);
+    }
+}
+
+/// 将值包装为错误联合 !T 的成功分支。
+/// 用于构造 Future<!T> 的 Ready(payload) 场景。
+export fn ok<T>(value: T) !T {
+    return value;
+}
+
+/// 构造 Poll<!T>.Ready(ok(value))，供自定义 `Future<!T>` 的 Ready 路径复用。
+export fn poll_ready_ok<T>(value: T) Poll<!T> {
+    const ok_value: !T = ok<T>(value);
+    const p: Poll<!T> = Poll<!T>.Ready(ok_value);
+    return p;
+}
+
+/// 构造已就绪的 `Future<!T>`。
+export fn future_ready_ok<T>(value: T) Future<!T> {
+    return Future<!T>{ state: poll_ready_ok<T>(value) };
+}
+
+/// 创建已就绪任务。poll 时立即返回 Ready(value)。
+export fn task_ready<T>(value: T) Task<T> {
+    return Task<T>{ state: Poll<T>.Ready(value) };
+}
+
+/// 创建已就绪任务：Ready(ok(value))，便于构造 Future<!T>。
+export fn task_ready_ok<T>(value: T) Task<!T> {
+    return Task<!T>{ state: poll_ready_ok<T>(value) };
+}
+
+/// 同步运行 Future<!T> 直到 Ready，返回 !T。Pending 时轮询直到就绪（忙等待，测试用）。
+export fn block_on<T>(f: Future<!T>) !T {
+    var w: Waker = Waker{};
+    while true {
+        w.reset();
+        w.clear_io_interest();
+        const p: Poll<!T> = f.poll(&w);
+        match p {
+            .Ready(ok_val) => { return ok_val; },
+            .Pending(_) => { },
+        };
+    }
+}
+
+/// 同步运行 Future<T>（无 `!`）直到 Ready，直接返回 T。
+export fn block_on_plain<T>(f: Future<T>) T {
+    var w: Waker = Waker{};
+    while true {
+        w.reset();
+        w.clear_io_interest();
+        const p: Poll<T> = f.poll(&w);
+        match p {
+            .Ready(n) => { return n; },
+            .Pending(_) => { },
+        };
+    }
+}
+
+// 结构体内联方法当前不在类型检查阶段遍历函数体，泛型调用不会注册单态；经顶层转发以生成 C 单态符号。
+fn async_future_ready_ok_usize(value: usize) Future<!usize> {
+    const r: Future<!usize> = future_ready_ok<usize>(value);
+    return r;
+}
+
+fn async_future_unexpected_eof_usize() Future<!usize> {
+    const err_value: !usize = error.UnexpectedEof;
+    return Future<!usize>{ state: Poll<!usize>.Ready(err_value) };
+}
+
+fn async_poll_ready_ok_i32(value: i32) Poll<!i32> {
+    const r: Poll<!i32> = poll_ready_ok<i32>(value);
+    return r;
+}
+fn async_poll_ready_ok_u32(value: u32) Poll<!u32> {
+    const r: Poll<!u32> = poll_ready_ok<u32>(value);
+    return r;
+}
+fn async_poll_ready_ok_i64(value: i64) Poll<!i64> {
+    const r: Poll<!i64> = poll_ready_ok<i64>(value);
+    return r;
+}
+fn async_poll_ready_ok_u64(value: u64) Poll<!u64> {
+    const r: Poll<!u64> = poll_ready_ok<u64>(value);
+    return r;
+}
+fn async_poll_ready_ok_i16(value: i16) Poll<!i16> {
+    const r: Poll<!i16> = poll_ready_ok<i16>(value);
+    return r;
+}
+fn async_poll_ready_ok_u16(value: u16) Poll<!u16> {
+    const r: Poll<!u16> = poll_ready_ok<u16>(value);
+    return r;
+}
+fn async_poll_ready_ok_i8(value: i8) Poll<!i8> {
+    const r: Poll<!i8> = poll_ready_ok<i8>(value);
+    return r;
+}
+fn async_poll_ready_ok_u8(value: u8) Poll<!u8> {
+    const r: Poll<!u8> = poll_ready_ok<u8>(value);
+    return r;
+}
+fn async_poll_ready_ok_bool(value: bool) Poll<!bool> {
+    const r: Poll<!bool> = poll_ready_ok<bool>(value);
+    return r;
+}
+fn async_poll_ready_ok_f32(value: f32) Poll<!f32> {
+    const r: Poll<!f32> = poll_ready_ok<f32>(value);
+    return r;
+}
+fn async_poll_ready_ok_f64(value: f64) Poll<!f64> {
+    const r: Poll<!f64> = poll_ready_ok<f64>(value);
+    return r;
+}
+
+fn async_poll_ready_ok_usize(value: usize) Poll<!usize> {
+    const r: Poll<!usize> = poll_ready_ok<usize>(value);
+    return r;
+}
+
+// 注册常用 `ok<T>` 单态，供 poll_ready / 线程异步计算等生成的 C 链接（勿调用对应 `std_ok_*` 以免递归）。
+fn async_registry_ok_monos() void {
+    const k_i32: !i32 = ok<i32>(0);
+    const k_u32: !u32 = ok<u32>(0);
+    const k_i64: !i64 = ok<i64>(0);
+    const k_u64: !u64 = ok<u64>(0);
+    const k_i16: !i16 = ok<i16>(0);
+    const k_u16: !u16 = ok<u16>(0);
+    const k_i8: !i8 = ok<i8>(0);
+    const k_u8: !u8 = ok<u8>(0);
+    const k_bool: !bool = ok<bool>(0);
+    const k_f32: !f32 = ok<f32>(0.0);
+    const k_f64: !f64 = ok<f64>(0.0);
+    const k_usize: !usize = ok<usize>(0);
+    if k_i32.error_id != 0 && k_u32.error_id != 0 && k_i64.error_id != 0 && k_u64.error_id != 0 &&
+        k_i16.error_id != 0 && k_u16.error_id != 0 && k_i8.error_id != 0 && k_u8.error_id != 0 &&
+        k_bool.error_id != 0 && k_f32.error_id != 0 && k_f64.error_id != 0 && k_usize.error_id != 0 {
+    }
+    // 强制发出 std_poll_ready_ok_*（future_ready_ok/task_ready_ok 等会调用；结构体 poll 内直接 poll_ready_ok 不注册单态）
+    _ = async_poll_ready_ok_i32(0);
+    _ = async_poll_ready_ok_u32(0);
+    _ = async_poll_ready_ok_i64(0);
+    _ = async_poll_ready_ok_u64(0);
+    _ = async_poll_ready_ok_i16(0);
+    _ = async_poll_ready_ok_u16(0);
+    _ = async_poll_ready_ok_i8(0);
+    _ = async_poll_ready_ok_u8(0);
+    _ = async_poll_ready_ok_bool(false);
+    _ = async_poll_ready_ok_f32(0.0);
+    _ = async_poll_ready_ok_f64(0.0);
+    _ = async_poll_ready_ok_usize(0);
+}
+
+// ============================================================
+// std.async.io - 异步 I/O 抽象（设计见 docs/std_async_design.md）
+// ============================================================
+
+/// 异步输出抽象。当前统一收敛到 Future<!usize>：
+/// Pending 表示尚未就绪，Ready(ok(n)) 表示成功，Ready(err) 表示 I/O 失败。
+export interface AsyncWriter {
+    fn write(self: &Self, data: &const byte, count: usize) Future<!usize>;
+    fn write_all(self: &Self, data: &const byte, count: usize) Future<!usize>;
+    fn flush(self: &Self) Future<!usize>;
+}
+
+/// 异步输入抽象。read 返回 Future<!usize>，可在 @async_fn 中 try @await。
+export interface AsyncReader {
+    fn read(self: &Self, buf: &byte, count: usize) Future<!usize>;
+    fn read_exact(self: &Self, buf: &byte, count: usize) Future<!usize>;
+}
+
+/// 内存-backed 异步写入器（用于测试）。每次 write 立即返回 Ready(count)。
+export struct MemAsyncWriter : AsyncWriter {
+    _pos: usize,
+
+    fn write(self: &Self, data: &const byte, count: usize) Future<!usize> {
+        _ = self;
+        _ = data;
+        return async_future_ready_ok_usize(count);
+    }
+
+    fn write_all(self: &Self, data: &const byte, count: usize) Future<!usize> {
+        _ = self;
+        _ = data;
+        return async_future_ready_ok_usize(count);
+    }
+
+    fn flush(self: &Self) Future<!usize> {
+        _ = self;
+        return async_future_ready_ok_usize(0);
+    }
+}
+
+/// 创建 MemAsyncWriter。
+export fn mem_async_writer_new() MemAsyncWriter {
+    return MemAsyncWriter{ _pos: 0 };
+}
+
+/// 内存-backed 异步读取器（用于测试）。从预加载缓冲区读取，每次 read 立即返回 Ready(n)。
+export struct MemAsyncReader : AsyncReader {
+    _buf: &const byte,
+    _len: usize,
+    _pos: usize,
+
+    fn read(self: &Self, buf: &byte, count: usize) Future<!usize> {
+        var avail: usize = self._len - self._pos;
+        if avail > count {
+            avail = count;
+        }
+        var i: usize = 0;
+        while i < avail {
+            buf[i] = self._buf[self._pos + i];
+            i = i + 1;
+        }
+        self._pos = self._pos + avail;
+        return async_future_ready_ok_usize(avail);
+    }
+
+    fn read_exact(self: &Self, buf: &byte, count: usize) Future<!usize> {
+        const remaining: usize = self._len - self._pos;
+        if remaining < count {
+            var copied: usize = 0;
+            while copied < remaining {
+                buf[copied] = self._buf[self._pos + copied];
+                copied = copied + 1;
+            }
+            self._pos = self._pos + remaining;
+            return async_future_unexpected_eof_usize();
+        }
+
+        var copied: usize = 0;
+        while copied < count {
+            buf[copied] = self._buf[self._pos + copied];
+            copied = copied + 1;
+        }
+        self._pos = self._pos + count;
+        return async_future_ready_ok_usize(count);
+    }
+}
+
+/// 从给定缓冲区创建 MemAsyncReader。
+export fn mem_async_reader_new(data: &const byte, len: usize) MemAsyncReader {
+    return MemAsyncReader{ _buf: data, _len: len, _pos: 0 };
+}
+
+/// 从 MemAsyncReader 复制到 MemAsyncWriter，直到读取 0 字节。返回总复制字节数。
+export @async_fn fn async_copy(reader: &MemAsyncReader, writer: &MemAsyncWriter, buf: &byte, buf_len: usize) Future<!usize> {
+    var total: usize = 0;
+    while true {
+        const n: usize = try @await reader.read(buf, buf_len);
+        if n == 0 {
+            return total;
+        }
+        const written: usize = try @await writer.write(buf as &const byte, n);
+        total = total + written;
+        if written < n {
+            return total;
+        }
+    }
+}
+
+/// 将字节切片完整写入 AsyncWriter。
+export fn async_write_bytes(writer: AsyncWriter, data: &[byte]) Future<!usize> {
+    return writer.write_all(data.ptr as &const byte, data.len);
+}
+
+/// 将以 `\0` 结尾的 C 风格字符串完整写入 AsyncWriter。
+export fn async_write_cstr(writer: AsyncWriter, text: &const byte) Future<!usize> {
+    return writer.write_all(text, strlen(text));
+}
+
+/// 便捷输出：写入 C 风格字符串，不追加换行。
+export fn async_print_to(writer: AsyncWriter, text: &const byte) Future<!usize> {
+    return async_write_cstr(writer, text);
+}
+
+/// 便捷输出：写入字节切片，不追加换行。
+export fn async_print_bytes_to(writer: AsyncWriter, data: &[byte]) Future<!usize> {
+    return async_write_bytes(writer, data);
+}
+
+/// 便捷输出：写入 C 风格字符串并追加 `\n`。
+export @async_fn fn async_println_to(writer: AsyncWriter, text: &const byte) Future<!usize> {
+    var total: usize = try @await async_write_cstr(writer, text);
+    total = total + (try @await async_write_cstr(writer, "\n\0" as &const byte));
+    return total;
+}
+
+/// 便捷输出：写入字节切片并追加 `\n`。
+export @async_fn fn async_println_bytes_to(writer: AsyncWriter, data: &[byte]) Future<!usize> {
+    var total: usize = try @await async_write_bytes(writer, data);
+    total = total + (try @await async_write_cstr(writer, "\n\0" as &const byte));
+    return total;
+}
+
+/// 从 AsyncFd 精确读取 `count` 字节；若提前遇到 EOF，则返回 `error.UnexpectedEof`。
+export @async_fn fn async_fd_read_exact(fd: i32, buf: &byte, count: usize) Future<!usize> {
+    var total: usize = 0;
+    while total < count {
+        const n: usize = try @await async_fd_read_future(fd, &buf[total], count - total);
+        if n == 0 {
+            return error.UnexpectedEof;
+        }
+        total = total + n;
+    }
+    return total;
+}
+
+/// 向 AsyncFd 持续写入直到写满 `count` 字节；若写侧返回 0，则返回 `error.WriteZero`。
+export @async_fn fn async_fd_write_all(fd: i32, data: &const byte, count: usize) Future<!usize> {
+    var total: usize = 0;
+    while total < count {
+        const n: usize = try @await async_fd_write_future(fd, &data[total] as &const byte, count - total);
+        if n == 0 {
+            return error.WriteZero;
+        }
+        total = total + n;
+    }
+    return total;
+}
+
+// ============================================================
+// AsyncFd - 基于文件描述符的异步 I/O（poll 内设 O_NONBLOCK；EAGAIN 时 Pending + waker）
+// ============================================================
+
+use libc.syscall;
+
+struct AsyncFdWriteFuture : Future<!usize> {
+    fd: i32,
+    data: &const byte,
+    count: usize,
+    nonblocking_ready: i32 = 0,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!usize> {
+        _ = waker;
+        if self.nonblocking_ready == 0 {
+            const flags_result: !i32 = sys_fcntl(self.fd, F_GETFL, 0);
+            const flags: i32 = flags_result catch {
+                const err_value: !usize = flags_result as! usize;
+                const p: Poll<!usize> = Poll<!usize>.Ready(err_value);
+                return p;
+            };
+            if (flags & O_NONBLOCK) == 0 {
+                const set_result: !i32 = sys_fcntl(self.fd, F_SETFL, flags | O_NONBLOCK);
+                _ = set_result catch {
+                    const err_value: !usize = set_result as! usize;
+                    const p: Poll<!usize> = Poll<!usize>.Ready(err_value);
+                    return p;
+                };
+            }
+            self.nonblocking_ready = 1;
+        }
+        const result: !isize = sys_write(self.fd, self.data as *const byte, self.count);
+        const n: isize = result catch |err| {
+            const err_id: u32 = @error_id(err);
+            if err_id == libc_EAGAIN as u32 || err_id == libc_EWOULDBLOCK as u32 {
+                waker.wait_writable(self.fd);
+                const p: Poll<!usize> = Poll<!usize>.Pending({});
+                return p;
+            }
+            const err_value: !usize = result as! usize;
+            const p: Poll<!usize> = Poll<!usize>.Ready(err_value);
+            return p;
+        };
+        return async_poll_ready_ok_usize(n as usize);
+    }
+
+    fn release(self: &Self) void {
+        async_box_free_current(self as &byte);
+    }
+}
+
+struct AsyncFdReadFuture : Future<!usize> {
+    fd: i32,
+    buf: &byte,
+    count: usize,
+    nonblocking_ready: i32 = 0,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!usize> {
+        _ = waker;
+        if self.nonblocking_ready == 0 {
+            const flags_result: !i32 = sys_fcntl(self.fd, F_GETFL, 0);
+            const flags: i32 = flags_result catch {
+                const err_value: !usize = flags_result as! usize;
+                const p: Poll<!usize> = Poll<!usize>.Ready(err_value);
+                return p;
+            };
+            if (flags & O_NONBLOCK) == 0 {
+                const set_result: !i32 = sys_fcntl(self.fd, F_SETFL, flags | O_NONBLOCK);
+                _ = set_result catch {
+                    const err_value: !usize = set_result as! usize;
+                    const p: Poll<!usize> = Poll<!usize>.Ready(err_value);
+                    return p;
+                };
+            }
+            self.nonblocking_ready = 1;
+        }
+        const result: !isize = sys_read(self.fd, self.buf as *byte, self.count);
+        const n: isize = result catch |err| {
+            const err_id: u32 = @error_id(err);
+            if err_id == libc_EAGAIN as u32 || err_id == libc_EWOULDBLOCK as u32 {
+                waker.wait_readable(self.fd);
+                const p: Poll<!usize> = Poll<!usize>.Pending({});
+                return p;
+            }
+            const err_value: !usize = result as! usize;
+            const p: Poll<!usize> = Poll<!usize>.Ready(err_value);
+            return p;
+        };
+        return async_poll_ready_ok_usize(n as usize);
+    }
+
+    fn release(self: &Self) void {
+        async_box_free_current(self as &byte);
+    }
+}
+
+/// 基于 fd 的异步 I/O 包装。
+/// 当前最小实现会在 poll 时确保 O_NONBLOCK，若遇到 EAGAIN/EWOULDBLOCK 则返回 Pending。
+export struct AsyncFd : AsyncWriter, AsyncReader {
+    fd: i32,
+
+    fn write(self: &Self, data: &const byte, count: usize) Future<!usize> {
+        return AsyncFdWriteFuture{ fd: self.fd, data: data, count: count };
+    }
+
+    fn write_all(self: &Self, data: &const byte, count: usize) Future<!usize> {
+        return async_fd_write_all(self.fd, data, count);
+    }
+
+    fn flush(self: &Self) Future<!usize> {
+        _ = self;
+        return async_future_ready_ok_usize(0);
+    }
+
+    fn read(self: &Self, buf: &byte, count: usize) Future<!usize> {
+        return AsyncFdReadFuture{ fd: self.fd, buf: buf, count: count };
+    }
+
+    fn read_exact(self: &Self, buf: &byte, count: usize) Future<!usize> {
+        return async_fd_read_exact(self.fd, buf, count);
+    }
+}
+
+/// 从 fd 创建 AsyncFd。
+export fn async_fd_new(fd: i32) AsyncFd {
+    return AsyncFd{ fd: fd };
+}
+
+/// 返回具体 `AsyncFdReadFuture`，供 `@await` 路径使用（接口返回，由 compiler box）。
+export fn async_fd_read_future(fd: i32, buf: &byte, count: usize) Future<!usize> {
+    return AsyncFdReadFuture{ fd: fd, buf: buf, count: count };
+}
+
+/// 同上，写侧；配合 `async_fd_read_future` 用于 `@async_fn` 内 `try @await`。
+export fn async_fd_write_future(fd: i32, data: &const byte, count: usize) Future<!usize> {
+    return AsyncFdWriteFuture{ fd: fd, data: data, count: count };
+}

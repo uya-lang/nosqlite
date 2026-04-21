@@ -1,0 +1,29 @@
+// 测试双重指针类型 &&T
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_double_pointer_type() !void {
+    var x: i32 = 42;
+    var ptr: &i32 = &x;
+    var ptr2: &&i32 = &ptr;
+    
+    try assert_eq_i32(**ptr2, 42);
+    
+    // 修改通过双重指针
+    **ptr2 = 100;
+    try assert_eq_i32(x, 100);
+    
+    // 赋值兼容性
+    var ptr3: &&i32 = ptr2;
+    try assert_eq_i32(**ptr3, 100);
+}
+
+export fn main() i32 {
+    test_suite_begin("Double Pointer Type Tests");
+    run_test("double pointer type", test_double_pointer_type);
+    return test_suite_end();
+}

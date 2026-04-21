@@ -1,0 +1,6 @@
+type Vec4i32 = @vector(i32, 4);
+
+export fn main() i32 {
+    const v: Vec4i32 = @vector.splat(true);
+    return 0;
+}

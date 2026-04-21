@@ -1,0 +1,7 @@
+// error_print_no_arg.uya - @print/@println 错误测试：缺少参数
+// 预期：编译失败
+
+fn main() i32 {
+    @print();
+    return 0;
+}

@@ -1,0 +1,20 @@
+// 基本测试单元语法
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+test "basic arithmetic" {
+    const x: i32 = 10;
+    const y: i32 = 20;
+    const sum: i32 = x + y;
+    try assert_eq_i32(sum, 30);
+}
+
+test "function call" {
+    const result: i32 = add(5, 3);
+    try assert_eq_i32(result, 8);
+}

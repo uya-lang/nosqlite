@@ -1,0 +1,85 @@
+// test_errno.uya - errno 模块测试
+use std.runtime.entry;
+// 使用 lib/std/testing.uya 测试框架
+
+use libc.errno;
+use libc.EPERM;
+use libc.ENOENT;
+use libc.ESRCH;
+use libc.EINTR;
+use libc.EIO;
+use libc.EBADF;
+use libc.ENOMEM;
+use libc.EACCES;
+use libc.EINVAL;
+use libc.ENOSYS;
+use libc.strerror;
+use libc.perror;
+
+// 导入测试框架
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use std.testing.expect_not_null;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// ============================================================
+// 错误码常量测试
+// ============================================================
+
+fn test_errno_constants() !void {
+    try assert_eq_i32(EPERM, 1);
+    try assert_eq_i32(ENOENT, 2);
+    try assert_eq_i32(ESRCH, 3);
+    try assert_eq_i32(EINTR, 4);
+    try assert_eq_i32(EIO, 5);
+    try assert_eq_i32(EBADF, 9);
+    try assert_eq_i32(ENOMEM, 12);
+    try assert_eq_i32(EACCES, 13);
+    try assert_eq_i32(EINVAL, 22);
+    try assert_eq_i32(ENOSYS, 38);
+}
+
+// ============================================================
+// errno 全局变量测试
+// ============================================================
+
+fn test_errno_var() !void {
+    errno = 0;
+    try expect(errno == 0);
+    
+    errno = ENOENT;
+    try assert_eq_i32(errno, 2);
+    
+    errno = 0;
+}
+
+// ============================================================
+// strerror 测试
+// ============================================================
+
+fn test_strerror() !void {
+    const msg0: &byte = strerror(0);
+    try expect_not_null(msg0);
+    
+    const msg1: &byte = strerror(EPERM);
+    try expect_not_null(msg1);
+    
+    const msg_unknown: &byte = strerror(9999);
+    try expect_not_null(msg_unknown);
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    test_suite_begin("libc.errno");
+
+    run_test("errno constants", test_errno_constants);
+    run_test("errno var", test_errno_var);
+    run_test("strerror", test_strerror);
+
+    return test_suite_end();
+}

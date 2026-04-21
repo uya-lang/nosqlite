@@ -1,0 +1,24 @@
+// module_b.uya - 模块 B：使用模块 A 的导出项
+
+// 导入模块 A 的特定函数
+use module_a.public_func;
+
+// 导入模块 A 的特定结构体
+use module_a.PublicStruct;
+
+fn main() i32 {
+    // 使用导入的函数（无需模块前缀）
+    const result: i32 = public_func();
+    if result != 42 {
+        return 1;
+    }
+    
+    // 使用导入的结构体类型
+    const p: PublicStruct = PublicStruct{ x: 10, y: 20 };
+    if p.x != 10 || p.y != 20 {
+        return 2;
+    }
+    
+    return 0;
+}
+

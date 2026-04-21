@@ -1,0 +1,26 @@
+// 测试新增整数类型：i8, i16, i64, u8, u16, u32, u64
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+test "int types" {
+    const a: i8 = 42;
+    const b: i16 = 1000;
+    const c: i64 = 999999;
+    const d: u8 = 200;
+    const e: u16 = 50000;
+    const f: u32 = 3000000000;
+    const g: u64 = 4000000000;
+    try expect(a == 42);
+    try expect(b == 1000);
+    try expect(c == 999999);
+    try expect(d == 200);
+    try expect(e == 50000);
+    try expect(g == 4000000000);
+}
+
+test "type conversion" {
+    const x: i8 = 1 as i8;
+    const y: i32 = x as i32;
+    try assert_eq_i32(y, 1);
+}

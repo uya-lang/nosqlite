@@ -1,0 +1,35 @@
+// 测试变量初始化默认值
+use std.runtime.entry;
+// 验证在表达式生成失败时，变量初始化使用默认值
+
+struct TestStruct {
+    x: i32,
+    y: i32,
+}
+
+fn test_var_init() i32 {
+    // 正常初始化
+    var a: i32 = 10;
+    if a != 10 {
+        return 1;
+    }
+    
+    // 指针类型初始化为 null
+    var ptr: &i32 = null;
+    if ptr != null {
+        return 1;
+    }
+    
+    // 结构体类型初始化
+    var s: TestStruct = TestStruct{ x: 1, y: 2 };
+    if s.x != 1 || s.y != 2 {
+        return 1;
+    }
+    
+    return 0;
+}
+
+export fn main() i32 {
+    return test_var_init();
+}
+

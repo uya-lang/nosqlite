@@ -1,0 +1,7 @@
+// error_id 冲突：AAb 与 ABA 的 djb2 hash 相同
+// 预期：编译失败，提示 "error_id 冲突"
+error AAb;
+error ABA;
+fn main() !i32 {
+    return error.AAb;
+}

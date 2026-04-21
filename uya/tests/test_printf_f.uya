@@ -1,0 +1,44 @@
+// test_printf_f.uya - 测试 printf %f 格式说明符
+
+use std.testing.assert_eq_i32;
+use libc.snprintf;
+use libc.strcmp;
+
+// 模块级常量（避免编译器字符串常量 bug）
+const FMT_F: &const byte = "%f";
+const EXPECTED_123: &const byte = "123.000000";
+const EXPECTED_NEG: &const byte = "-45.500000";
+const EXPECTED_SMALL: &const byte = "0.125000";
+const EXPECTED_ZERO: &const byte = "0.000000";
+
+// ============================================================
+// %f 格式说明符测试
+// ============================================================
+
+test "snprintf_f_integer" {
+    var buf: [byte: 64] = [];
+    const ret: i32 = snprintf(&buf[0], 64, FMT_F, 123.0);
+    try assert_eq_i32(ret, 10);
+    try assert_eq_i32(strcmp(&buf[0], EXPECTED_123), 0);
+}
+
+test "snprintf_f_negative" {
+    var buf: [byte: 64] = [];
+    const ret: i32 = snprintf(&buf[0], 64, FMT_F, -45.5);
+    try assert_eq_i32(ret, 10);
+    try assert_eq_i32(strcmp(&buf[0], EXPECTED_NEG), 0);
+}
+
+test "snprintf_f_small" {
+    var buf: [byte: 64] = [];
+    const ret: i32 = snprintf(&buf[0], 64, FMT_F, 0.125);
+    try assert_eq_i32(ret, 8);
+    try assert_eq_i32(strcmp(&buf[0], EXPECTED_SMALL), 0);
+}
+
+test "snprintf_f_zero" {
+    var buf: [byte: 64] = [];
+    const ret: i32 = snprintf(&buf[0], 64, FMT_F, 0.0);
+    try assert_eq_i32(ret, 8);
+    try assert_eq_i32(strcmp(&buf[0], EXPECTED_ZERO), 0);
+}

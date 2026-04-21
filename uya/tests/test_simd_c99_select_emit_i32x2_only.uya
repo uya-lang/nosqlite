@@ -1,0 +1,13 @@
+// 回归：仅 i32×2 @vector.select → 生成 C 含 select_i32x2，不含 select_i32x4 定义
+type V2i = @vector(i32, 2);
+
+export fn main() i32 {
+    const a: V2i = @vector.splat(3);
+    const b: V2i = @vector.splat(7);
+    const m: @mask(2) = a < b;
+    const r: V2i = @vector.select(m, a, b);
+    if @vector.all(r == a) == false {
+        return 1;
+    }
+    return 0;
+}

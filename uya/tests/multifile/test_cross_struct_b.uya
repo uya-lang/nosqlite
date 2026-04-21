@@ -1,0 +1,19 @@
+// test_cross_struct_b.uya - 引用 test_cross_struct_a.uya 中的结构体
+// 测试跨文件结构体向前声明
+
+// 引用另一个文件中定义的结构体
+struct StructB {
+    data: i32,
+    link: *StructA,
+}
+
+fn main() i32 {
+    var a: StructA = StructA{ value: 100 };
+    var b: StructB = StructB{ data: 200, link: null };
+    
+    // 验证结构体正确初始化
+    if a.value == 100 && b.data == 200 {
+        return 0;  // 测试通过
+    }
+    return 1;  // 测试失败
+}

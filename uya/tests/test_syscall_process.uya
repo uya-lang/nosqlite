@@ -1,0 +1,54 @@
+// test_syscall_process.uya - syscall 层进程相关测试
+// 测试 sys_getpid, sys_getppid, sys_kill, sys_waitpid, sys_exit
+
+use libc.sys_getpid;
+use libc.sys_getppid;
+use libc.sys_kill;
+use libc.sys_waitpid;
+use std.testing.expect;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+test "sys_getpid" {
+    // 获取当前进程 ID
+    const pid: i64 = try sys_getpid();
+    // PID 应该大于 0
+    try expect(pid > 0);
+}
+
+test "sys_getppid" {
+    // 获取父进程 ID
+    const ppid: i64 = try sys_getppid();
+    // PPID 应该大于 0
+    try expect(ppid > 0);
+}
+
+test "sys_kill_zero_signal" {
+    const pid: i64 = try sys_getpid();
+    // 发送信号 0（不实际发送信号，只检查进程是否存在）
+    const result: i32 = try sys_kill(pid, 0);
+    // 结果应该是 0（进程存在）
+    try expect(result == 0);
+}
+
+test "sys_waitpid_nochild" {
+    // waitpid WNOHANG 且没有子进程
+    var status: i32 = 0;
+    const WNOHANG: i32 = 1;  // Linux 中 WNOHANG = 1
+    _ = sys_waitpid(-1, &status, WNOHANG) catch {
+        try expect(true);
+        return;
+    };
+    // 没有子进程时，Linux 应返回 ECHILD；若走到这里，说明行为与预期不符。
+    try expect(false);
+}
+
+test "sys_exit_status" {
+    // 注意：这个测试会导致进程退出，所以不能真正执行
+    // 这里只是演示正确的用法
+    // sys_exit(0);
+    // sys_exit(42);
+    try expect(true);
+}

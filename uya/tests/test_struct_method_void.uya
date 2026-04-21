@@ -1,0 +1,31 @@
+// 结构体方法返回 void：inc 自增
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Counter {
+  value: i32
+}
+
+Counter {
+  fn inc(self: &Self) void {
+    self.value = self.value + 1;
+  }
+}
+
+fn test_void_method() !void {
+  var c: Counter = Counter{ value: 5 };
+  c.inc();
+  c.inc();
+  try assert_eq_i32(c.value, 7);
+}
+
+export fn main() i32 {
+  test_suite_begin("Struct Method Void Tests");
+  run_test("void method", test_void_method);
+  return test_suite_end();
+}

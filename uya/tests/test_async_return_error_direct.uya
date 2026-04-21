@@ -1,0 +1,57 @@
+// Direct return error.X in @async_fn returning Future<!T> must become Poll.Ready(error.X).
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+error DirectAsyncFailure;
+
+fn ready_i32_direct(v: i32) Future<!i32> {
+    return Future<!i32>{ state: Poll<!i32>.Ready(ok<i32>(v)) };
+}
+
+@async_fn
+fn async_direct_error_no_await(flag: i32) Future<!i32> {
+    if flag != 0 {
+        return error.DirectAsyncFailure;
+    }
+    return 11;
+}
+
+@async_fn
+fn async_direct_error_after_await(flag: i32) Future<!i32> {
+    const base: i32 = try @await ready_i32_direct(7);
+    if flag != 0 {
+        return error.DirectAsyncFailure;
+    }
+    return base + 4;
+}
+
+test "async_direct_return_error_no_await" {
+    const ok_r: !i32 = block_on<i32>(async_direct_error_no_await(0));
+    const ok_v: i32 = ok_r catch { 0 - 1; };
+    try assert_eq_i32(ok_v, 11);
+
+    var err_seen: i32 = 0;
+    const err_r: !i32 = block_on<i32>(async_direct_error_no_await(1));
+    const err_v: i32 = err_r catch {
+        err_seen = 1;
+        0 - 2;
+    };
+    try assert_eq_i32(err_seen, 1);
+    try assert_eq_i32(err_v, 0 - 2);
+}
+
+test "async_direct_return_error_after_await" {
+    const ok_r: !i32 = block_on<i32>(async_direct_error_after_await(0));
+    const ok_v: i32 = ok_r catch { 0 - 1; };
+    try assert_eq_i32(ok_v, 11);
+
+    var err_seen: i32 = 0;
+    const err_r: !i32 = block_on<i32>(async_direct_error_after_await(1));
+    const err_v: i32 = err_r catch {
+        err_seen = 1;
+        0 - 2;
+    };
+    try assert_eq_i32(err_seen, 1);
+    try assert_eq_i32(err_v, 0 - 2);
+}

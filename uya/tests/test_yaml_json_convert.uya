@@ -1,0 +1,89 @@
+// 测试 YamlValue ↔ JsonValue 转换（不 use std.json.encoder，避免与 yaml.encoder 合并生成时 Json/Yaml union 混淆）
+use std.runtime.entry;
+use std.yaml.value.YamlValue;
+use std.yaml.value.YamlStrView;
+use std.yaml.value.YamlArray;
+use std.yaml.value.YamlObject;
+use std.yaml.value.YamlKeyValue;
+use std.yaml.convert.yaml_value_to_json_value;
+use std.yaml.convert.json_value_to_yaml_value;
+use std.yaml.encoder.yaml_encode_to;
+use std.yaml.encoder.YamlEncodeStyle;
+use std.json.value.JsonValue;
+use std.json.value.JsonArray;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 16384] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 16384);
+
+    var ybuf: [byte: 256] = [];
+    var ybuf2: [byte: 256] = [];
+
+    const yv: YamlValue = YamlValue.int_val(99);
+    const jv: JsonValue = yaml_value_to_json_value(&a, &yv) catch { return 1; };
+    match jv {
+        .int_val(x) => { if x != 99 { return 2; } },
+        else => { return 3; },
+    }
+    const yl: usize = yaml_encode_to(&yv, &ybuf[0], 256, YamlEncodeStyle.Flow) catch { return 4; };
+    if yl != 2 { return 5; }
+    if ybuf[0] != 57 || ybuf[1] != 57 { return 6; }
+
+    var items: [YamlValue: 1] = [];
+    items[0] = YamlValue.yaml_null();
+    const y_arr: YamlValue = YamlValue.y_arr(YamlArray{ items: &items[0], len: 1 });
+    const j_arr: JsonValue = yaml_value_to_json_value(&a, &y_arr) catch { return 7; };
+    match j_arr {
+        .arr(ar) => {
+            if ar.len != 1 { return 8; }
+            match ar.items[0] {
+                .json_null(_) => {},
+                else => { return 9; },
+            }
+        },
+        else => { return 10; },
+    }
+    const yl2: usize = yaml_encode_to(&y_arr, &ybuf[0], 256, YamlEncodeStyle.Flow) catch { return 11; };
+    if yl2 != 6 { return 12; }
+    if ybuf[0] != 91 || ybuf[1] != 110 || ybuf[2] != 117 || ybuf[3] != 108 || ybuf[4] != 108 || ybuf[5] != 93 {
+        return 13;
+    }
+
+    var kb: [byte: 1] = [];
+    kb[0] = 122;
+    var ypairs: [YamlKeyValue: 1] = [];
+    ypairs[0] = YamlKeyValue{ key: YamlStrView{ ptr: &kb[0], len: 1 }, value: YamlValue.int_val(3) };
+    const y_obj: YamlValue = YamlValue.y_obj(YamlObject{ pairs: &ypairs[0], len: 1 });
+    const j_mid: JsonValue = yaml_value_to_json_value(&a, &y_obj) catch { return 14; };
+    const y_back: YamlValue = json_value_to_yaml_value(&a, &j_mid) catch { return 15; };
+    const yl3: usize = yaml_encode_to(&y_obj, &ybuf[0], 256, YamlEncodeStyle.Flow) catch { return 16; };
+    const yl3b: usize = yaml_encode_to(&y_back, &ybuf2[0], 256, YamlEncodeStyle.Flow) catch { return 17; };
+    if yl3 != yl3b { return 18; }
+    if yl3 != 5 { return 19; }
+    if ybuf[0] != ybuf2[0] { return 20; }
+    if ybuf[1] != ybuf2[1] { return 20; }
+    if ybuf[2] != ybuf2[2] { return 20; }
+    if ybuf[3] != ybuf2[3] { return 20; }
+    if ybuf[4] != ybuf2[4] { return 20; }
+
+    var jitems: [JsonValue: 1] = [];
+    jitems[0] = JsonValue.bool_val(false);
+    const j_round: JsonValue = JsonValue.arr(JsonArray{ items: &jitems[0], len: 1 });
+    const y_round: YamlValue = json_value_to_yaml_value(&a, &j_round) catch { return 21; };
+    const j_back: JsonValue = yaml_value_to_json_value(&a, &y_round) catch { return 22; };
+    match j_back {
+        .arr(br) => {
+            if br.len != 1 { return 23; }
+            match br.items[0] {
+                .bool_val(b) => { if b { return 24; } },
+                else => { return 25; },
+            }
+        },
+        else => { return 26; },
+    }
+
+    return 0;
+}

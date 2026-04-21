@@ -1,0 +1,40 @@
+// 结构体赋值测试
+use std.runtime.entry;
+// 测试结构体变量按值赋值
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn test_struct_assignment() !void {
+    const p1: Point = Point{ x: 10, y: 20 };
+    var p2: Point = Point{ x: 0, y: 0 };
+    
+    // 结构体按值赋值（复制所有字段）
+    p2 = p1;
+    
+    // 验证赋值后 p2 的值与 p1 相同
+    try assert_eq_i32(p2.x, 10);
+    try assert_eq_i32(p2.y, 20);
+}
+
+fn test_struct_equality() !void {
+    const p1: Point = Point{ x: 10, y: 20 };
+    const p2: Point = Point{ x: 10, y: 20 };
+    
+    try expect(p1 == p2);
+}
+
+export fn main() i32 {
+    test_suite_begin("Struct Assignment Tests");
+    run_test("struct assignment", test_struct_assignment);
+    run_test("struct equality", test_struct_equality);
+    return test_suite_end();
+}

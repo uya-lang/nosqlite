@@ -1,0 +1,46 @@
+// SIMD：return 表达式中两侧 @vector.splat 的二元式由函数返回类型提供目标向量类型（类型检查）
+// catch + !Vec4i32（payload 为类型别名 typedef）：C99 中结果变量须为 typedef 名，不能误写 struct Vec4i32
+error E;
+type Vec4i32 = @vector(i32, 4);
+type Mask4 = @mask(4);
+
+fn add_splats() Vec4i32 {
+    return @vector.splat(1) + @vector.splat(2);
+}
+
+fn wrap_splats() Vec4i32 {
+    return @vector.splat(2147483647) +% @vector.splat(1);
+}
+
+fn nested_splats() Vec4i32 {
+    return (@vector.splat(1) + @vector.splat(1)) + @vector.splat(1);
+}
+
+fn splats_err_union() !Vec4i32 {
+    return @vector.splat(2) + @vector.splat(2);
+}
+
+export fn main() i32 {
+    const a: Vec4i32 = add_splats();
+    const ok_add: Mask4 = a == @vector.splat(3);
+    if @vector.all(ok_add) == false {
+        return 1;
+    }
+    const w: Vec4i32 = wrap_splats();
+    const ok_wrap: Mask4 = w == @vector.splat((-2147483647 - 1));
+    if @vector.all(ok_wrap) == false {
+        return 2;
+    }
+    const n: Vec4i32 = nested_splats();
+    const ok_n: Mask4 = n == @vector.splat(3);
+    if @vector.all(ok_n) == false {
+        return 3;
+    }
+    const u: Vec4i32 = splats_err_union() catch {
+        return 4;
+    };
+    if @vector.all(u == @vector.splat(4)) == false {
+        return 6;
+    }
+    return 0;
+}

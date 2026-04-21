@@ -1,0 +1,15 @@
+// block_on_plain<i32> 冒烟：不经过 !Future，仅验证 Future<i32> + 单态路径可链接运行
+use std.async;
+
+fn immediate_i32(v: i32) Future<i32> {
+    return Future<i32>{ state: Poll<i32>.Ready(v) };
+}
+
+export fn main() i32 {
+    const f: Future<i32> = immediate_i32(7);
+    const x: i32 = block_on_plain<i32>(f);
+    if x != 7 {
+        return 1;
+    }
+    return 0;
+}

@@ -1,0 +1,27 @@
+// test_print_basic.uya - @print 内置函数基础测试
+use std.runtime.entry;
+// 测试 @print（不换行）功能
+
+export fn main() i32 {
+    // 测试 i32 类型
+    @print(42);
+    @print(100);
+    
+    // 测试字符串
+    @print("Hello");
+    @print("World");
+    
+    // 测试 bool 类型
+    @print(true);
+    @print(false);
+    
+    // 测试字符串插值
+    const x: i32 = 10;
+    const y: i32 = 20;
+    @print("x=");
+    @print(x);
+    @print(", y=");
+    @print(y);
+    
+    return 0;
+}

@@ -1,0 +1,86 @@
+// YAML 1.2.2 块折叠：空行 → \n；行首空白内容行（spaced）不与上行折叠为空格
+use std.runtime.entry;
+use std.yaml.value.YamlValue;
+use std.yaml.parser.parse;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.mem.arena.arena_reset;
+
+export fn main() i32 {
+    var arena_buf: [byte: 8192] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 8192);
+
+    var buf: [byte: 128] = [];
+    // t: >\n  foo\n\n  bar\n  → "foo\nbar"
+    buf[0] = 116;
+    buf[1] = 58;
+    buf[2] = 32;
+    buf[3] = 62;
+    buf[4] = 10;
+    buf[5] = 32;
+    buf[6] = 32;
+    buf[7] = 102;
+    buf[8] = 111;
+    buf[9] = 111;
+    buf[10] = 10;
+    buf[11] = 10;
+    buf[12] = 32;
+    buf[13] = 32;
+    buf[14] = 98;
+    buf[15] = 97;
+    buf[16] = 114;
+    buf[17] = 10;
+    const v1: YamlValue = parse(&a, &buf[0], 18) catch { return 1; };
+    match v1 {
+        .y_obj(o) => {
+            if o.len != 1 { return 2; }
+            match o.pairs[0].value {
+                .y_str(s) => {
+                    if s.len != 7 { return 3; }
+                    if s.ptr[0] != 102 || s.ptr[1] != 111 || s.ptr[2] != 111 || s.ptr[3] != 10 || s.ptr[4] != 98 || s.ptr[5] != 97 || s.ptr[6] != 114 { return 4; }
+                },
+                else => { return 5; },
+            }
+        },
+        else => { return 6; },
+    }
+
+    arena_reset(&a);
+    // t: >\n  foo\n\n   bar\n  → "foo\n bar"（第三行缩进后行首空白 → spaced）
+    buf[0] = 116;
+    buf[1] = 58;
+    buf[2] = 32;
+    buf[3] = 62;
+    buf[4] = 10;
+    buf[5] = 32;
+    buf[6] = 32;
+    buf[7] = 102;
+    buf[8] = 111;
+    buf[9] = 111;
+    buf[10] = 10;
+    buf[11] = 10;
+    buf[12] = 32;
+    buf[13] = 32;
+    buf[14] = 32;
+    buf[15] = 98;
+    buf[16] = 97;
+    buf[17] = 114;
+    buf[18] = 10;
+    const v2: YamlValue = parse(&a, &buf[0], 19) catch { return 7; };
+    match v2 {
+        .y_obj(oo) => {
+            if oo.len != 1 { return 8; }
+            match oo.pairs[0].value {
+                .y_str(s2) => {
+                    if s2.len != 8 { return 9; }
+                    if s2.ptr[0] != 102 || s2.ptr[1] != 111 || s2.ptr[2] != 111 || s2.ptr[3] != 10 || s2.ptr[4] != 32 || s2.ptr[5] != 98 || s2.ptr[6] != 97 || s2.ptr[7] != 114 { return 10; }
+                },
+                else => { return 11; },
+            }
+        },
+        else => { return 12; },
+    }
+
+    return 0;
+}

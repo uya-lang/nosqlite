@@ -1,0 +1,71 @@
+// test_tls_store.uya - 最小 trust anchor 装载测试
+
+use std.runtime.entry;
+use tls.x509.cert;
+use tls.x509.store;
+use libc.syscall;
+use tls.crypto.rsa;
+
+fn test_trust_anchor_from_empty_der_fails() i32 {
+    var empty: [byte: 1] = [0];
+    var c: Cert = Cert{};
+    trust_anchor_from_der(&empty[0], 0, &c) catch {
+        return 0;
+    };
+    return 1;
+}
+
+fn test_trust_anchor_load_empty_file_fails() i32 {
+    var path: [byte: 24] = [47, 116, 109, 112, 47, 117, 121, 97, 95, 116, 108, 115, 95, 101, 109, 112, 116, 121, 95, 99, 97, 0, 0, 0];
+    const fd: i32 = sys_open(&path[0], (O_CREAT | O_TRUNC | O_WRONLY) as i32, 0o600) catch {
+        return 2;
+    };
+    _ = sys_close(fd) catch {};
+    var c: Cert = Cert{};
+    trust_anchor_load_file(&path[0], &c) catch {
+        _ = sys_unlink(&path[0]) catch {};
+        return 0;
+    };
+    _ = sys_unlink(&path[0]) catch {};
+    return 3;
+}
+
+fn test_rsa_private_key_from_minimal_der() i32 {
+    var der: [byte: 32] = [
+        0x30, 0x1d,
+        0x02, 0x01, 0x00,
+        0x02, 0x01, 0x0d,
+        0x02, 0x01, 0x11,
+        0x02, 0x01, 0x07,
+        0x02, 0x01, 0x03,
+        0x02, 0x01, 0x05,
+        0x02, 0x01, 0x01,
+        0x02, 0x01, 0x01,
+        0x02, 0x01, 0x01,
+        0x02, 0x01, 0x01
+    ];
+    var key: RsaPrivateKey = RsaPrivateKey{};
+    rsa_private_key_from_pkcs1_der(&der[0], 32, &key) catch {
+        return 4;
+    };
+    if key.n_len != 1 || key.n[0] != 0x0d || key.e_len != 1 || key.e[0] != 0x11 {
+        return 5;
+    }
+    if key.d_len != 1 || key.d[0] != 0x07 || key.p_len != 1 || key.q_len != 1 {
+        return 6;
+    }
+    return 0;
+}
+
+export fn main() i32 {
+    if test_trust_anchor_from_empty_der_fails() != 0 {
+        return 1;
+    }
+    if test_trust_anchor_load_empty_file_fails() != 0 {
+        return 2;
+    }
+    if test_rsa_private_key_from_minimal_der() != 0 {
+        return 3;
+    }
+    return 0;
+}

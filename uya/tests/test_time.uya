@@ -1,0 +1,165 @@
+// test_time.uya - 测试时间函数
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use libc.time;
+use libc.gmtime;
+use libc.mktime;
+use libc.strftime;
+use libc.tm;
+use libc.time_t;
+use libc.strcmp;
+
+// ============================================================
+// gmtime 函数测试
+// ============================================================
+
+test "gmtime_epoch" {
+    // Unix 纪元时间: 1970-01-01 00:00:00
+    var t: time_t = 0;
+    const result: &tm = gmtime(&t);
+    try assert_eq_i32(result.tm_year, 70);   // 1970 - 1900 = 70
+    try assert_eq_i32(result.tm_mon, 0);      // January = 0
+    try assert_eq_i32(result.tm_mday, 1);     // 1st
+    try assert_eq_i32(result.tm_hour, 0);     // 00:00:00
+    try assert_eq_i32(result.tm_min, 0);
+    try assert_eq_i32(result.tm_sec, 0);
+    try assert_eq_i32(result.tm_wday, 4);     // Thursday
+}
+
+test "gmtime_2024" {
+    // 2024-01-01 00:00:00 UTC
+    // 计算: 54年 * 365天 + 闰年天数
+    var t: time_t = 1704067200;  // 2024-01-01 00:00:00 UTC
+    const result: &tm = gmtime(&t);
+    try assert_eq_i32(result.tm_year, 124);   // 2024 - 1900 = 124
+    try assert_eq_i32(result.tm_mon, 0);      // January
+    try assert_eq_i32(result.tm_mday, 1);     // 1st
+}
+
+// ============================================================
+// mktime 函数测试
+// ============================================================
+
+test "mktime_epoch" {
+    var t: tm = tm{
+        tm_sec: 0, tm_min: 0, tm_hour: 0,
+        tm_mday: 1, tm_mon: 0, tm_year: 70,
+        tm_wday: 0, tm_yday: 0, tm_isdst: 0
+    };
+    const result: time_t = mktime(&t);
+    try assert_eq_i32(result as i32, 0);
+}
+
+test "mktime_roundtrip" {
+    // 测试 gmtime -> mktime 往返
+    var original: time_t = 1234567890;
+    const tm_val: &tm = gmtime(&original);
+    const back: time_t = mktime(tm_val);
+    // 允许一定误差（因为时区等）
+    const diff: i64 = (original - back) as i64;
+    try expect(diff >= 0 - 1 && diff <= 1);
+}
+
+// ============================================================
+// strftime 函数测试
+// ============================================================
+
+const FMT_YMD: &const byte = "%Y-%m-%d";
+const FMT_HMS: &const byte = "%H:%M:%S";
+const FMT_FULL: &const byte = "%Y-%m-%d %H:%M:%S";
+
+test "strftime_ymd" {
+    var t: tm = tm{
+        tm_sec: 0, tm_min: 0, tm_hour: 12,
+        tm_mday: 15, tm_mon: 5, tm_year: 124,  // 2024-06-15
+        tm_wday: 6, tm_yday: 166, tm_isdst: 0
+    };
+    var buf: [byte: 64] = [];
+    const len: usize = strftime(&buf[0], 64, FMT_YMD, &t);
+    try assert_eq_i32(len as i32, 10);
+    try assert_eq_i32(strcmp(&buf[0], "2024-06-15"), 0);
+}
+
+test "strftime_hms" {
+    var t: tm = tm{
+        tm_sec: 30, tm_min: 45, tm_hour: 14,
+        tm_mday: 1, tm_mon: 0, tm_year: 70,
+        tm_wday: 0, tm_yday: 0, tm_isdst: 0
+    };
+    var buf: [byte: 64] = [];
+    const len: usize = strftime(&buf[0], 64, FMT_HMS, &t);
+    try assert_eq_i32(len as i32, 8);
+    try assert_eq_i32(strcmp(&buf[0], "14:45:30"), 0);
+}
+
+test "strftime_full" {
+    var t: tm = tm{
+        tm_sec: 0, tm_min: 0, tm_hour: 0,
+        tm_mday: 1, tm_mon: 0, tm_year: 70,
+        tm_wday: 0, tm_yday: 0, tm_isdst: 0
+    };
+    var buf: [byte: 64] = [];
+    const len: usize = strftime(&buf[0], 64, FMT_FULL, &t);
+    try assert_eq_i32(len as i32, 19);
+    try assert_eq_i32(strcmp(&buf[0], "1970-01-01 00:00:00"), 0);
+}
+
+test "strftime_day_names" {
+    // 2024-01-01 是星期一
+    var t: tm = tm{
+        tm_sec: 0, tm_min: 0, tm_hour: 0,
+        tm_mday: 1, tm_mon: 0, tm_year: 124,
+        tm_wday: 1, tm_yday: 0, tm_isdst: 0  // Monday
+    };
+    var buf: [byte: 64] = [];
+    const len: usize = strftime(&buf[0], 64, "%a %A", &t);
+    try assert_eq_i32(strcmp(&buf[0], "Mon Monday"), 0);
+}
+
+test "strftime_month_names" {
+    // June
+    var t: tm = tm{
+        tm_sec: 0, tm_min: 0, tm_hour: 0,
+        tm_mday: 1, tm_mon: 5, tm_year: 124,
+        tm_wday: 0, tm_yday: 0, tm_isdst: 0
+    };
+    var buf: [byte: 64] = [];
+    const len: usize = strftime(&buf[0], 64, "%b %B", &t);
+    try assert_eq_i32(strcmp(&buf[0], "Jun June"), 0);
+}
+
+test "strftime_12hour" {
+    // 14:30 -> 02:30 PM
+    var t: tm = tm{
+        tm_sec: 0, tm_min: 30, tm_hour: 14,
+        tm_mday: 1, tm_mon: 0, tm_year: 70,
+        tm_wday: 0, tm_yday: 0, tm_isdst: 0
+    };
+    var buf: [byte: 64] = [];
+    const len: usize = strftime(&buf[0], 64, "%I:%M %p", &t);
+    try assert_eq_i32(strcmp(&buf[0], "02:30 PM"), 0);
+}
+
+test "strftime_iso_date" {
+    var t: tm = tm{
+        tm_sec: 0, tm_min: 0, tm_hour: 0,
+        tm_mday: 25, tm_mon: 11, tm_year: 124,  // 2024-12-25
+        tm_wday: 0, tm_yday: 0, tm_isdst: 0
+    };
+    var buf: [byte: 64] = [];
+    const len: usize = strftime(&buf[0], 64, "%F", &t);
+    try assert_eq_i32(strcmp(&buf[0], "2024-12-25"), 0);
+}
+
+test "strftime_buffer_too_small" {
+    var t: tm = tm{
+        tm_sec: 0, tm_min: 0, tm_hour: 0,
+        tm_mday: 1, tm_mon: 0, tm_year: 70,
+        tm_wday: 0, tm_yday: 0, tm_isdst: 0
+    };
+    var buf: [byte: 4] = [];
+    const len: usize = strftime(&buf[0], 4, FMT_YMD, &t);
+    // 缓冲区太小，返回 0
+    try assert_eq_i32(len as i32, 0);
+}

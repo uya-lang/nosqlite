@@ -1,0 +1,50 @@
+// 联合体内部方法：方法定义在 union { } 内
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+union IntOrFloat {
+    i: i32,
+    f: f64,
+    fn as_f64(self: &Self) f64 {
+        return match *self {
+            .i(x) => x as f64,
+            .f(x) => x,
+        };
+    }
+    fn is_int(self: &Self) bool {
+        return match *self {
+            .i(_) => true,
+            .f(_) => false,
+        };
+    }
+}
+
+fn test_inner_as_f64_int() !void {
+    const vi: IntOrFloat = IntOrFloat.i(42);
+    const as_float: f64 = vi.as_f64();
+    try expect(as_float >= 41.9 && as_float <= 42.1);
+}
+
+fn test_inner_is_int() !void {
+    const vi: IntOrFloat = IntOrFloat.i(42);
+    const is_int_val: bool = vi.is_int();
+    try expect(is_int_val);
+}
+
+fn test_inner_as_f64_float() !void {
+    const vf: IntOrFloat = IntOrFloat.f(3.14);
+    const as_float2: f64 = vf.as_f64();
+    try expect(as_float2 >= 3.13 && as_float2 <= 3.15);
+}
+
+export fn main() i32 {
+    test_suite_begin("Union Inner Method Tests");
+    run_test("inner as_f64 int", test_inner_as_f64_int);
+    run_test("inner is_int", test_inner_is_int);
+    run_test("inner as_f64 float", test_inner_as_f64_float);
+    return test_suite_end();
+}

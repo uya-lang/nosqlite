@@ -1,0 +1,154 @@
+// test_async_state_machine.uya
+// 目标：阶段 B（Future<!T>）下，@async_fn 生成的 future 能在 poll 时返回 Pending，
+// 并在后续 poll 时返回 Ready(ok)（不再使用 error.AsyncPending 控制流）。
+
+use std.async;
+use std.testing.assert_eq_i32;
+use std.testing.assert_true;
+
+struct FlipPending : Future<!i32> {
+    polled: i32,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        _ = waker;
+        if self.polled == 0 {
+            // 第一次：标记已轮询，然后返回 Pending。
+            self.polled = 1;
+            return Poll<!i32>.Pending({});
+        }
+        // 第二次及以后：Ready(ok(7))
+        return Poll<!i32>.Ready(ok<i32>(7));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+fn flip_pending() Future<!i32> {
+    return FlipPending{ polled: 0 };
+}
+
+@async_fn
+fn await_flip_then_return() Future<!i32> {
+    const x: i32 = try @await flip_pending();
+    return x;
+}
+
+test "async_state_machine_pending_then_ready" {
+    const f: Future<!i32> = await_flip_then_return();
+    const w: Waker = Waker{};
+
+    const p1: Poll<!i32> = f.poll(&w);
+    var pending_seen: bool = false;
+    match p1 {
+        .Pending(_) => { pending_seen = true; },
+        .Ready(_) => { pending_seen = false; },
+    };
+    try assert_true(pending_seen);
+
+    const p2: Poll<!i32> = f.poll(&w);
+    var v: i32 = 0 - 1;
+    match p2 {
+        .Pending(_) => { v = 0 - 2; },
+        .Ready(r) => { v = r catch { 0 - 3; }; },
+    };
+    try assert_eq_i32(v, 7);
+}
+
+// 多 await 绑定（状态机估算包含多个 await）
+@async_fn
+fn await_three() Future<!i32> {
+    const a: i32 = try @await flip_pending();
+    const b: i32 = try @await flip_pending();
+    const c: i32 = try @await flip_pending();
+    return a + b + c;
+}
+
+test "async_state_machine_multiple_awaits" {
+    const f: Future<!i32> = await_three();
+    const w: Waker = Waker{};
+    // 第一次 poll：第一个 flip_pending 返回 Pending
+    const p1: Poll<!i32> = f.poll(&w);
+    var v: i32 = 0;
+    match p1 {
+        .Pending(_) => { v = 0; },
+        .Ready(r) => { v = r catch { -1; }; },
+    };
+    try assert_eq_i32(v, 0);
+    // 第二次 poll：第一个 flip_pending 返回 Ready(7)，第二个 flip_pending 返回 Pending
+    const p2: Poll<!i32> = f.poll(&w);
+    match p2 {
+        .Pending(_) => { v = 0; },
+        .Ready(r) => { v = r catch { -1; }; },
+    };
+    try assert_eq_i32(v, 0);
+    // 第三次 poll：前两个 flip_pending 返回 Ready(7)，第三个 flip_pending 返回 Pending
+    const p3: Poll<!i32> = f.poll(&w);
+    match p3 {
+        .Pending(_) => { v = 0; },
+        .Ready(r) => { v = r catch { -1; }; },
+    };
+    try assert_eq_i32(v, 0);
+    // 第四次 poll：全部三个 flip_pending 返回 Ready(7)，状态机完成
+    const p4: Poll<!i32> = f.poll(&w);
+    match p4 {
+        .Pending(_) => { v = -1; },
+        .Ready(r) => { v = r catch { -2; }; },
+    };
+    try assert_eq_i32(v, 21);
+}
+
+// 多参数 @async_fn（状态机估算包含捕获的参数）
+@async_fn
+fn await_with_params(x: i32, y: i32) Future<!i32> {
+    const a: i32 = try @await flip_pending();
+    const b: i32 = try @await flip_pending();
+    return a + b;
+}
+
+test "async_state_machine_with_params" {
+    const f: Future<!i32> = await_with_params(5, 7);
+    const w: Waker = Waker{};
+    // 第一次 poll：第一个 flip_pending 返回 Pending
+    const p1: Poll<!i32> = f.poll(&w);
+    var v: i32 = 0;
+    match p1 {
+        .Pending(_) => { v = 0; },
+        .Ready(r) => { v = r catch { -1; }; },
+    };
+    try assert_eq_i32(v, 0);
+    // 第二次 poll：第一个 flip_pending 返回 Ready(7)，第二个 flip_pending 返回 Pending
+    const p2: Poll<!i32> = f.poll(&w);
+    match p2 {
+        .Pending(_) => { v = 0; },
+        .Ready(r) => { v = r catch { -1; }; },
+    };
+    try assert_eq_i32(v, 0);
+    // 第三次 poll：全部完成，返回 Ready(14)
+    const p3: Poll<!i32> = f.poll(&w);
+    match p3 {
+        .Pending(_) => { v = -1; },
+        .Ready(r) => { v = r catch { -2; }; },
+    };
+    try assert_eq_i32(v, 14);
+}
+
+// 无 await 的 @async_fn（仅状态返回）
+@async_fn
+fn async_no_await() Future<!i32> {
+    return 42;
+}
+
+test "async_state_machine_no_await" {
+    const f: Future<!i32> = async_no_await();
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = f.poll(&w);
+    var v: i32 = 0 - 1;
+    match p {
+        .Pending(_) => { v = 0 - 1; },
+        .Ready(r) => { v = r catch { 0 - 2; }; },
+    };
+    try assert_eq_i32(v, 42);
+}
+

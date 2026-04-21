@@ -1,0 +1,55 @@
+// test_asm_codegen.uya - @asm 代码生成测试
+
+// 测试基本代码生成格式
+test "asm codegen basic" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    }
+}
+
+// 测试输入操作数生成
+test "asm codegen input" {
+    var a: i32 = 10;
+    var x: i32 = 0;
+    @asm {
+        "nop" (a, -> x);
+    }
+}
+
+// 测试输出操作数生成
+test "asm codegen output" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    }
+}
+
+// 测试多输入多输出生成
+test "asm codegen multiple" {
+    var a: i32 = 10;
+    var b: i32 = 20;
+    var x: i32 = 0;
+    var y: i32 = 0;
+    @asm {
+        "nop" (a, b, -> x, y);
+    }
+}
+
+// 测试 clobbers 生成
+test "asm codegen clobbers" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    } clobbers = ["rax", "memory"];
+}
+
+// 测试多条指令生成
+test "asm codegen multiple instructions" {
+    var x: i32 = 0;
+    var y: i32 = 10;
+    @asm {
+        "nop" (y, -> x);
+        "nop" (x, -> x);
+    } clobbers = ["rax"];
+}

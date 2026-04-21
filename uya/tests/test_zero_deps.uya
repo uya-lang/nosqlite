@@ -1,0 +1,25 @@
+// 方案C验证：使用 export fn main + std.runtime.entry 实现 0依赖
+// 不再需要 bridge.c
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.runtime.entry;  // 提供 C main 入口
+
+fn test_simple() !void {
+    try assert_eq_i32(1 + 1, 2);
+}
+
+fn test_nested() !void {
+    try expect(10 > 5);
+}
+
+// export fn main 编译为 main_main，由 std.runtime.entry 的 C main 调用
+export fn main() i32 {
+    test_suite_begin("Zero Deps Test");
+    run_test("simple", test_simple);
+    run_test("nested", test_nested);
+    return test_suite_end();
+}

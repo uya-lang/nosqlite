@@ -1,0 +1,10 @@
+// error_asm_output_pointer.uya - @asm 输出指针类型错误测试
+// 期望编译错误：@asm 输出必须是整数类型（指针不能作为输出）
+
+fn main() i32 {
+    var ptr: &i32 = null;
+    @asm {
+        "mov %0, 0" (-> ptr);
+    }
+    return 0;
+}

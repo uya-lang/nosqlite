@@ -1,0 +1,72 @@
+// 非常深的嵌套测试
+// 测试5层嵌套的if语句
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+test "test_deep_nested_true_path" {
+    var value: i32 = 0;
+    const a: i32 = 1;
+    const b: i32 = 2;
+    const c: i32 = 3;
+    const d: i32 = 4;
+    const e: i32 = 5;
+    
+    if a > 0 {
+        if b > 1 {
+            if c > 2 {
+                if d > 3 {
+                    if e > 4 {
+                        value = 1000;
+                    } else {
+                        value = 2000;
+                    }
+                } else {
+                    value = 3000;
+                }
+            } else {
+                value = 4000;
+            }
+        } else {
+            value = 5000;
+        }
+    } else {
+        value = 6000;
+    }
+    
+    try assert_eq_i32(value, 1000);
+}
+
+test "test_deep_nested_else_path" {
+    var value: i32 = 0;
+    const a: i32 = 1;
+    const b: i32 = 2;
+    const c: i32 = 3;
+    const d: i32 = 4;
+    const f: i32 = 0;
+    
+    if a > 0 {
+        if b > 1 {
+            if c > 2 {
+                if d > 3 {
+                    if f > 4 {
+                        value = 1000;
+                    } else {
+                        value = 2000;
+                    }
+                } else {
+                    value = 3000;
+                }
+            } else {
+                value = 4000;
+            }
+        } else {
+            value = 5000;
+        }
+    } else {
+        value = 6000;
+    }
+    
+    try assert_eq_i32(value, 2000);
+}

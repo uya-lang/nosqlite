@@ -1,0 +1,36 @@
+use std.async;
+use std.testing.assert_eq_i32;
+
+struct FutureSlot<T> {
+    slot: [T: 1],
+    ready: bool,
+
+    fn store(self: &Self, value: T) void {
+        self.slot[0] = value;
+        self.ready = true;
+    }
+
+    fn into_future(self: &Self) Future<T> {
+        if self.ready {
+            return Future<T>{ state: Poll<T>.Ready(self.slot[0]) };
+        }
+        return Future<T>{ state: Poll<T>.Pending({}) };
+    }
+}
+
+test "generic_struct_array_field_and_future_method_codegen" {
+    var slot: FutureSlot<i32> = FutureSlot<i32>{ ready: false };
+    slot.store(17);
+
+    const future: Future<i32> = slot.into_future();
+    const waker: Waker = Waker{};
+    const poll_result: Poll<i32> = future.poll(&waker);
+    var got: i32 = 0;
+
+    match poll_result {
+        .Ready(value) => { got = value; },
+        .Pending(_) => { },
+    };
+
+    try assert_eq_i32(got, 17);
+}

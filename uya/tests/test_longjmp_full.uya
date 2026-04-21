@@ -1,0 +1,88 @@
+// test_longjmp_full.uya - 完整的 longjmp 功能测试
+// 测试 setjmp/longjmp 的非局部跳转
+
+use std.runtime.entry;
+use std.testing.expect;
+
+use libc.setjmp;
+use libc.jmp_buf;
+use libc.longjmp;
+use libc._longjmp;
+use libc.sigjmp_buf;
+use libc.sigsetjmp;
+use libc.siglongjmp;
+
+var jumped: i32 = 0;
+
+test "longjmp_basic_jump" {
+    var env: jmp_buf = jmp_buf{ data: [0: 8] };
+    var result: i32 = setjmp(&env);
+    
+    if result == 0 {
+        // 第一次调用 setjmp，返回 0
+        jumped = 0;
+        // 调用 longjmp，跳回 setjmp
+        jumped = 1;
+        longjmp(&env, 42);
+        // 这行不应该执行
+        jumped = 2;
+    } else {
+        // 从 longjmp 返回
+        try expect(result == 42);
+        try expect(jumped == 1);
+    }
+}
+
+test "longjmp_nonzero_value" {
+    var env: jmp_buf = jmp_buf{ data: [0: 8] };
+    var result: i32 = setjmp(&env);
+    
+    if result == 0 {
+        longjmp(&env, 123);
+    } else {
+        try expect(result == 123);
+    }
+}
+
+test "longjmp_value_zero_becomes_one" {
+    var env: jmp_buf = jmp_buf{ data: [0: 8] };
+    var result: i32 = setjmp(&env);
+    
+    if result == 0 {
+        // 传入 0，应该返回 1
+        longjmp(&env, 0);
+    } else {
+        // POSIX: longjmp(env, 0) 使 setjmp 返回 1
+        try expect(result == 1);
+    }
+}
+
+test "_longjmp_basic_jump" {
+    var env: jmp_buf = jmp_buf{ data: [0: 8] };
+    var result: i32 = setjmp(&env);
+    if result == 0 {
+        _longjmp(&env, 55);
+    } else {
+        try expect(result == 55);
+    }
+}
+
+test "siglongjmp_basic_jump" {
+    var env: sigjmp_buf = sigjmp_buf{ data: [0: 16] };
+    var result: i32 = sigsetjmp(&env, 0);
+    if result == 0 {
+        siglongjmp(&env, 88);
+    } else {
+        try expect(result == 88);
+    }
+}
+
+test "siglongjmp_value_zero_becomes_one" {
+    var env: sigjmp_buf = sigjmp_buf{ data: [0: 16] };
+    var result: i32 = sigsetjmp(&env, 0);
+    if result == 0 {
+        siglongjmp(&env, 0);
+    } else {
+        try expect(result == 1);
+    }
+}

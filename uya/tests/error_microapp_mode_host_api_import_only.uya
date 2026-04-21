@@ -1,0 +1,9 @@
+// ERROR TEST: microapp 模式禁止直接导入宿主 API，即使未调用 (E4004)
+// 编译命令: ./bin/uya tests/error_microapp_mode_host_api_import_only.uya --c99 --app microapp
+// 预期: 编译失败，报错 E4004
+
+use std.time;
+
+export fn main() i32 {
+    return 0;
+}

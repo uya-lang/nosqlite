@@ -1,0 +1,13 @@
+struct Data { 
+    value: i32, 
+} 
+fn use_ffi_ptr(ptr: *Data) i32 { 
+    return 42; 
+} 
+fn main() i32 { 
+    var d: Data = Data{ value: 10 }; 
+    var normal_ptr: &Data = &d; 
+    var ffi_ptr: *Data = normal_ptr as *Data; 
+    const result: i32 = use_ffi_ptr(ffi_ptr); 
+    return result; 
+}

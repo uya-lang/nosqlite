@@ -1,0 +1,42 @@
+// 字符串字面量赋给 [byte:N]、嵌套成员字段与 &[const byte]（重指向）
+
+use std.testing.assert_eq_i32;
+
+struct Inner {
+    name: [byte: 16],
+}
+
+struct Outer {
+    inner: Inner,
+}
+
+struct Holder {
+    fld: [byte: 8],
+    text: &[const byte],
+}
+
+test "assign_string_to_byte_array_var" {
+    var buf: [byte: 8] = "ab";
+    buf = "xy";
+    try assert_eq_i32(buf[0] as i32, 120);
+    try assert_eq_i32(buf[1] as i32, 121);
+    try assert_eq_i32(buf[2] as i32, 0);
+}
+
+test "assign_string_to_nested_member_byte_array" {
+    var o: Outer = Outer { inner: Inner { name: [] } };
+    o.inner.name = "hi";
+    try assert_eq_i32(o.inner.name[0] as i32, 104);
+    try assert_eq_i32(o.inner.name[1] as i32, 105);
+    try assert_eq_i32(o.inner.name[2] as i32, 0);
+}
+
+test "assign_string_to_member_then_reassign" {
+    var h: Holder = Holder { fld: [], text: &"init"[0: 4] };
+    h.fld = "ok";
+    try assert_eq_i32(h.fld[0] as i32, 111);
+    try assert_eq_i32(h.fld[1] as i32, 107);
+    try assert_eq_i32(h.fld[2] as i32, 0);
+    h.text = "hello";
+    try assert_eq_i32(h.text.len as i32, 5);
+}

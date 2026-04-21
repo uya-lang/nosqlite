@@ -1,0 +1,299 @@
+// test_asm_arm64.uya - ARM64 平台特定测试
+// 测试 ARM64 寄存器类型和指令
+
+// ===== ARM64 寄存器类型测试 =====
+
+// 测试 ARM64 通用寄存器类型
+test "asm arm64 general register type" {
+    var x: i64 = 42;
+    var y: @asm_reg_arm64 = 0;
+    
+    @asm {
+        "mov %0, %1" (x, -> y);
+    }
+}
+
+// 测试 ARM64 NEON 寄存器类型
+test "asm arm64 neon register type" {
+    var v: @asm_reg_arm64_v;
+    
+    @asm {
+        "nop" (-> v);
+    }
+}
+
+// 测试多个 ARM64 寄存器
+test "asm arm64 multiple registers" {
+    var a: @asm_reg_arm64 = 1;
+    var b: @asm_reg_arm64 = 2;
+    var c: @asm_reg_arm64 = 3;
+    var result: @asm_reg_arm64 = 0;
+    
+    @asm {
+        "nop" (a, b, c, -> result);
+    }
+}
+
+// ===== ARM64 指令测试（条件编译）=====
+
+// 测试 ARM64 基本指令
+test "asm arm64 basic instructions" {
+    const target: i32 = @asm_target();
+    
+    if target == 3 || target == 4 {
+        // ARM64 平台（Linux 或 macOS）
+        var x: i64 = 100;
+        var y: i64 = 0;
+        
+        @asm {
+            "mov %0, %1" (x, -> y);
+        }
+    }
+}
+
+// 测试 ARM64 算术指令
+test "asm arm64 arithmetic" {
+    const target: i32 = @asm_target();
+    
+    if target == 3 || target == 4 {
+        // ARM64 平台
+        var a: i64 = 10;
+        var b: i64 = 20;
+        var sum: i64 = 0;
+        var diff: i64 = 0;
+        var prod: i64 = 0;
+        
+        @asm {
+            "add %0, %1, %2" (a, b, -> sum);
+        }
+        
+        @asm {
+            "sub %0, %1, %2" (a, b, -> diff);
+        }
+        
+        @asm {
+            "mul %0, %1, %2" (a, b, -> prod);
+        }
+    }
+}
+
+// 测试 ARM64 位运算指令
+test "asm arm64 bitwise" {
+    const target: i32 = @asm_target();
+    
+    if target == 3 || target == 4 {
+        // ARM64 平台
+        var a: i64 = 0xFF;
+        var b: i64 = 0x0F;
+        var and_result: i64 = 0;
+        var or_result: i64 = 0;
+        var xor_result: i64 = 0;
+        
+        @asm {
+            "and %0, %1, %2" (a, b, -> and_result);
+        }
+        
+        @asm {
+            "orr %0, %1, %2" (a, b, -> or_result);
+        }
+        
+        @asm {
+            "eor %0, %1, %2" (a, b, -> xor_result);
+        }
+    }
+}
+
+// ===== ARM64 内存操作测试 =====
+
+// 测试 ARM64 内存加载/存储
+test "asm arm64 memory operations" {
+    const target: i32 = @asm_target();
+    
+    if target == 3 || target == 4 {
+        // ARM64 平台
+        var arr: [i64: 4] = [1, 2, 3, 4];
+        var ptr: &i64 = &arr[0];
+        var value: i64 = 0;
+        
+        @asm {
+            "ldr %0, [%1]" (ptr, -> value);
+        }
+    }
+}
+
+// 测试 ARM64 内存屏障
+test "asm arm64 memory barrier" {
+    const target: i32 = @asm_target();
+    
+    if target == 3 || target == 4 {
+        // ARM64 平台
+        @asm {
+            "dmb sy" ();
+        } clobbers = ["memory"];
+    }
+}
+
+// ===== ARM64 调用约定测试 =====
+
+// 测试 ARM64 函数调用
+test "asm arm64 function call" {
+    const target: i32 = @asm_target();
+    
+    if target == 3 || target == 4 {
+        // ARM64 平台
+        var result: i64 = 0;
+        
+        // ARM64 调用约定：x0-x7 用于参数传递，x0 用于返回值
+        // 这里测试基本语法，不实际调用函数
+        @asm {
+            "nop" (-> result);
+        } clobbers = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "memory"];
+    }
+}
+
+// ===== ARM64 NEON SIMD 测试 =====
+
+// 测试 ARM64 NEON 向量操作
+test "asm arm64 neon vector" {
+    const target: i32 = @asm_target();
+    
+    if target == 3 || target == 4 {
+        // ARM64 平台
+        var v1: @asm_reg_arm64_v;
+        var v2: @asm_reg_arm64_v;
+        var result: @asm_reg_arm64_v;
+        
+        // NEON 向量加法
+        @asm {
+            "nop" (v1, v2, -> result);
+        }
+    }
+}
+
+// ===== ARM64 系统调用测试 =====
+
+// 测试 ARM64 Linux 系统调用
+test "asm arm64 linux syscall" {
+    const target: i32 = @asm_target();
+    
+    if target == 3 {
+        // ARM64 Linux
+        // 系统调用号在 x8，参数在 x0-x5，返回值在 x0
+        var syscall_nr: i64 = 64;  // write syscall
+        var fd: i64 = 1;           // stdout
+        var buf: &const byte = "Hello, ARM64!\n";
+        var len: i64 = 14;
+        var result: i64 = 0;
+        
+        @asm {
+            "mov x8, %0" (syscall_nr);
+            "mov x0, %0" (fd);
+            "mov x1, %0" (buf);
+            "mov x2, %0" (len);
+            "svc #0" (-> result);
+        } clobbers = ["x8", "x0", "x1", "x2", "x3", "x4", "x5", "memory"];
+    }
+}
+
+// ===== ARM64 特殊指令测试 =====
+
+// 测试 ARM64 特殊寄存器访问
+test "asm arm64 special registers" {
+    const target: i32 = @asm_target();
+    
+    if target == 3 || target == 4 {
+        // ARM64 平台
+        var sp_value: i64 = 0;
+        var lr_value: i64 = 0;
+        
+        // 读取栈指针（注意：实际使用需要小心）
+        @asm {
+            "mov %0, sp" (-> sp_value);
+        }
+        
+        // 读取链接寄存器
+        @asm {
+            "mov %0, x30" (-> lr_value);
+        }
+    }
+}
+
+// 测试 ARM64 条件执行
+test "asm arm64 conditional execution" {
+    const target: i32 = @asm_target();
+    
+    if target == 3 || target == 4 {
+        // ARM64 平台
+        var a: i64 = 10;
+        var b: i64 = 20;
+        var result: i64 = 0;
+        
+        // 比较 a 和 b
+        @asm {
+            "cmp %0, %1" (a, b);
+        }
+        
+        // 条件移动（如果 a < b）
+        @asm {
+            "movlt %0, #1" (-> result);
+        }
+    }
+}
+
+// ===== ARM64 原子操作测试 =====
+
+// 测试 ARM64 原子操作
+test "asm arm64 atomic operations" {
+    const target: i32 = @asm_target();
+    
+    if target == 3 || target == 4 {
+        // ARM64 平台
+        var counter: atomic i32 = 0;
+        var value: i32 = 1;
+        var result: i32 = 0;
+        
+        // 原子加法
+        @asm {
+            "ldadd w0, w1, [%2]" (value, counter, -> result);
+        } clobbers = ["memory"];
+    }
+}
+
+// ===== 跨平台兼容性测试 =====
+
+// 测试使用 @asm_reg_arm64 和通用 @asm_reg 混合
+// 注意：根据设计规则，不应该在同一 @asm 块中混用
+test "asm arm64 register type mixing" {
+    const target: i32 = @asm_target();
+    
+    if target == 3 || target == 4 {
+        // ARM64 平台
+        var a: i64 = 10;
+        var b: @asm_reg_arm64 = 20;
+        var result: i64 = 0;
+        
+        // 使用通用类型作为输入，ARM64 特定类型作为输出
+        @asm {
+            "mov %0, %1" (a, -> b);
+        }
+        
+        // 使用 ARM64 特定类型作为输入，通用类型作为输出
+        @asm {
+            "mov %0, %1" (b, -> result);
+        }
+    }
+}
+
+// 测试 ARM64 macOS 特定
+test "asm arm64 macos specific" {
+    const target: i32 = @asm_target();
+    
+    if target == 4 {
+        // ARM64 macOS
+        var value: i64 = 0;
+        
+        @asm {
+            "nop" (-> value);
+        }
+    }
+}

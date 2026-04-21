@@ -1,0 +1,31 @@
+// 测试结构体方法返回错误联合类型
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+error TestError;
+
+struct Counter {
+    value: i32
+}
+
+Counter {
+    fn try_inc(self: &Self) !i32 {
+        if self.value >= 10 {
+            return error.TestError;
+        }
+        self.value = self.value + 1;
+        return self.value;
+    }
+}
+
+test "test_struct_method_error" {
+    var c: Counter = Counter{ value: 5 };
+    
+    const v1: i32 = c.try_inc() catch {
+        return;
+    };
+    try assert_eq_i32(v1, 6);
+    try assert_eq_i32(c.value, 6);
+}

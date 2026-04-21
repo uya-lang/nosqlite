@@ -1,0 +1,65 @@
+use std.async;
+use std.testing.assert_eq_i32;
+
+interface AsyncCounterLike {
+    @async_fn
+    fn add(self: &Self, delta: i32) Future<!i32>;
+}
+
+struct FlipPending : Future<!i32> {
+    polled: i32,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        _ = waker;
+        if self.polled == 0 {
+            self.polled = 1;
+            return Poll<!i32>.Pending({});
+        }
+        return Poll<!i32>.Ready(ok<i32>(2));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+fn flip_pending() Future<!i32> {
+    return FlipPending{ polled: 0 };
+}
+
+struct AsyncCounterInner {
+    value: i32,
+
+    @async_fn
+    fn add(self: &Self, delta: i32) Future<!i32> {
+        const inc: i32 = try @await flip_pending();
+        self.value = self.value + delta + inc;
+        return self.value;
+    }
+}
+
+struct AsyncCounterBlock : AsyncCounterLike {
+    value: i32,
+}
+
+AsyncCounterBlock {
+    @async_fn
+    fn add(self: &Self, delta: i32) Future<!i32> {
+        const inc: i32 = try @await flip_pending();
+        self.value = self.value + delta + inc;
+        return self.value;
+    }
+}
+
+test "async_inner_method_runs_via_block_on" {
+    var counter: AsyncCounterInner = AsyncCounterInner{ value: 3 };
+    const result: i32 = try block_on<i32>(counter.add(4));
+    try assert_eq_i32(result, 9);
+}
+
+test "async_interface_method_runs_via_vtable" {
+    var counter: AsyncCounterBlock = AsyncCounterBlock{ value: 10 };
+    const iface: AsyncCounterLike = counter;
+    const result: i32 = try block_on<i32>(iface.add(5));
+    try assert_eq_i32(result, 17);
+}

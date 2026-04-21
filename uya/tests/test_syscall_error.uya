@@ -1,0 +1,28 @@
+// 测试 @syscall 错误处理
+use std.runtime.entry;
+// 功能：尝试打开不存在的文件，验证错误处理
+
+export fn main() i32 {
+    const SYS_write: i64 = 1;
+    const SYS_open: i64 = 2;
+    
+    // 尝试打开不存在的文件
+    const path: *byte = "/nonexistent/file/path";
+    const O_RDONLY: i64 = 0;
+    
+    const result: !i64 = @syscall(SYS_open, path as i64, O_RDONLY, 0);
+    
+    // 预期会失败
+    _ = result catch {
+        // 打开失败（预期行为）
+        const success_msg: *byte = "Error handling works!\n";
+        @syscall(SYS_write, 1, success_msg as i64, 22);
+        return 0;  // 测试通过
+    };
+    
+    // 如果没有失败，说明有问题
+    const fail_msg: *byte = "Should have failed!\n";
+    @syscall(SYS_write, 1, fail_msg as i64, 20);
+    return 1;
+}
+

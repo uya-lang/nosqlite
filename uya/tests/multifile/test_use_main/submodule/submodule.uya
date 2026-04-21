@@ -1,0 +1,12 @@
+// submodule/submodule.uya - 子模块：测试使用 use main.xxx 引用主模块
+
+// 导入主模块的导出函数
+use main.helper_from_main;
+
+// 导入主模块的导出结构体
+use main.MainStruct;
+
+// 此文件仅用于验证 use main.xxx 语法是否工作
+// 如果 use main.xxx 不工作，编译会失败
+// 不需要导出函数，因为主文件不调用它
+

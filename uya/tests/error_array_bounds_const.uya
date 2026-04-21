@@ -1,0 +1,10 @@
+// error_array_bounds_const.uya - 常量数组下标越界预期编译失败
+// 预期：编译失败（buf[11] 超出 [byte: 10] 边界）
+
+use std.runtime.entry;
+
+export fn main() i32 {
+    var buf: [byte: 10] = [];
+    buf[11] = 0;
+    return 0;
+}

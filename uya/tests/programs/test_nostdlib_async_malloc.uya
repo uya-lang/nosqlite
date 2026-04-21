@@ -1,0 +1,27 @@
+// nostdlib + @async_fn：状态机堆分配走 lib/libc malloc，仍静态链接、无 libc.so
+// 验收：tests/verify_nostdlib_user.sh
+use libc.heap;
+use std.async;
+
+fn ready_0() Future<!usize> {
+    const p: Poll<!usize> = Poll<!usize>.Ready(ok<usize>(0));
+    return Future<!usize>{ state: p };
+}
+
+@async_fn
+fn await_once() Future<!usize> {
+    const n: usize = try @await ready_0();
+    return n;
+}
+
+export fn main() i32 {
+    var w: Waker = Waker{};
+    const f: Future<!usize> = await_once();
+    const p: Poll<!usize> = f.poll(&w);
+    var result: usize = 99;
+    match p {
+        .Ready(ok_val) => { result = ok_val catch { 98 as usize; }; },
+        .Pending(_) => { result = 97; },
+    };
+    return result as i32;
+}

@@ -1,0 +1,14 @@
+// 测试 use 语句基本功能（单文件场景，模拟模块导入）
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+fn helper() i32 {
+    return 10;
+}
+
+test "test_use_simple" {
+    const result: i32 = helper();
+    try assert_eq_i32(result, 10);
+}

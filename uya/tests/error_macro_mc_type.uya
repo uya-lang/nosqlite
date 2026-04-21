@@ -1,0 +1,12 @@
+// 测试预期失败：@mc_type 类型反射（当前不支持）
+// 规范 25.4.2：@mc_type 用于获取表达式或类型的编译时类型信息
+
+mc type_test() expr {
+    const info = @mc_type(i32);
+    @mc_code(@mc_ast(0));
+}
+
+fn main() i32 {
+    return 0;
+}
+

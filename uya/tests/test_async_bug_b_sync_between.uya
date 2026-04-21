@@ -1,0 +1,41 @@
+// Bug B: while @await 读循环后接同步代码，再接另一个 @await
+// 中间的同步代码不能被吃掉
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+@async_fn fn async_read_sync_read(r: &MemAsyncReader, buf: &byte, buf_len: usize) Future<!i32> {
+    // 第一段：读到一个标记字节
+    var header_byte: byte = 0;
+    var got_header: i32 = 0;
+    while got_header == 0 {
+        const rd: usize = try @await r.read(buf, 1);
+        if rd > 0 {
+            header_byte = buf[0];
+            got_header = 1;
+        }
+    }
+
+    // 同步代码段：基于 header 计算要读多少 body
+    const body_len: i32 = header_byte as i32;  // header 字节值 = body 长度
+
+    // 第二段：读 body
+    var body_total: i32 = 0;
+    while body_total < body_len {
+        const rd2: usize = try @await r.read(buf, buf_len);
+        body_total = body_total + rd2 as i32;
+    }
+
+    return body_total;
+}
+
+test "bug_b_sync_code_between_awaits" {
+    // 数据: 第 1 字节 = 3 (header, 表示后续 3 字节 body), 后续 "ABC"
+    var data: [byte: 4] = [3, 65, 66, 67];
+    var r: MemAsyncReader = mem_async_reader_new(&data[0] as &const byte, 4);
+    var buf: [byte: 8] = [];
+    const f: Future<!i32> = async_read_sync_read(&r, &buf[0], 8);
+    const result: !i32 = block_on<i32>(f);
+    const total: i32 = result catch { -1; };
+    try assert_eq_i32(total, 3);
+}

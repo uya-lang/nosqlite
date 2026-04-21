@@ -1,0 +1,60 @@
+// 测试字符串字面量支持
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+test "test_string_literal" {
+    // 字符串字面量类型为 *byte（FFI 指针类型）
+    const s1: *byte = "hello";
+    const s2: *byte = "world";
+    
+    // 验证字符串字面量可以创建
+    try assert_eq_i32(s1 != null, true);
+    try assert_eq_i32(s2 != null, true);
+}
+
+test "test_string_literal_array" {
+    // 字符串作为数组
+    const arr: [byte: 6] = "hello";
+    try assert_eq_i32(arr[0], 104);  // 'h'
+    try assert_eq_i32(arr[4], 111);  // 'o'
+}
+
+test "string_literal_escape_cr_lf" {
+    const crlf: [byte: 8] = "a\r\nb";
+    try assert_eq_i32(crlf[0], 97);
+    try assert_eq_i32(crlf[1], 13);
+    try assert_eq_i32(crlf[2], 10);
+    try assert_eq_i32(crlf[3], 98);
+}
+
+test "string_literal_slice_subslice" {
+    const s: &[byte] = &"hello"[0:3];
+    try assert_eq_i32(s.len, 3);
+    try assert_eq_i32(s.ptr[0], 104);
+    try assert_eq_i32(s.ptr[1], 101);
+    try assert_eq_i32(s.ptr[2], 108);
+}
+
+test "string_escape_x_hex" {
+    const s: [byte: 8] = "\x41\x62\x0A";
+    try assert_eq_i32(s[0], 65);
+    try assert_eq_i32(s[1], 98);
+    try assert_eq_i32(s[2], 10);
+}
+
+test "string_escape_u_utf8_bmp" {
+    const s: [byte: 8] = "\u4E2D";
+    try assert_eq_i32(s[0], 0xE4);
+    try assert_eq_i32(s[1], 0xB8);
+    try assert_eq_i32(s[2], 0xAD);
+    try assert_eq_i32(s[3], 0);
+}
+
+test "char_escape_x_and_u" {
+    const cx: byte = '\x7A';
+    try assert_eq_i32(cx as i32, 122);
+    const cu: byte = '\u00FF';
+    try assert_eq_i32(cu as i32, 255);
+}

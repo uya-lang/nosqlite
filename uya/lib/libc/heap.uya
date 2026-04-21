@@ -1,0 +1,275 @@
+// libc.heap - 堆分配（仅 syscall/mmap）
+// 供 use libc.malloc / use libc.free 与 @async_fn 生成代码链接，避免经 stdlib→runtime→std 拉入全量 libc（如 puts 与测试 bridge 冲突）
+
+// libc.heap - 堆分配（仅 syscall/mmap）
+// 供 use libc.heap 导入 malloc/free/realloc；同模块内可直接调用，
+// 不需要 use libc.heap 也能访问（lib/libc/ 目录合并到同一模块）。
+
+use libc.syscall;
+
+// 多线程安全：CLONE_VM 下所有线程共享同一地址空间，malloc/free 必须串行化。
+// 为避免与 pthread_mutex 产生循环依赖/初始化问题，heap 使用最简单的原子自旋锁。
+extern "libc" fn __atomic_compare_exchange_n(ptr: &i32, expected: &i32, desired: i32, weak: i32, success_mem: i32, failure_mem: i32) i32;
+const HEAP_ATOMIC_SEQ_CST: i32 = 5;
+var _heap_lock: atomic i32 = 0;
+
+fn _heap_lock_acquire() void {
+    var expected: i32 = 0;
+    while __atomic_compare_exchange_n((&_heap_lock) as &i32, &expected, 1, 0, HEAP_ATOMIC_SEQ_CST, HEAP_ATOMIC_SEQ_CST) == 0 {
+        expected = 0;
+    }
+}
+
+fn _heap_lock_release() void {
+    _heap_lock = 0;
+}
+
+// ============================================================
+// 内存分配（与 stdlib 中原实现一致，仅迁移到此文件）
+// ============================================================
+
+const MALLOC_ALIGN: usize = 16;
+const MIN_CHUNK_SIZE: usize = 64;
+const HEAP_PAGE_SIZE: usize = 4096;
+const CHUNK_MAGIC: u64 = 3735928559;  // 0xDEADBEEF
+
+struct ChunkHeader {
+    magic: u64,
+    size: usize,
+}
+
+struct FreeChunk {
+    header: ChunkHeader,
+    prev: &FreeChunk,
+    next: &FreeChunk,
+}
+
+struct HeapRegion {
+    next: &HeapRegion,
+    base: &ChunkHeader,
+    size: usize,
+}
+
+var free_list_head: &FreeChunk = null;
+var heap_regions: &HeapRegion = null;
+
+// 勿命名 align_up：与 std/mem/arena 的两参数 align_up 合并后会解析错误
+fn heap_align_up(size: usize) usize {
+    if size == 0 { return MALLOC_ALIGN; }
+    var q: usize = size / MALLOC_ALIGN;
+    var r: usize = size - q * MALLOC_ALIGN;
+    if r == 0 { return size; }
+    return (q + 1) * MALLOC_ALIGN;
+}
+
+fn is_null(ptr: &void) bool {
+    return (((ptr as &byte) as usize) == 0);
+}
+
+fn to_header(ptr: &void) &ChunkHeader {
+    return (((ptr as &byte) - @size_of(ChunkHeader)) as &ChunkHeader);
+}
+
+fn to_user_ptr(hdr: &ChunkHeader) &void {
+    return (((hdr as &byte) + @size_of(ChunkHeader)) as &void);
+}
+
+fn owns_ptr(ptr: &void) bool {
+    const addr: usize = (ptr as usize);
+    var region: &HeapRegion = heap_regions;
+    while !is_null(region as &void) {
+        const base: usize = region.base as usize;
+        const size: usize = region.size;
+        const start: usize = base + @size_of(ChunkHeader);
+        const end: usize = base + size;
+        if addr >= start && addr < end {
+            return true;
+        }
+        region = region.next;
+    }
+    return false;
+}
+
+fn is_free(hdr: &ChunkHeader) bool {
+    return ((hdr.size as i64) % (2 as i64)) != 0;
+}
+
+fn set_free(hdr: &ChunkHeader, free: bool) void {
+    var base: usize = ((hdr.size as i64) / (2 as i64)) as usize * 2;
+    if free { hdr.size = base + 1; }
+    else { hdr.size = base; }
+}
+
+fn get_size(hdr: &ChunkHeader) usize {
+    return ((hdr.size as i64) / (2 as i64)) as usize * 2;
+}
+
+fn remove_free(chunk: &FreeChunk) void {
+    if is_null(chunk as &void) { return; }
+    if !is_null(chunk.prev as &void) {
+        chunk.prev.next = chunk.next;
+    } else {
+        free_list_head = chunk.next;
+    }
+    if !is_null(chunk.next as &void) {
+        chunk.next.prev = chunk.prev;
+    }
+}
+
+fn set_prev_link(target: &FreeChunk, prev: &FreeChunk) void {
+    if is_null(target as &void) { return; }
+    target.prev = prev;
+}
+
+fn add_free(chunk: &FreeChunk) void {
+    if is_null(chunk as &void) { return; }
+    set_free(&chunk.header, true);
+    chunk.prev = null;
+    chunk.next = free_list_head;
+    set_prev_link(free_list_head, chunk);
+    free_list_head = chunk;
+}
+
+fn morecore(needed: usize) &ChunkHeader {
+    var alloc_size: usize = needed + @size_of(ChunkHeader);
+    if alloc_size < HEAP_PAGE_SIZE { alloc_size = HEAP_PAGE_SIZE; }
+    const region_size_aligned: usize = ((@size_of(HeapRegion) + MALLOC_ALIGN - 1) / MALLOC_ALIGN) * MALLOC_ALIGN;
+    const map_size: usize = alloc_size + region_size_aligned;
+
+    const result: !i64 = @syscall(SYS_mmap, 0, map_size as i64,
+                                  PROT_READ | PROT_WRITE,
+                                  MAP_PRIVATE | MAP_ANONYMOUS, 0 - 1, 0);
+    const ptr: i64 = result catch { return null; };
+    if ptr < 0 { return null; }
+
+    var region: &HeapRegion = (ptr as &HeapRegion);
+    var hdr: &ChunkHeader = (((ptr as &byte) + region_size_aligned) as &ChunkHeader);
+    hdr.magic = CHUNK_MAGIC;
+    hdr.size = alloc_size;
+    set_free(hdr, true);
+
+    region.base = hdr;
+    region.size = alloc_size;
+    region.next = heap_regions;
+    heap_regions = region;
+
+    var chunk: &FreeChunk = (hdr as &FreeChunk);
+    chunk.prev = null;
+    chunk.next = null;
+
+    return hdr;
+}
+
+fn find_chunk(needed: usize) &FreeChunk {
+    var cur: &FreeChunk = free_list_head;
+    while !is_null(cur as &void) {
+        var sz: usize = get_size(&cur.header);
+        if sz >= needed + @size_of(ChunkHeader) {
+            return cur;
+        }
+        cur = cur.next;
+    }
+    return null;
+}
+
+fn split_chunk(chunk: &FreeChunk, needed: usize) void {
+    var hdr: &ChunkHeader = &chunk.header;
+    var sz: usize = get_size(hdr);
+    var alloc_size: usize = needed + @size_of(ChunkHeader);
+    var rem: usize = sz - alloc_size;
+
+    if rem >= MIN_CHUNK_SIZE + @size_of(ChunkHeader) {
+        hdr.size = alloc_size;
+        if is_free(hdr) { hdr.size = alloc_size + 1; }
+
+        var new_hdr: &ChunkHeader = (((hdr as &byte) + alloc_size) as &ChunkHeader);
+        new_hdr.magic = CHUNK_MAGIC;
+        new_hdr.size = rem;
+        set_free(new_hdr, true);
+
+        var new_chunk: &FreeChunk = (new_hdr as &FreeChunk);
+        new_chunk.prev = null;
+        new_chunk.next = null;
+        add_free(new_chunk);
+    }
+}
+
+fn _malloc_impl(size: usize) &void {
+    if size == 0 { return null; }
+
+    var aligned: usize = heap_align_up(size);
+    if aligned < MIN_CHUNK_SIZE { aligned = MIN_CHUNK_SIZE; }
+
+    var chunk: &FreeChunk = find_chunk(aligned);
+
+    if is_null(chunk as &void) {
+        var hdr: &ChunkHeader = morecore(aligned);
+        if is_null(hdr as &void) { return null; }
+        add_free(hdr as &FreeChunk);
+        chunk = find_chunk(aligned);
+    }
+
+    if is_null(chunk as &void) { return null; }
+
+    remove_free(chunk);
+    set_free(&chunk.header, false);
+    split_chunk(chunk, aligned);
+
+    return to_user_ptr(&chunk.header);
+}
+
+export extern "libc" fn malloc(size: usize) &void {
+    _heap_lock_acquire();
+    const result: &void = _malloc_impl(size);
+    _heap_lock_release();
+    return result;
+}
+
+fn _free_impl(ptr: &void) void {
+    if is_null(ptr) { return; }
+    if !owns_ptr(ptr) { return; }
+
+    var hdr: &ChunkHeader = to_header(ptr);
+    if hdr.magic != CHUNK_MAGIC { return; }
+
+    var chunk: &FreeChunk = (hdr as &FreeChunk);
+    add_free(chunk);
+}
+
+export extern "libc" fn free(ptr: &void) void {
+    _heap_lock_acquire();
+    _free_impl(ptr);
+    _heap_lock_release();
+}
+
+fn _realloc_impl(ptr: &void, size: usize) &void {
+    if is_null(ptr) {
+        const result: &void = _malloc_impl(size);
+        return result;
+    }
+    if size == 0 {
+        _free_impl(ptr);
+        return null;
+    }
+    if !owns_ptr(ptr) { return null; }
+
+    var hdr: &ChunkHeader = to_header(ptr);
+    if hdr.magic != CHUNK_MAGIC { return null; }
+
+    var old_sz: usize = get_size(hdr) - @size_of(ChunkHeader);
+    if size <= old_sz { return ptr; }
+
+    var new_ptr: &void = _malloc_impl(size);
+    if is_null(new_ptr) { return null; }
+
+    _ = memcpy(new_ptr as *byte, ptr as *const byte, old_sz);
+    _free_impl(ptr);
+    return new_ptr;
+}
+
+export extern "libc" fn realloc(ptr: &void, size: usize) &void {
+    _heap_lock_acquire();
+    const result: &void = _realloc_impl(ptr, size);
+    _heap_lock_release();
+    return result;
+}

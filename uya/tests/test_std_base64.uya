@@ -1,0 +1,115 @@
+use std.encoding.base64.decode_base64;
+use std.encoding.base64.decode_base64_mime;
+use std.encoding.base64.decode_base64url;
+use std.encoding.base64.encode_base64;
+use std.encoding.base64.encode_base64url;
+use std.testing.assert_eq_i32;
+
+test "base64_decode_standard" {
+    const src: &[byte] = &"SGVsbG8="[0: 8];
+    const expect: &[byte] = &"Hello"[0: 5];
+    var out: [byte: 16] = [];
+    const n: usize = try decode_base64(src, out[0: 16]);
+    if n != expect.len {
+        try assert_eq_i32(0, 1);
+    }
+    const got: &[byte] = out[0: n];
+    var i: usize = 0;
+    while i < got.len {
+        if got.ptr[i] != expect.ptr[i] {
+            try assert_eq_i32(0, 1);
+        }
+        i = i + 1;
+    }
+}
+
+test "base64_encode_standard" {
+    const src: &[byte] = &"Hello"[0: 5];
+    const expect: &[byte] = &"SGVsbG8="[0: 8];
+    var out: [byte: 16] = [];
+    const n: usize = try encode_base64(src, out[0: 16]);
+    if n != expect.len {
+        try assert_eq_i32(0, 1);
+    }
+    const got: &[byte] = out[0: n];
+    var i: usize = 0;
+    while i < got.len {
+        if got.ptr[i] != expect.ptr[i] {
+            try assert_eq_i32(0, 1);
+        }
+        i = i + 1;
+    }
+}
+
+test "base64_decode_mime_skips_newlines" {
+    const src: &[byte] = &"SGVs\nbG8=\r\n"[0: 11];
+    const expect: &[byte] = &"Hello"[0: 5];
+    var out: [byte: 16] = [];
+    const n: usize = try decode_base64_mime(src, out[0: 16]);
+    if n != expect.len {
+        try assert_eq_i32(0, 1);
+    }
+    const got: &[byte] = out[0: n];
+    var i: usize = 0;
+    while i < got.len {
+        if got.ptr[i] != expect.ptr[i] {
+            try assert_eq_i32(0, 1);
+        }
+        i = i + 1;
+    }
+}
+
+test "base64url_roundtrip" {
+    const src: &[byte] = &"{\"x\":1}"[0: 7];
+    const expect: &[byte] = &"eyJ4IjoxfQ"[0: 10];
+    var enc: [byte: 32] = [];
+    const enc_n: usize = try encode_base64url(src, enc[0: 32]);
+    if enc_n != expect.len {
+        try assert_eq_i32(0, 1);
+    }
+    const enc_view: &[byte] = enc[0: enc_n];
+    var i: usize = 0;
+    while i < enc_view.len {
+        if enc_view.ptr[i] != expect.ptr[i] {
+            try assert_eq_i32(0, 1);
+        }
+        i = i + 1;
+    }
+    var dec: [byte: 32] = [];
+    const dec_n: usize = try decode_base64url(enc[0: enc_n], dec[0: 32]);
+    if dec_n != src.len {
+        try assert_eq_i32(0, 1);
+    }
+    const dec_view: &[byte] = dec[0: dec_n];
+    var j: usize = 0;
+    while j < dec_view.len {
+        if dec_view.ptr[j] != src.ptr[j] {
+            try assert_eq_i32(0, 1);
+        }
+        j = j + 1;
+    }
+}
+
+test "base64_decode_rejects_invalid_char" {
+    const src: &[byte] = &"SGVsbG8*"[0: 8];
+    var out: [byte: 16] = [];
+    const r: !usize = decode_base64(src, out[0: 16]);
+    match r {
+        error.InvalidToken => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "base64url_decode_rejects_padding" {
+    const src: &[byte] = &"eyJ4IjoxfQ=="[0: 12];
+    var out: [byte: 32] = [];
+    const r: !usize = decode_base64url(src, out[0: 32]);
+    match r {
+        error.InvalidToken => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}

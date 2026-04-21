@@ -1,0 +1,21 @@
+// 简单比较测试
+
+use std.testing.expect;
+
+test "less than" {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    try expect(a < b);
+}
+
+test "greater than" {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    try expect(b > a);
+}
+
+test "equality" {
+    const a: i32 = 10;
+    const b: i32 = 10;
+    try expect(a == b);
+}

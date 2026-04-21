@@ -1,0 +1,156 @@
+// test_asm_type_safety.uya - @asm 类型安全测试
+// 测试类型推断、寄存器约束验证
+
+// ===== 测试基础类型安全 =====
+
+// 测试类型匹配
+test "asm type match i32" {
+    var a: i32 = 10;
+    var b: i32 = 20;
+    var result: i32 = 0;
+    @asm {
+        "nop" (a, b, -> result);
+    }
+}
+
+// 测试类型匹配 i64
+test "asm type match i64" {
+    var a: i64 = 100;
+    var b: i64 = 200;
+    var result: i64 = 0;
+    @asm {
+        "nop" (a, b, -> result);
+    }
+}
+
+// 测试类型匹配 u32
+test "asm type match u32" {
+    var a: u32 = 10;
+    var b: u32 = 20;
+    var result: u32 = 0;
+    @asm {
+        "nop" (a, b, -> result);
+    }
+}
+
+// 测试类型匹配 u64
+test "asm type match u64" {
+    var a: u64 = 100;
+    var b: u64 = 200;
+    var result: u64 = 0;
+    @asm {
+        "nop" (a, b, -> result);
+    }
+}
+
+// ===== 测试类型不匹配错误 =====
+
+// 注释掉，因为应该编译失败
+// test "asm type mismatch i32 i64" {
+//     var a: i32 = 10;
+//     var result: i64 = 0;
+//     @asm {
+//         "mov {res}, {val}" (a, -> result);  // 应该错误：类型不匹配
+//     }
+// }
+
+// ===== 测试寄存器约束 =====
+
+// 测试自动寄存器分配
+test "asm auto register allocation" {
+    var a: i32 = 10;
+    var b: i32 = 20;
+    var c: i32 = 30;
+    var result: i32 = 0;
+    @asm {
+        "nop" (a, b, c, -> result);
+    }
+}
+
+// 测试多个输出
+test "asm multiple outputs auto" {
+    var a: i32 = 0;
+    var b: i32 = 0;
+    var c: i32 = 0;
+    @asm {
+        "nop" (-> a, b, c);
+    }
+}
+
+// ===== 测试边界情况 =====
+
+// 测试最大输入数量（根据设计是8个）
+test "asm max inputs" {
+    var a1: i32 = 1;
+    var a2: i32 = 2;
+    var a3: i32 = 3;
+    var a4: i32 = 4;
+    var a5: i32 = 5;
+    var a6: i32 = 6;
+    var a7: i32 = 7;
+    var a8: i32 = 8;
+    var result: i32 = 0;
+    @asm {
+        "nop" (a1, a2, a3, a4, a5, a6, a7, a8, -> result);
+    }
+}
+
+// 测试最大输出数量（根据设计是4个）
+test "asm max outputs" {
+    var r1: i32 = 0;
+    var r2: i32 = 0;
+    var r3: i32 = 0;
+    var r4: i32 = 0;
+    @asm {
+        "nop" (-> r1, r2, r3, r4);
+    }
+}
+
+// 测试空输入
+test "asm no inputs" {
+    var result: i32 = 0;
+    @asm {
+        "nop" (-> result);
+    }
+}
+
+// 测试空输出
+test "asm no outputs" {
+    var x: i32 = 42;
+    @asm {
+        "nop" (x);
+    }
+}
+
+// ===== 测试指针类型 =====
+
+// 测试指针输入
+test "asm pointer input" {
+    var arr: [i32: 4] = [1, 2, 3, 4];
+    var ptr: &i32 = &arr[0];
+    var result: i32 = 0;
+    @asm {
+        "nop" (ptr, -> result);
+    }
+}
+
+// 测试 const 指针输入
+test "asm const pointer input" {
+    var arr: [i32: 4] = [1, 2, 3, 4];
+    var ptr: &const i32 = &arr[0];
+    var result: i32 = 0;
+    @asm {
+        "nop" (ptr, -> result);
+    }
+}
+
+// ===== 测试布尔类型 =====
+
+// 测试布尔类型（作为整数）
+test "asm bool as integer" {
+    var flag: bool = true;
+    var result: i32 = 0;
+    @asm {
+        "nop" (flag as i32, -> result);
+    }
+}

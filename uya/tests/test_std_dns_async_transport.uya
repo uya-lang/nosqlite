@@ -1,0 +1,421 @@
+// test_std_dns_async_transport.uya - async DNS transport / TCP fallback 回归
+
+use std.net.dns;
+use std.async;
+use std.async_scheduler.block_on_with_event_loop;
+use std.async_event.linux_epoll_create;
+use std.async_event.LinuxEpoll;
+use std.http.server.fill_sockaddr_loopback_16;
+use std.http.server.read_port_from_sockaddr_16;
+use std.testing.assert_eq_i32;
+use libc.syscall;
+
+fn sys_recvfrom_raw(sockfd: i32, buf: &byte, len: usize, flags: i32, addr: &byte, addrlen: &u32) !isize {
+    return @syscall(SYS_recvfrom, sockfd as i64, buf as i64, len as i64, flags as i64, addr as i64, addrlen as i64) as! isize;
+}
+
+fn sys_sendto_raw(sockfd: i32, buf: &const byte, len: usize, flags: i32, addr: &const byte, addrlen: u32) !isize {
+    return @syscall(SYS_sendto, sockfd as i64, buf as i64, len as i64, flags as i64, addr as i64, addrlen as i64) as! isize;
+}
+
+fn write_stderr_msg(msg: &[byte]) void {
+    _ = sys_write(2, msg.ptr, msg.len) catch {};
+}
+
+fn write_u32_stderr(v: u32) void {
+    var buf: [byte: 16] = [0:16];
+    var pos: usize = 0;
+    if v == 0 {
+        buf[0] = 48;
+        _ = sys_write(2, &buf[0], 1) catch {};
+        return;
+    }
+    var tmp: [byte: 16] = [0:16];
+    var n: u32 = v;
+    while n > 0 && pos < 16 {
+        tmp[pos] = (((n % 10u32) + 48u32) as! byte).value;
+        n = n / 10u32;
+        pos = pos + 1;
+    }
+    var i: usize = 0;
+    while i < pos {
+        buf[i] = tmp[pos - 1 - i];
+        i = i + 1;
+    }
+    _ = sys_write(2, &buf[0], pos) catch {};
+}
+
+fn dns_read_exact(fd: i32, buf: &byte, want: usize) !void {
+    var total: usize = 0;
+    while total < want {
+        const n: isize = try sys_recv(fd, &buf[total], want - total, 0);
+        if n <= 0 {
+            return error.ConnectionClosed;
+        }
+        total = total + (n as usize);
+    }
+}
+
+fn dns_write_all(fd: i32, buf: &const byte, len: usize) !void {
+    var total: usize = 0;
+    while total < len {
+        const n: isize = try sys_send(fd, &buf[total], len - total, 0);
+        if n <= 0 {
+            return error.ConnectionClosed;
+        }
+        total = total + (n as usize);
+    }
+}
+
+fn dns_listen_loopback_udp_tcp_pair(port_out: &u16, udp_fd_out: &i32, tcp_fd_out: &i32) !void {
+    const tcp_fd: i32 = try sys_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    var one: i32 = 1;
+    _ = sys_setsockopt(tcp_fd, SOL_SOCKET, SO_REUSEADDR, &one as &void, 4 as u32) catch {};
+    var tcp_addr: [byte: 16] = [0:16];
+    fill_sockaddr_loopback_16(0, &tcp_addr[0] as &byte);
+    _ = try sys_bind(tcp_fd, &tcp_addr[0] as &void, 16 as u32);
+    _ = try sys_listen(tcp_fd, 4);
+
+    var bound: [byte: 16] = [0:16];
+    var bound_len: u32 = 16;
+    _ = try sys_getsockname(tcp_fd, &bound[0] as &void, &bound_len);
+    const port: u16 = read_port_from_sockaddr_16(&bound[0] as &byte);
+
+    const udp_fd: i32 = try sys_socket(AF_INET, SOCK_DGRAM, 0);
+    var udp_addr: [byte: 16] = [0:16];
+    fill_sockaddr_loopback_16(port, &udp_addr[0] as &byte);
+    _ = try sys_bind(udp_fd, &udp_addr[0] as &void, 16 as u32);
+
+    port_out[0] = port;
+    udp_fd_out[0] = udp_fd;
+    tcp_fd_out[0] = tcp_fd;
+}
+
+fn dns_serve_single_truncated_then_tcp_a(udp_fd: i32, tcp_fd: i32) !void {
+    var query: [byte: 512] = [0:512];
+    var peer_addr: [byte: 16] = [0:16];
+    var peer_len: u32 = 16;
+    const udp_n: isize = try sys_recvfrom_raw(udp_fd, &query[0], 512, 0, &peer_addr[0], &peer_len);
+    if udp_n <= 0 {
+        return error.ConnectionClosed;
+    }
+
+    var udp_resp: [byte: 12] = [0x12, 0x34, 0x83, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+    udp_resp[0] = query[0];
+    udp_resp[1] = query[1];
+    _ = try sys_sendto_raw(udp_fd, &udp_resp[0], 12, 0, &peer_addr[0], peer_len);
+
+    var client_addr: [byte: 16] = [0:16];
+    var client_len: u32 = 16;
+    const cfd: i32 = try sys_accept(tcp_fd, &client_addr[0] as &void, &client_len);
+
+    var lenbuf: [byte: 2] = [0:2];
+    try dns_read_exact(cfd, &lenbuf[0], 2);
+    const body_len: usize = (((lenbuf[0] as usize) << 8) | (lenbuf[1] as usize));
+    if body_len > 0 {
+        var req: [byte: 512] = [0:512];
+        try dns_read_exact(cfd, &req[0], body_len);
+    }
+
+    var body: [byte: 45] = [
+        0x12, 0x34, 0x81, 0x00, 0, 1, 0, 1, 0, 0, 0, 0,
+        7, 101, 120, 97, 109, 112, 108, 101,
+        3, 99, 111, 109, 0,
+        0, 1, 0, 1,
+        0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 5, 6, 7, 8,
+    ];
+    body[0] = query[0];
+    body[1] = query[1];
+
+    var framed: [byte: 47] = [0:47];
+    framed[0] = 0;
+    framed[1] = 45;
+    var i: usize = 0;
+    while i < 45 {
+        framed[2 + i] = body[i];
+        i = i + 1;
+    }
+    try dns_write_all(cfd, &framed[0], 47);
+    _ = sys_close(cfd) catch {};
+}
+
+fn dns_serve_single_udp_aaaa(udp_fd: i32) !void {
+    var query: [byte: 512] = [0:512];
+    var peer_addr: [byte: 16] = [0:16];
+    var peer_len: u32 = 16;
+    const udp_n: isize = try sys_recvfrom_raw(udp_fd, &query[0], 512, 0, &peer_addr[0], &peer_len);
+    if udp_n <= 0 {
+        return error.ConnectionClosed;
+    }
+
+    var aaaa_packet: [byte: 57] = [
+        0x12, 0x34, 0x81, 0x00, 0, 1, 0, 1, 0, 0, 0, 0,
+        7, 101, 120, 97, 109, 112, 108, 101,
+        3, 99, 111, 109, 0,
+        0, 28, 0, 1,
+        0xC0, 0x0C, 0, 28, 0, 1, 0, 0, 0, 60, 0, 16,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+    ];
+    aaaa_packet[0] = query[0];
+    aaaa_packet[1] = query[1];
+    _ = try sys_sendto_raw(udp_fd, &aaaa_packet[0], 57, 0, &peer_addr[0], peer_len);
+}
+
+fn run_dns_query_all_async_prefer_ipv4_client(port: u16) void {
+    var client: DnsClient = DnsClient{ nameserver: [0:16], nameserver_len: 0, nameserver_port: 0, timeout_ms: 0, query_id: 0, prefer_family: 0 };
+    var resolver: [byte: 9] = [49, 50, 55, 46, 48, 46, 48, 46, 49];
+    dns_client_init(&client, &resolver[0: 9]);
+    client.nameserver_port = port;
+    dns_client_set_timeout_ms(&client, 1000);
+    dns_client_set_prefer_family(&client, DNS_PREFER_IPV4);
+
+    var host: [byte: 11] = [101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109];
+    var out: [byte: 4] = [0:4];
+    var out_len: usize = 0;
+
+    const loop_res: !LinuxEpoll = linux_epoll_create(0);
+    const loop: LinuxEpoll = loop_res catch {
+        sys_exit(21);
+        return;
+    };
+    const fut: Future<!usize> = dns_client_query_all_async(&client, &host[0], 11, &out[0], 4, &out_len);
+    const bo: !usize = block_on_with_event_loop<usize>(&loop, fut, 1000);
+    const n: usize = bo catch |err| {
+        if @error_id(err) == @error_id(error.DnsInvalidName) {
+            write_stderr_msg(&"child:dns:invalid-name\n"[0: 23]);
+            sys_exit(38);
+        }
+        if @error_id(err) == @error_id(error.DnsTruncatedPacket) {
+            write_stderr_msg(&"child:dns:truncated\n"[0: 20]);
+            sys_exit(31);
+        }
+        if @error_id(err) == @error_id(error.DnsNoSuchName) {
+            write_stderr_msg(&"child:dns:nxdomain\n"[0: 19]);
+            sys_exit(32);
+        }
+        if @error_id(err) == @error_id(error.DnsTimeout) {
+            write_stderr_msg(&"child:dns:timeout\n"[0: 18]);
+            sys_exit(33);
+        }
+        if @error_id(err) == @error_id(error.DnsInvalidPacket) {
+            write_stderr_msg(&"child:dns:invalid-packet\n"[0: 25]);
+            sys_exit(34);
+        }
+        if @error_id(err) == @error_id(error.DnsNetworkUnreachable) {
+            write_stderr_msg(&"child:dns:net-unreachable\n"[0: 26]);
+            sys_exit(35);
+        }
+        if @error_id(err) == @error_id(error.DnsRefused) {
+            write_stderr_msg(&"child:dns:refused\n"[0: 18]);
+            sys_exit(39);
+        }
+        if @error_id(err) == @error_id(error.DnsServerFailure) {
+            write_stderr_msg(&"child:dns:server-failure\n"[0: 25]);
+            sys_exit(40);
+        }
+        if @error_id(err) == @error_id(error.DnsNoNameserver) {
+            write_stderr_msg(&"child:dns:no-nameserver\n"[0: 24]);
+            sys_exit(41);
+        }
+        if @error_id(err) == @error_id(error.DnsWouldBlock) {
+            write_stderr_msg(&"child:dns:would-block\n"[0: 22]);
+            sys_exit(36);
+        }
+        if @error_id(err) == @error_id(error.DnsPlatformUnsupported) {
+            write_stderr_msg(&"child:dns:platform\n"[0: 19]);
+            sys_exit(42);
+        }
+        if @error_id(err) == @error_id(error.DnsUnsupported) {
+            write_stderr_msg(&"child:dns:unsupported\n"[0: 22]);
+            sys_exit(43);
+        }
+        write_stderr_msg(&"child:dns:other:"[0: 16]);
+        write_u32_stderr(@error_id(err));
+        write_stderr_msg(&"\n"[0: 1]);
+        sys_exit(37);
+        return;
+    };
+
+    if n != 4 || out_len != 4 {
+        sys_exit(23);
+    }
+    if out[0] != 5 || out[1] != 6 || out[2] != 7 || out[3] != 8 {
+        sys_exit(24);
+    }
+    sys_exit(0);
+}
+
+fn run_dns_query_all_async_prefer_any_client(port: u16) void {
+    var client: DnsClient = DnsClient{ nameserver: [0:16], nameserver_len: 0, nameserver_port: 0, timeout_ms: 0, query_id: 0, prefer_family: 0 };
+    var resolver: [byte: 9] = [49, 50, 55, 46, 48, 46, 48, 46, 49];
+    dns_client_init(&client, &resolver[0: 9]);
+    client.nameserver_port = port;
+    dns_client_set_timeout_ms(&client, 1000);
+
+    var host: [byte: 11] = [101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109];
+    var out: [byte: 20] = [0:20];
+    var out_len: usize = 0;
+
+    const loop_res: !LinuxEpoll = linux_epoll_create(0);
+    const loop: LinuxEpoll = loop_res catch {
+        sys_exit(21);
+        return;
+    };
+    const fut: Future<!usize> = dns_client_query_all_async(&client, &host[0], 11, &out[0], 20, &out_len);
+    const bo: !usize = block_on_with_event_loop<usize>(&loop, fut, 1000);
+    const n: usize = bo catch |err| {
+        if @error_id(err) == @error_id(error.DnsInvalidName) {
+            write_stderr_msg(&"child:dns:invalid-name\n"[0: 23]);
+            sys_exit(38);
+        }
+        if @error_id(err) == @error_id(error.DnsTruncatedPacket) {
+            write_stderr_msg(&"child:dns:truncated\n"[0: 20]);
+            sys_exit(31);
+        }
+        if @error_id(err) == @error_id(error.DnsNoSuchName) {
+            write_stderr_msg(&"child:dns:nxdomain\n"[0: 19]);
+            sys_exit(32);
+        }
+        if @error_id(err) == @error_id(error.DnsTimeout) {
+            write_stderr_msg(&"child:dns:timeout\n"[0: 18]);
+            sys_exit(33);
+        }
+        if @error_id(err) == @error_id(error.DnsInvalidPacket) {
+            write_stderr_msg(&"child:dns:invalid-packet\n"[0: 25]);
+            sys_exit(34);
+        }
+        if @error_id(err) == @error_id(error.DnsNetworkUnreachable) {
+            write_stderr_msg(&"child:dns:net-unreachable\n"[0: 26]);
+            sys_exit(35);
+        }
+        if @error_id(err) == @error_id(error.DnsRefused) {
+            write_stderr_msg(&"child:dns:refused\n"[0: 18]);
+            sys_exit(39);
+        }
+        if @error_id(err) == @error_id(error.DnsServerFailure) {
+            write_stderr_msg(&"child:dns:server-failure\n"[0: 25]);
+            sys_exit(40);
+        }
+        if @error_id(err) == @error_id(error.DnsNoNameserver) {
+            write_stderr_msg(&"child:dns:no-nameserver\n"[0: 24]);
+            sys_exit(41);
+        }
+        if @error_id(err) == @error_id(error.DnsWouldBlock) {
+            write_stderr_msg(&"child:dns:would-block\n"[0: 22]);
+            sys_exit(36);
+        }
+        if @error_id(err) == @error_id(error.DnsPlatformUnsupported) {
+            write_stderr_msg(&"child:dns:platform\n"[0: 19]);
+            sys_exit(42);
+        }
+        if @error_id(err) == @error_id(error.DnsUnsupported) {
+            write_stderr_msg(&"child:dns:unsupported\n"[0: 22]);
+            sys_exit(43);
+        }
+        write_stderr_msg(&"child:dns:other:"[0: 16]);
+        write_u32_stderr(@error_id(err));
+        write_stderr_msg(&"\n"[0: 1]);
+        sys_exit(37);
+        return;
+    };
+
+    if n != 20 || out_len != 20 {
+        sys_exit(23);
+    }
+    if out[0] != 5 || out[1] != 6 || out[2] != 7 || out[3] != 8 {
+        sys_exit(24);
+    }
+    var i: usize = 0;
+    while i < 15 {
+        if out[4 + i] != 0 {
+            sys_exit(25);
+        }
+        i = i + 1;
+    }
+    if out[19] != 1 {
+        sys_exit(26);
+    }
+    sys_exit(0);
+}
+
+fn wait_child_exit_ok(pid: i32) !void {
+    var st: i32 = 0;
+    _ = try sys_waitpid(pid, &st, 0);
+    try assert_eq_i32((st & 0xff) as i32, 0);
+    try assert_eq_i32(((st >> 8) & 0xff) as i32, 0);
+}
+
+test "dns_query_all_async_prefer_ipv4_tcp_fallback" {
+    var port: u16 = 0;
+    var udp_fd: i32 = -1;
+    var tcp_fd: i32 = -1;
+    dns_listen_loopback_udp_tcp_pair(&port, &udp_fd, &tcp_fd) catch {
+        try assert_eq_i32(0, 1);
+        return;
+    };
+
+    const child_pid: i32 = fork();
+    if child_pid == 0 {
+        _ = sys_close(udp_fd) catch {};
+        _ = sys_close(tcp_fd) catch {};
+        run_dns_query_all_async_prefer_ipv4_client(port);
+    }
+    if child_pid <= 0 {
+        _ = sys_close(udp_fd) catch {};
+        _ = sys_close(tcp_fd) catch {};
+        try assert_eq_i32(0, 1);
+        return;
+    }
+
+    dns_serve_single_truncated_then_tcp_a(udp_fd, tcp_fd) catch {
+        _ = sys_close(udp_fd) catch {};
+        _ = sys_close(tcp_fd) catch {};
+        try assert_eq_i32(0, 1);
+        return;
+    };
+
+    _ = sys_close(udp_fd) catch {};
+    _ = sys_close(tcp_fd) catch {};
+    try wait_child_exit_ok(child_pid);
+}
+
+test "dns_query_all_async_any_tcp_fallback_and_aaaa" {
+    var port: u16 = 0;
+    var udp_fd: i32 = -1;
+    var tcp_fd: i32 = -1;
+    dns_listen_loopback_udp_tcp_pair(&port, &udp_fd, &tcp_fd) catch {
+        try assert_eq_i32(0, 1);
+        return;
+    };
+
+    const child_pid: i32 = fork();
+    if child_pid == 0 {
+        _ = sys_close(udp_fd) catch {};
+        _ = sys_close(tcp_fd) catch {};
+        run_dns_query_all_async_prefer_any_client(port);
+    }
+    if child_pid <= 0 {
+        _ = sys_close(udp_fd) catch {};
+        _ = sys_close(tcp_fd) catch {};
+        try assert_eq_i32(0, 1);
+        return;
+    }
+
+    dns_serve_single_truncated_then_tcp_a(udp_fd, tcp_fd) catch {
+        _ = sys_close(udp_fd) catch {};
+        _ = sys_close(tcp_fd) catch {};
+        try assert_eq_i32(0, 1);
+        return;
+    };
+
+    dns_serve_single_udp_aaaa(udp_fd) catch {
+        _ = sys_close(udp_fd) catch {};
+        _ = sys_close(tcp_fd) catch {};
+        try assert_eq_i32(0, 1);
+        return;
+    };
+
+    _ = sys_close(udp_fd) catch {};
+    _ = sys_close(tcp_fd) catch {};
+    try wait_child_exit_ok(child_pid);
+}

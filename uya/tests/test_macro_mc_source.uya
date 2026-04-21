@@ -1,0 +1,32 @@
+// 测试 @mc_source(expr) 编译期将表达式序列化为字符串
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_true;
+
+extern "libc" fn strcmp(s1: *i8, s2: *i8) i32;
+
+mc to_string(e: expr) expr {
+    @mc_source(e);
+}
+
+test "mc_source_simple_expr" {
+    const s: *i8 = to_string(1 + 2);
+    try assert_true(strcmp(s, "1 + 2" as *i8) == 0);
+}
+
+test "mc_source_identifier" {
+    var foo: i32 = 0;
+    const s: *i8 = to_string(foo);
+    try assert_true(strcmp(s, "foo" as *i8) == 0);
+}
+
+test "mc_source_compare" {
+    var x: i32 = 10;
+    const s: *i8 = to_string(x > 0);
+    try assert_true(strcmp(s, "x > 0" as *i8) == 0);
+}
+
+test "mc_source_number" {
+    const s: *i8 = to_string(42);
+    try assert_true(strcmp(s, "42" as *i8) == 0);
+}

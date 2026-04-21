@@ -1,0 +1,58 @@
+// test_path_for.uya - 测试 for 循环的路径敏感分析
+use std.runtime.entry;
+// 
+// 功能：验证 for 循环中的约束能够传播到循环体内，
+//       编译器能够证明数组访问安全。
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_for_range_bounds() !void {
+    var arr: [i32: 10] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    
+    // 测试：for 范围循环，i 在 0..10 范围内
+    // 范围 0..10 保证了 i >= 0 && i < 10
+    for 0..10 |i| {
+        arr[i] = i * 3;
+    }
+    
+    try assert_eq_i32(arr[0], 0);
+    try assert_eq_i32(arr[3], 9);
+    try assert_eq_i32(arr[9], 27);
+}
+
+fn test_for_ref_bounds() !void {
+    var arr: [i32: 5] = [10, 20, 30, 40, 50];
+    var sum: i32 = 0;
+    
+    // 测试：for ref 循环
+    for arr |&item| {
+        sum = sum + *item;
+    }
+    
+    try assert_eq_i32(sum, 150);
+}
+
+fn test_nested_for_bounds() !void {
+    var matrix: [[i32: 3]: 2] = [[1, 2, 3], [4, 5, 6]];
+    var total: i32 = 0;
+    
+    // 测试：嵌套 for 循环
+    for 0..2 |i| {
+        for 0..3 |j| {
+            total = total + matrix[i][j];
+        }
+    }
+    
+    try assert_eq_i32(total, 21);
+}
+
+export fn main() i32 {
+    test_suite_begin("Path Sensitive For Tests");
+    run_test("for range bounds", test_for_range_bounds);
+    run_test("for ref bounds", test_for_ref_bounds);
+    run_test("nested for bounds", test_nested_for_bounds);
+    return test_suite_end();
+}

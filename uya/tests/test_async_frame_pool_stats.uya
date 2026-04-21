@@ -1,0 +1,56 @@
+// test_async_frame_pool_stats.uya
+// 验证 AsyncFramePool 的统计字段在分配、释放、pool 满 fallback 时正确更新
+
+use std.async_frame.AsyncFramePool;
+use std.async_frame.async_frame_pool_init;
+use std.async_frame.async_frame_pool_alloc_aligned;
+use std.async_frame.async_frame_pool_free_aligned;
+use std.async_frame.async_frame_pool_stats;
+use std.testing.expect;
+use std.testing.run_test;
+use std.async;
+
+@async_fn
+fn dummy_async() Future<!i32> {
+    return 1;
+}
+
+fn test_pool_stats() void {
+    // 强制生成 async frame descriptor 表
+    const _f: Future<!i32> = dummy_async();
+    _ = _f;
+
+    var pool: AsyncFramePool = AsyncFramePool{};
+    // 开启 debug heap fallback，便于验证 fallback 计数
+    async_frame_pool_init(&pool, 1, 65536);
+
+    const alloc_count: i32 = 4096 + 3;  // 超过单桶容量 4096
+
+    var i: i32 = 0;
+    while i < alloc_count {
+        const ptr: &byte = async_frame_pool_alloc_aligned(&pool, 64, 8);
+        if ptr == null {
+            break;
+        }
+        // 立即释放，避免数组存储带来的证明负担
+        async_frame_pool_free_aligned(&pool, ptr, 64, 8);
+        i = i + 1;
+    }
+
+    var total_alloc: i32 = 0;
+    var total_free: i32 = 0;
+    var full_count: i32 = 0;
+    var heap_fallback: i32 = 0;
+    async_frame_pool_stats(&pool, &total_alloc, &total_free, &full_count, &heap_fallback);
+
+    // 至少应该成功分配了 4096 次（单桶容量）
+    expect(total_alloc >= 4096);
+    // 因为开启了 debug_heap_fallback，超出的分配应该触发 fallback
+    expect(heap_fallback >= 1);
+    // 释放次数应该等于分配次数（立即释放路径）
+    expect(total_free == total_alloc);
+}
+
+test "async_frame_pool_stats" {
+    run_test("async_frame_pool_stats", test_pool_stats);
+}

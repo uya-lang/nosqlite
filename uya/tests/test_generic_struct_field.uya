@@ -1,0 +1,25 @@
+// 测试泛型结构体字段访问
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Pair<K, V> {
+    key: K,
+    value: V
+}
+
+fn test_struct_field_access() !void {
+    const p: Pair<i32, i64> = Pair<i32, i64>{ key: 42, value: 100 };
+    try assert_eq_i32(p.key, 42);
+    try expect(p.value == 100);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Struct Field Tests");
+    run_test("struct field access", test_struct_field_access);
+    return test_suite_end();
+}

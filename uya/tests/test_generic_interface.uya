@@ -1,0 +1,57 @@
+// 测试泛型接口声明和泛型函数使用接口约束
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+interface Comparable<T> {
+    fn compare(self: &Self, other: &T) i32;
+}
+
+fn max_comparable<T: Ord>(a: T, b: T) T {
+    if a > b {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+struct Pair<T> {
+    first: T,
+    second: T,
+}
+
+fn get_max_from_pair<T: Ord>(p: &Pair<T>) T {
+    if p.first > p.second {
+        return p.first;
+    } else {
+        return p.second;
+    }
+}
+
+fn test_max_comparable() !void {
+    const result1: i32 = max_comparable<i32>(10, 20);
+    try assert_eq_i32(result1, 20);
+}
+
+fn test_generic_struct_fn() !void {
+    const p: Pair<i32> = Pair<i32>{ first: 100, second: 50 };
+    const result2: i32 = get_max_from_pair<i32>(&p);
+    try assert_eq_i32(result2, 100);
+}
+
+fn test_type_inference() !void {
+    const result3: i32 = max_comparable(5, 3);
+    try assert_eq_i32(result3, 5);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Interface Tests");
+    run_test("max comparable", test_max_comparable);
+    run_test("generic struct fn", test_generic_struct_fn);
+    run_test("type inference", test_type_inference);
+    return test_suite_end();
+}

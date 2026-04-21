@@ -1,0 +1,14 @@
+use std.testing.assert_eq_i32;
+
+fn dead_tuple_expr_helper() i32 {
+    return 7;
+}
+
+fn live_tuple_expr_helper() i32 {
+    return 1;
+}
+
+test "function reachability keeps tuple literal callees" {
+    const pair: (i32, i32) = (live_tuple_expr_helper(), 0);
+    try assert_eq_i32(pair.0, 1);
+}

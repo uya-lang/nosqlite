@@ -1,0 +1,102 @@
+// 测试宏：多次调用同一个宏
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 定义一个返回固定值的宏
+mc get_value() expr {
+    @mc_code(@mc_ast(42));
+}
+
+// 在同一个表达式中多次调用
+fn test_same_expr() !void {
+    const result: i32 = get_value() + get_value() + get_value();
+    try assert_eq_i32(result, 126);  // 42 + 42 + 42 = 126
+}
+
+// 在同一个函数中多次调用
+fn test_same_function() !void {
+    const a: i32 = get_value();
+    const b: i32 = get_value();
+    const c: i32 = get_value();
+    const d: i32 = get_value();
+    const e: i32 = get_value();
+    
+    try assert_eq_i32(a, 42);
+    try assert_eq_i32(b, 42);
+    try assert_eq_i32(c, 42);
+    try assert_eq_i32(d, 42);
+    try assert_eq_i32(e, 42);
+}
+
+// 在不同函数中调用
+fn helper1() i32 {
+    return get_value();
+}
+
+fn helper2() i32 {
+    return get_value() * 2;
+}
+
+fn helper3() i32 {
+    return get_value() + get_value();
+}
+
+fn test_different_functions() !void {
+    try assert_eq_i32(helper1(), 42);
+    try assert_eq_i32(helper2(), 84);
+    try assert_eq_i32(helper3(), 84);
+}
+
+// 在循环中多次调用
+fn test_loop_calls() !void {
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    while i < 5 {
+        sum = sum + get_value();
+        i = i + 1;
+    }
+    try assert_eq_i32(sum, 210);  // 42 * 5 = 210
+}
+
+// 在条件分支中调用
+fn test_branch_calls() !void {
+    const x: i32 = get_value();
+    var result: i32 = 0;
+    
+    if x > 40 {
+        result = get_value();
+    } else {
+        result = 0;
+    }
+    
+    try assert_eq_i32(result, 42);
+}
+
+// 在嵌套结构中调用
+fn test_nested_calls() !void {
+    var i: i32 = 0;
+    while i < 3 {
+        var j: i32 = 0;
+        while j < 2 {
+            const val: i32 = get_value();
+            try assert_eq_i32(val, 42);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+}
+
+export fn main() i32 {
+    test_suite_begin("Macro Multiple Calls Tests");
+    run_test("same expr", test_same_expr);
+    run_test("same function", test_same_function);
+    run_test("different functions", test_different_functions);
+    run_test("loop calls", test_loop_calls);
+    run_test("branch calls", test_branch_calls);
+    run_test("nested calls", test_nested_calls);
+    return test_suite_end();
+}

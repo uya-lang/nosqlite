@@ -1,0 +1,26 @@
+// 结构体测试
+use std.runtime.entry;
+// 测试结构体定义、实例化和字段访问
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn test_struct_init() !void {
+    const p: Point = Point{ x: 10, y: 20 };
+    
+    try assert_eq_i32(p.x, 10);
+    try assert_eq_i32(p.y, 20);
+}
+
+export fn main() i32 {
+    test_suite_begin("Struct Tests");
+    run_test("struct init", test_struct_init);
+    return test_suite_end();
+}

@@ -1,0 +1,98 @@
+// 测试 std.json to_json / 往返：to_json(arena, obj) 内联编码，解码用手写 user_from_json
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.value.JsonStrView;
+use std.json.parser.parse;
+use std.json.encoder.to_json;
+use std.json.encoder.json_object_find_index;
+use std.json.encoder.json_expect_i64;
+use std.json.encoder.json_expect_str;
+use std.json.errors;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+struct User {
+    id: i64,
+    name: JsonStrView,
+}
+
+fn user_from_json(arena: &Arena, v: &JsonValue) !User {
+    match v[0] {
+        .obj(o) => {
+            var id_key: [byte: 2] = [];
+            id_key[0] = 105;
+            id_key[1] = 100;
+            var name_key: [byte: 4] = [];
+            name_key[0] = 110;
+            name_key[1] = 97;
+            name_key[2] = 109;
+            name_key[3] = 101;
+            const id_idx: usize = try json_object_find_index(&o, &id_key[0], 2);
+            const id_val: i64 = try json_expect_i64(&o.pairs[id_idx].value);
+            const name_idx: usize = try json_object_find_index(&o, &name_key[0], 4);
+            const name_val: JsonStrView = try json_expect_str(&o.pairs[name_idx].value);
+            return User{ id: id_val, name: name_val };
+        },
+        else => { return error.NotAnObject; },
+    }
+}
+
+export fn main() i32 {
+    // 两次 to_json 各需 ENCODE_ARENA_MAX(64K)，parse 等也占 arena，故用 256K
+    var arena_buf: [byte: 262144] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 262144);
+    var name_buf: [byte: 4] = [];
+    name_buf[0] = 97;
+    name_buf[1] = 98;
+    name_buf[2] = 99;
+    const u: User = User{ id: 42, name: JsonStrView{ ptr: &name_buf[0], len: 3 } };
+    const slice: &[byte] = to_json<User>(&a, u) catch { return 1; };
+    if slice.len != 22 { return 2; }
+    if slice.ptr[0] != 123 || slice.ptr[1] != 34 || slice.ptr[2] != 105 || slice.ptr[3] != 100 || slice.ptr[4] != 34 { return 3; }
+    if slice.ptr[5] != 58 || slice.ptr[6] != 52 || slice.ptr[7] != 50 { return 4; }
+    if slice.ptr[8] != 44 || slice.ptr[9] != 34 || slice.ptr[10] != 110 || slice.ptr[11] != 97 || slice.ptr[12] != 109 || slice.ptr[13] != 101 || slice.ptr[14] != 34 { return 5; }
+    if slice.ptr[15] != 58 || slice.ptr[16] != 34 || slice.ptr[17] != 97 || slice.ptr[18] != 98 || slice.ptr[19] != 99 || slice.ptr[20] != 34 || slice.ptr[21] != 125 { return 6; }
+
+    const parsed: JsonValue = parse(&a, slice.ptr, slice.len) catch { return 7; };
+    match parsed {
+        .obj(obj) => {
+            if obj.len != 2 { return 8; }
+            if obj.pairs == null { return 9; }
+            if obj.pairs[0].key.len != 2 || obj.pairs[0].key.ptr[0] != 105 || obj.pairs[0].key.ptr[1] != 100 { return 10; }
+            match obj.pairs[0].value {
+                .int_val(x) => { if x != 42 { return 11; } },
+                else => { return 12; },
+            }
+            if obj.pairs[1].key.len != 4 || obj.pairs[1].key.ptr[0] != 110 || obj.pairs[1].key.ptr[1] != 97 || obj.pairs[1].key.ptr[2] != 109 || obj.pairs[1].key.ptr[3] != 101 { return 13; }
+            match obj.pairs[1].value {
+                .str(s) => { if s.len != 3 || s.ptr[0] != 97 || s.ptr[1] != 98 || s.ptr[2] != 99 { return 14; } },
+                else => { return 15; },
+            }
+        },
+        else => { return 16; },
+    }
+
+    const parsed2: JsonValue = parse(&a, slice.ptr, slice.len) catch { return 17; };
+    const u2: User = user_from_json(&a, &parsed2) catch { return 18; };
+    if u2.id != 42 { return 19; }
+    if u2.name.len != 3 || u2.name.ptr[0] != 97 || u2.name.ptr[1] != 98 || u2.name.ptr[2] != 99 { return 20; }
+    const slice2: &[byte] = to_json<User>(&a, u2) catch { return 21; };
+    if slice2.len != 22 { return 22; }
+    const parsed3: JsonValue = parse(&a, slice2.ptr, slice2.len) catch { return 23; };
+    match parsed3 {
+        .obj(obj3) => {
+            if obj3.len != 2 { return 24; }
+            match obj3.pairs[0].value {
+                .int_val(x) => { if x != 42 { return 25; } },
+                else => { return 26; },
+            }
+            match obj3.pairs[1].value {
+                .str(s) => { if s.len != 3 || s.ptr[0] != 97 || s.ptr[1] != 98 || s.ptr[2] != 99 { return 27; } },
+                else => { return 28; },
+            }
+        },
+        else => { return 29; },
+    }
+    return 0;
+}

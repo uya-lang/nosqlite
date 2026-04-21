@@ -1,0 +1,11 @@
+// 测试泛型函数调用（非方法）
+use std.runtime.entry;
+
+fn identity<T>(x: T) T {
+    return x;
+}
+
+export fn main() i32 {
+    const v: i32 = identity<i32>(42);
+    return 0;
+}

@@ -1,0 +1,12 @@
+// 测试函数调用和返回值
+
+use std.testing.expect;
+
+fn get_true() bool {
+    return true;
+}
+
+test "func return" {
+    const b: bool = get_true();
+    try expect(b);
+}

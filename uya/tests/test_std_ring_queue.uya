@@ -1,0 +1,51 @@
+use std.collections.ring_queue.RingQueue;
+use std.collections.ring_queue.ring_queue_new;
+use std.mem.allocator.g_allocator;
+use std.testing.assert_eq_i32;
+
+const RING_SIZE: i32 = 4;
+
+fn push_failed(q: &RingQueue<i32>, value: i32) bool {
+    _ = q.push(value) catch {
+        return true;
+    };
+    return false;
+}
+
+test "ring_queue_runtime_capacity_wraparound" {
+    var q: RingQueue<i32> = ring_queue_new<i32>(g_allocator, RING_SIZE);
+
+    try assert_eq_i32(q.capacity(), RING_SIZE);
+    try assert_eq_i32(q.len(), 0);
+
+    _ = try q.push(1);
+    _ = try q.push(2);
+    _ = try q.push(3);
+    _ = try q.push(4);
+    try assert_eq_i32(q.len(), 4);
+
+    var full_failed: i32 = 0;
+    if push_failed(&q, 5) {
+        full_failed = 1;
+    }
+    try assert_eq_i32(full_failed, 1);
+
+    const first: i32 = try q.pop();
+    const second: i32 = try q.pop();
+    try assert_eq_i32(first, 1);
+    try assert_eq_i32(second, 2);
+
+    _ = try q.push(5);
+    _ = try q.push(6);
+    try assert_eq_i32(q.len(), 4);
+
+    const third: i32 = try q.pop();
+    const fourth: i32 = try q.pop();
+    const fifth: i32 = try q.pop();
+    const sixth: i32 = try q.pop();
+    try assert_eq_i32(third, 3);
+    try assert_eq_i32(fourth, 4);
+    try assert_eq_i32(fifth, 5);
+    try assert_eq_i32(sixth, 6);
+    try assert_eq_i32(q.len(), 0);
+}

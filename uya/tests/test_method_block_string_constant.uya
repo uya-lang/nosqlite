@@ -1,0 +1,25 @@
+// 测试方法块中的字符串常量收集
+// 使用 exit(0) 在 drop 中验证字符串能正确输出
+
+extern fn exit(code: i32) void;
+
+struct TestResource {
+    id: i32
+}
+
+TestResource {
+    fn drop(self: TestResource) void {
+        // 方法块中的 @println - 如果字符串常量没被收集，这会输出空字符串
+        @println("STRING_IN_METHOD_BLOCK_OK");
+        // 如果能执行到这里，说明字符串常量被正确收集
+        exit(0);
+    }
+}
+
+export fn main() i32 {
+    const res: TestResource = TestResource { id: 1 };
+    // drop 应该在这里被调用
+    // 如果 drop 调用 exit(0)，程序以 0 退出
+    // 如果 drop 没被调用，程序返回 1
+    return 1;
+}

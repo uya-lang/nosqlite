@@ -1,0 +1,43 @@
+// 测试忽略标识符 _：显式忽略返回值、解构忽略
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn side_effect() i32 {
+    return 42;
+}
+
+fn test_ignore_return() !void {
+    _ = side_effect();
+    try expect(true);
+}
+
+fn test_destructure_ignore() !void {
+    const (a, _, c) = (10, 20, 30);
+    try assert_eq_i32(a, 10);
+    try assert_eq_i32(c, 30);
+}
+
+fn test_destructure_normal() !void {
+    const (x, y) = (1, 2);
+    try assert_eq_i32(x, 1);
+    try assert_eq_i32(y, 2);
+}
+
+fn test_destructure_ignore_last() !void {
+    const (m, _) = (7, 8);
+    try assert_eq_i32(m, 7);
+}
+
+export fn main() i32 {
+    test_suite_begin("Underscore Tests");
+    run_test("ignore return", test_ignore_return);
+    run_test("destructure ignore", test_destructure_ignore);
+    run_test("destructure normal", test_destructure_normal);
+    run_test("destructure ignore last", test_destructure_ignore_last);
+    return test_suite_end();
+}

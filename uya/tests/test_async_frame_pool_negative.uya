@@ -1,0 +1,24 @@
+// test_async_frame_pool_negative.uya
+// 验证 AsyncFramePool 对无效 frame_id 的负例处理
+
+use std.async;
+use std.async_frame.AsyncFramePool;
+use std.async_frame.async_frame_pool_init;
+use std.async_frame.async_frame_pool_alloc;
+use std.testing.expect;
+
+fn check_invalid_frame_id_returns_null() i32 {
+    var pool: AsyncFramePool = AsyncFramePool{};
+    async_frame_pool_init(&pool, 0, 65536);
+    // frame_id 999 超出默认 descriptor 表范围（512），应返回 null
+    const ptr: &byte = async_frame_pool_alloc(&pool, 999);
+    if ptr != null {
+        return 0 - 1;
+    }
+    return 1;
+}
+
+test "async_frame_pool_invalid_frame_id" {
+    const r: i32 = check_invalid_frame_id_returns_null();
+    expect(r == 1);
+}

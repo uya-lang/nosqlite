@@ -1,0 +1,39 @@
+// 测试泛型函数类型推断
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn max<T: Ord>(a: T, b: T) T {
+    if a > b {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+fn test_inference_i32() !void {
+    const result1: i32 = max(10, 20);
+    try assert_eq_i32(result1, 20);
+}
+
+fn test_inference_f64() !void {
+    const result2: f64 = max(3.14, 2.71);
+    try expect(result2 == 3.14);
+}
+
+fn test_explicit_type() !void {
+    const result3: i32 = max<i32>(100, 200);
+    try assert_eq_i32(result3, 200);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Inference Tests");
+    run_test("inference i32", test_inference_i32);
+    run_test("inference f64", test_inference_f64);
+    run_test("explicit type", test_explicit_type);
+    return test_suite_end();
+}

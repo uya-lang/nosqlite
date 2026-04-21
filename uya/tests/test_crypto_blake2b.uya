@@ -1,0 +1,87 @@
+// test_crypto_blake2b.uya — BLAKE2b RFC 7693 / Python hashlib 向量
+
+use std.crypto.blake2b;
+use std.testing.assert_eq_i32;
+
+fn hex_eq(digest: &[byte], expect_ascii: &[byte]) bool {
+    const hex: &[byte] = &"0123456789abcdef"[0: 16];
+    if expect_ascii.len != digest.len * 2 {
+        return false;
+    }
+    var i: usize = 0;
+    while i < digest.len {
+        const hi: usize = (digest.ptr[i] >> 4) as usize;
+        const lo: usize = (digest.ptr[i] & 15) as usize;
+        if expect_ascii.ptr[i * 2] != hex.ptr[hi] {
+            return false;
+        }
+        if expect_ascii.ptr[i * 2 + 1] != hex.ptr[lo] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+test "blake2b_empty" {
+    var z: [byte: 4] = [];
+    const empty: &[byte] = z[0: 0];
+    var d: [byte: 64] = [];
+    blake2b_digest(empty, d[0: 64]);
+    const exp: &[byte] = &"786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce"[0: 128];
+    if !hex_eq(d[0: 64], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "blake2b_abc" {
+    var d: [byte: 64] = [];
+    const data: &[byte] = &"abc"[0: 3];
+    blake2b_digest(data, d[0: 64]);
+    const exp: &[byte] = &"ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923"[0: 128];
+    if !hex_eq(d[0: 64], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "blake2b_quick_brown_fox" {
+    var d: [byte: 64] = [];
+    const data: &[byte] = &"The quick brown fox jumps over the lazy dog"[0: 43];
+    blake2b_digest(data, d[0: 64]);
+    const exp: &[byte] = &"a8add4bdddfd93e4877d2746e62817b116364a1fa7bc148d95090bc7333b3673f82401cf7aa2e4cb1ecd90296e3f14cb5413f8ed77be73045b13914cdcd6a918"[0: 128];
+    if !hex_eq(d[0: 64], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "blake2b_multi_block" {
+    var data: [byte: 200] = [];
+    var i: usize = 0;
+    while i < 200 {
+        data[i] = 'a' as byte;
+        i = i + 1;
+    }
+    var d: [byte: 64] = [];
+    blake2b_digest(data[0: 200], d[0: 64]);
+    const exp: &[byte] = &"932355851d75f09c18646a9da87c25e055bc57f113121ad1ec63d45e7a1d62ab9133f8b7d1d7de9e0afa784eb6a8a11d78683013d0a672611f17668d9577d209"[0: 128];
+    if !hex_eq(d[0: 64], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "blake2b_short_buffer_no_write" {
+    var buf: [byte: 80] = [];
+    var i: usize = 0;
+    while i < 80 {
+        buf[i] = 0xab as byte;
+        i = i + 1;
+    }
+    blake2b_digest(&"abc"[0: 3], buf[0: 63]);
+    var j: usize = 0;
+    while j < 80 {
+        if buf[j] != (0xab as byte) {
+            try assert_eq_i32(0, 1);
+        }
+        j = j + 1;
+    }
+}

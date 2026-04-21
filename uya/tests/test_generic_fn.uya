@@ -1,0 +1,64 @@
+// 测试泛型函数 - 基本语法和单态化
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn identity<T>(x: T) T {
+    return x;
+}
+
+fn swap<T>(a: &T, b: &T) void {
+    const temp: T = *a;
+    *a = *b;
+    *b = temp;
+}
+
+fn max<T: Ord>(a: T, b: T) T {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+
+fn min<T: Ord>(a: T, b: T) T {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+fn test_identity() !void {
+    const x: i32 = identity<i32>(42);
+    try assert_eq_i32(x, 42);
+}
+
+fn test_swap() !void {
+    var a: i32 = 10;
+    var b: i32 = 20;
+    swap<i32>(&a, &b);
+    try assert_eq_i32(a, 20);
+    try assert_eq_i32(b, 10);
+}
+
+fn test_max() !void {
+    const m: i32 = max<i32>(15, 25);
+    try assert_eq_i32(m, 25);
+}
+
+fn test_min() !void {
+    const n: i32 = min<i32>(15, 25);
+    try assert_eq_i32(n, 15);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Fn Tests");
+    run_test("identity", test_identity);
+    run_test("swap", test_swap);
+    run_test("max", test_max);
+    run_test("min", test_min);
+    return test_suite_end();
+}

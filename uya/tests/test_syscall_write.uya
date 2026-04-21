@@ -1,0 +1,29 @@
+// 测试 @syscall 内置函数 - SYS_write
+use std.runtime.entry;
+// 功能：向标准输出写入字符串
+
+export fn main() i32 {
+    // Linux x86-64 系统调用号
+    const SYS_write: i64 = 1;
+    
+    // 测试消息
+    const msg: *byte = "Hello, @syscall!\n";
+    const msg_len: i64 = 17;
+    
+    // 调用 SYS_write(1, msg, 17)
+    // fd=1 (标准输出), buf=msg, count=17
+    const result: !i64 = @syscall(SYS_write, 1, msg as i64, msg_len);
+    
+    // 错误处理
+    const bytes_written: i64 = result catch {
+        return 1;  // 写入失败
+    };
+    
+    // 验证写入字节数
+    if bytes_written != msg_len {
+        return 1;  // 字节数不匹配
+    }
+    
+    return 0;  // 测试通过
+}
+

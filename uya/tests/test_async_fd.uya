@@ -1,0 +1,412 @@
+// test_async_fd.uya - 测试 std.async.AsyncFd（fd 上的 AsyncWriter/AsyncReader）
+
+use std.async;
+use std.async_event;
+use std.async_scheduler;
+use std.testing.assert_eq_i32;
+use libc.syscall;
+
+error UnexpectedPending;
+error ExpectedPending;
+error AsyncFdFailed;
+error PipeCreateFailed;
+error PipeReadFailed;
+error PipeWriteFailed;
+error ChildSpawnFailed;
+error EventLoopRegisterFailed;
+error EventLoopWritableFailed;
+
+const TEST_SYS_WRITE: i64 = 1;
+const TEST_SYS_CLOSE: i64 = 3;
+const TEST_SYS_PIPE2: i64 = 293;
+const TEST_O_NONBLOCK: i32 = 0x800;
+
+fn test_sys_write(fd: i32, buf: &const byte, count: usize) !isize {
+    return @syscall(TEST_SYS_WRITE, fd as i64, buf as i64, count as i64) as! isize;
+}
+
+fn test_sys_close(fd: i32) !i32 {
+    return @syscall(TEST_SYS_CLOSE, fd as i64) as! i32;
+}
+
+fn test_sys_pipe2(pipefd: &i32, flags: i32) !i32 {
+    return @syscall(TEST_SYS_PIPE2, pipefd as i64, flags as i64) as! i32;
+}
+
+fn async_fd_spawn_delayed_writer(write_fd: i32, a: byte, b: byte, c: byte, d: byte, delay_ns: i64) !i32 {
+    const fork_result: !i64 = sys_fork();
+    const child_pid: i64 = fork_result catch {
+        return error.ChildSpawnFailed;
+    };
+    if child_pid == 0 {
+        const req: TimeSpec = TimeSpec{ tv_sec: 0, tv_nsec: delay_ns };
+        var rem: TimeSpec = TimeSpec{ tv_sec: 0, tv_nsec: 0 };
+        _ = sys_nanosleep(&req, &rem) catch {};
+        var src: [byte: 4] = [ a, b, c, d ];
+        _ = sys_write(write_fd, &src[0] as *const byte, 4) catch {};
+        _ = sys_close(write_fd) catch {};
+        sys_exit(0);
+    }
+    return child_pid as i32;
+}
+
+fn async_fd_wait_child(child_pid: i32) void {
+    if child_pid > 0 {
+        var status: i32 = 0;
+        _ = sys_waitpid(child_pid, &status, 0) catch {};
+    }
+}
+
+var async_fd_mock_registered_fd: i32 = 0 - 1;
+var async_fd_mock_write_fd: i32 = 0 - 1;
+var async_fd_mock_register_count: i32 = 0;
+var async_fd_mock_poll_count: i32 = 0;
+var async_fd_mock_waker: &Waker = null;
+
+struct AsyncFdWakeLoop : EventLoop {
+    fn register(self: &Self, fd: i32, interest: EventKind, waker: &Waker) !i32 {
+        _ = self;
+        match interest {
+            .Readable(_) => { },
+            .Writable(_) => { return error.EventLoopRegisterFailed; },
+            .ReadWrite(_) => { return error.EventLoopRegisterFailed; },
+        };
+        async_fd_mock_registered_fd = fd;
+        async_fd_mock_register_count = async_fd_mock_register_count + 1;
+        async_fd_mock_waker = waker;
+        return 0;
+    }
+
+    fn deregister(self: &Self, fd: i32) !i32 {
+        _ = self;
+        _ = fd;
+        return 0;
+    }
+
+    fn poll(self: &Self, timeout_ms: i32) !i32 {
+        _ = self;
+        _ = timeout_ms;
+        async_fd_mock_poll_count = async_fd_mock_poll_count + 1;
+        var src: [byte: 4] = [ 10, 20, 30, 40 ];
+        const written: isize = test_sys_write(async_fd_mock_write_fd, &src[0] as &const byte, 4) catch {
+            return error.EventLoopWritableFailed;
+        };
+        if written != 4 {
+            return error.EventLoopWritableFailed;
+        }
+        async_fd_mock_waker.wake();
+        return 1;
+    }
+}
+
+fn test_async_fd_write() !void {
+    const STDOUT: i32 = 1;
+    var af: AsyncFd = async_fd_new(STDOUT);
+    var buf: [byte: 4] = [ 65, 66, 67, 68 ];
+    const f: Future<!usize> = af.write(&buf[0] as &const byte, 4);
+    const wk: Waker = Waker{};
+    const p: Poll<!usize> = f.poll(&wk);
+    var result: usize = 0;
+    match p {
+        .Ready(n) => { result = n catch { return error.AsyncFdFailed; }; },
+        .Pending(_) => { return error.UnexpectedPending; },
+    };
+    try assert_eq_i32(result as i32, 4);
+}
+
+fn test_async_fd_write_all() !void {
+    var fds: [i32: 2] = [];
+    _ = test_sys_pipe2(&fds[0], TEST_O_NONBLOCK) catch {
+        return error.PipeCreateFailed;
+    };
+    const read_fd: i32 = fds[0];
+    const write_fd: i32 = fds[1];
+
+    var af: AsyncFd = async_fd_new(write_fd);
+    var src: [byte: 4] = [ 65, 66, 67, 68 ];
+    const f: Future<!usize> = af.write_all(&src[0] as &const byte, 4);
+    const written: usize = try block_on<usize>(f);
+    try assert_eq_i32(written as i32, 4);
+
+    var out: [byte: 8] = [];
+    const read_result: !isize = sys_read(read_fd, &out[0] as *byte, 4);
+    const read_count: isize = read_result catch {
+        return error.PipeReadFailed;
+    };
+    try assert_eq_i32(read_count as i32, 4);
+    try assert_eq_i32(out[0] as i32, 65);
+    try assert_eq_i32(out[1] as i32, 66);
+    try assert_eq_i32(out[2] as i32, 67);
+    try assert_eq_i32(out[3] as i32, 68);
+
+    _ = sys_close(read_fd) catch {};
+    _ = sys_close(write_fd) catch {};
+}
+
+fn test_async_fd_println_helper() !void {
+    var fds: [i32: 2] = [];
+    _ = test_sys_pipe2(&fds[0], TEST_O_NONBLOCK) catch {
+        return error.PipeCreateFailed;
+    };
+    const read_fd: i32 = fds[0];
+    const write_fd: i32 = fds[1];
+
+    var writer_impl: AsyncFd = async_fd_new(write_fd);
+    const writer: AsyncWriter = writer_impl;
+    const written: usize = try block_on<usize>(async_println_to(writer, "OK\0" as &const byte));
+    try assert_eq_i32(written as i32, 3);
+
+    var out: [byte: 8] = [];
+    const read_result: !isize = sys_read(read_fd, &out[0] as *byte, 3);
+    const read_count: isize = read_result catch {
+        return error.PipeReadFailed;
+    };
+    try assert_eq_i32(read_count as i32, 3);
+    try assert_eq_i32(out[0] as i32, 'O' as i32);
+    try assert_eq_i32(out[1] as i32, 'K' as i32);
+    try assert_eq_i32(out[2] as i32, '\n' as i32);
+
+    _ = sys_close(read_fd) catch {};
+    _ = sys_close(write_fd) catch {};
+}
+
+fn test_async_fd_read_pending_then_ready() !void {
+    var fds: [i32: 2] = [];
+    _ = test_sys_pipe2(&fds[0], TEST_O_NONBLOCK) catch {
+        return error.PipeCreateFailed;
+    };
+    const read_fd: i32 = fds[0];
+    const write_fd: i32 = fds[1];
+
+    var af: AsyncFd = async_fd_new(read_fd);
+    var buf: [byte: 8] = [];
+    const f: Future<!usize> = af.read(&buf[0], 4);
+    const wk: Waker = Waker{};
+
+    const first_poll: Poll<!usize> = f.poll(&wk);
+    var saw_pending: i32 = 0;
+    match first_poll {
+        .Ready(_) => { saw_pending = 0; },
+        .Pending(_) => { saw_pending = 1; },
+    };
+    try assert_eq_i32(saw_pending, 1);
+
+    var src: [byte: 4] = [ 10, 20, 30, 40 ];
+    const written: isize = test_sys_write(write_fd, &src[0] as &const byte, 4) catch {
+        return error.PipeWriteFailed;
+    };
+    try assert_eq_i32(written as i32, 4);
+
+    const second_poll: Poll<!usize> = f.poll(&wk);
+    var read_count: usize = 0;
+    match second_poll {
+        .Ready(value) => { read_count = value catch { return error.AsyncFdFailed; }; },
+        .Pending(_) => { return error.UnexpectedPending; },
+    };
+    try assert_eq_i32(read_count as i32, 4);
+    try assert_eq_i32(buf[0] as i32, 10);
+    try assert_eq_i32(buf[1] as i32, 20);
+    try assert_eq_i32(buf[2] as i32, 30);
+    try assert_eq_i32(buf[3] as i32, 40);
+
+    _ = test_sys_close(read_fd);
+    _ = test_sys_close(write_fd);
+}
+
+fn test_async_fd_read_with_event_loop_wakes() !void {
+    var fds: [i32: 2] = [];
+    _ = test_sys_pipe2(&fds[0], TEST_O_NONBLOCK) catch {
+        return error.PipeCreateFailed;
+    };
+    const read_fd: i32 = fds[0];
+    const write_fd: i32 = fds[1];
+
+    async_fd_mock_registered_fd = 0 - 1;
+    async_fd_mock_write_fd = write_fd;
+    async_fd_mock_register_count = 0;
+    async_fd_mock_poll_count = 0;
+    async_fd_mock_waker = null;
+
+    var af: AsyncFd = async_fd_new(read_fd);
+    var buf: [byte: 8] = [];
+    var scheduler: Scheduler = scheduler_new();
+    const loop: EventLoop = AsyncFdWakeLoop{};
+    const f: Future<!usize> = af.read(&buf[0], 4);
+    const read_count: usize = try scheduler_run_with_event_loop<usize>(&scheduler, loop, f, 50);
+    try assert_eq_i32(read_count as i32, 4);
+    try assert_eq_i32(async_fd_mock_registered_fd, read_fd);
+    try assert_eq_i32(async_fd_mock_register_count, 2);
+    try assert_eq_i32(async_fd_mock_poll_count, 1);
+    try assert_eq_i32(buf[0] as i32, 10);
+    try assert_eq_i32(buf[1] as i32, 20);
+    try assert_eq_i32(buf[2] as i32, 30);
+    try assert_eq_i32(buf[3] as i32, 40);
+
+    _ = test_sys_close(read_fd);
+    _ = test_sys_close(write_fd);
+}
+
+fn test_async_fd_read_exact_pending_then_ready() !void {
+    var fds: [i32: 2] = [];
+    _ = test_sys_pipe2(&fds[0], TEST_O_NONBLOCK) catch {
+        return error.PipeCreateFailed;
+    };
+    const read_fd: i32 = fds[0];
+    const write_fd: i32 = fds[1];
+
+    var af: AsyncFd = async_fd_new(read_fd);
+    var buf: [byte: 8] = [];
+    const f: Future<!usize> = af.read_exact(&buf[0], 4);
+    const wk: Waker = Waker{};
+
+    const first_poll: Poll<!usize> = f.poll(&wk);
+    var saw_pending: i32 = 0;
+    match first_poll {
+        .Ready(_) => { saw_pending = 0; },
+        .Pending(_) => { saw_pending = 1; },
+    };
+    try assert_eq_i32(saw_pending, 1);
+
+    var src: [byte: 4] = [ 10, 20, 30, 40 ];
+    const written: isize = test_sys_write(write_fd, &src[0] as &const byte, 4) catch {
+        return error.PipeWriteFailed;
+    };
+    try assert_eq_i32(written as i32, 4);
+
+    const read_count: usize = try block_on<usize>(f);
+    try assert_eq_i32(read_count as i32, 4);
+    try assert_eq_i32(buf[0] as i32, 10);
+    try assert_eq_i32(buf[1] as i32, 20);
+    try assert_eq_i32(buf[2] as i32, 30);
+    try assert_eq_i32(buf[3] as i32, 40);
+
+    _ = sys_close(read_fd) catch {};
+    _ = sys_close(write_fd) catch {};
+}
+
+fn test_async_fd_read_exact_returns_unexpected_eof() !void {
+    var fds: [i32: 2] = [];
+    _ = test_sys_pipe2(&fds[0], TEST_O_NONBLOCK) catch {
+        return error.PipeCreateFailed;
+    };
+    const read_fd: i32 = fds[0];
+    const write_fd: i32 = fds[1];
+
+    var src: [byte: 2] = [ 9, 8 ];
+    const written: isize = test_sys_write(write_fd, &src[0] as &const byte, 2) catch {
+        return error.PipeWriteFailed;
+    };
+    try assert_eq_i32(written as i32, 2);
+    _ = sys_close(write_fd) catch {};
+
+    var af: AsyncFd = async_fd_new(read_fd);
+    var buf: [byte: 8] = [];
+    const f: Future<!usize> = af.read_exact(&buf[0], 4);
+    const result: !usize = block_on<usize>(f);
+
+    var saw_eof: i32 = 0;
+    const _value: usize = result catch |err| {
+        if @error_id(err) == @error_id(error.UnexpectedEof) {
+            saw_eof = 1;
+        }
+        0 as usize;
+    };
+    _ = _value;
+    try assert_eq_i32(saw_eof, 1);
+    try assert_eq_i32(buf[0] as i32, 9);
+    try assert_eq_i32(buf[1] as i32, 8);
+
+    _ = sys_close(read_fd) catch {};
+    _ = sys_close(write_fd) catch {};
+}
+
+fn test_async_fd_task_queue_shared_linux_epoll() !void {
+    var first_pipe: [i32: 2] = [];
+    var second_pipe: [i32: 2] = [];
+    _ = test_sys_pipe2(&first_pipe[0], TEST_O_NONBLOCK) catch {
+        return error.PipeCreateFailed;
+    };
+    _ = test_sys_pipe2(&second_pipe[0], TEST_O_NONBLOCK) catch {
+        _ = sys_close(first_pipe[0]) catch {};
+        _ = sys_close(first_pipe[1]) catch {};
+        return error.PipeCreateFailed;
+    };
+
+    const first_read_fd: i32 = first_pipe[0];
+    const first_write_fd: i32 = first_pipe[1];
+    const second_read_fd: i32 = second_pipe[0];
+    const second_write_fd: i32 = second_pipe[1];
+    const first_child: i32 = try async_fd_spawn_delayed_writer(first_write_fd, 11, 12, 13, 14, 5 * 1000 * 1000);
+    const second_child: i32 = try async_fd_spawn_delayed_writer(second_write_fd, 21, 22, 23, 24, 10 * 1000 * 1000);
+
+    var first_reader: AsyncFd = async_fd_new(first_read_fd);
+    var second_reader: AsyncFd = async_fd_new(second_read_fd);
+    var first_buf: [byte: 4] = [];
+    var second_buf: [byte: 4] = [];
+    var queue: TaskQueue<usize> = task_queue_new<usize>();
+    const first_future: Future<!usize> = first_reader.read_exact(&first_buf[0], 4);
+    const second_future: Future<!usize> = second_reader.read_exact(&second_buf[0], 4);
+    const first_push: !i32 = queue.push(first_future);
+    _ = first_push catch {
+        return error.TaskQueueFull;
+    };
+    const second_push: !i32 = queue.push(second_future);
+    _ = second_push catch {
+        return error.TaskQueueFull;
+    };
+
+    var scheduler: Scheduler = scheduler_new();
+    var epoll_impl: LinuxEpoll = try linux_epoll_create(0);
+    const loop: EventLoop = epoll_impl;
+    const completed: i32 = try scheduler_run_task_queue_with_event_loop<usize>(&scheduler, loop, &queue, 1000);
+
+    try assert_eq_i32(completed, 2);
+    try assert_eq_i32(queue.result(0) as i32, 4);
+    try assert_eq_i32(queue.result(1) as i32, 4);
+    try assert_eq_i32(queue.is_done(0) as i32, 1);
+    try assert_eq_i32(queue.is_done(1) as i32, 1);
+    try assert_eq_i32(first_buf[0] as i32, 11);
+    try assert_eq_i32(first_buf[3] as i32, 14);
+    try assert_eq_i32(second_buf[0] as i32, 21);
+    try assert_eq_i32(second_buf[3] as i32, 24);
+
+    async_fd_wait_child(first_child);
+    async_fd_wait_child(second_child);
+    _ = sys_close(first_read_fd) catch {};
+    _ = sys_close(first_write_fd) catch {};
+    _ = sys_close(second_read_fd) catch {};
+    _ = sys_close(second_write_fd) catch {};
+    _ = sys_close(epoll_impl.epfd) catch {};
+}
+
+test "async_fd_write_returns_ready" {
+    try test_async_fd_write();
+}
+
+test "async_fd_write_all_returns_ready" {
+    try test_async_fd_write_all();
+}
+
+test "async_fd_println_helper_writes_newline" {
+    try test_async_fd_println_helper();
+}
+
+test "async_fd_read_returns_pending_on_eagain_then_ready" {
+    try test_async_fd_read_pending_then_ready();
+}
+
+test "async_fd_read_with_event_loop_wakes_to_ready" {
+    try test_async_fd_read_with_event_loop_wakes();
+}
+
+test "async_fd_read_exact_returns_pending_then_ready" {
+    try test_async_fd_read_exact_pending_then_ready();
+}
+
+test "async_fd_read_exact_returns_unexpected_eof" {
+    try test_async_fd_read_exact_returns_unexpected_eof();
+}
+
+test "async_fd_task_queue_shared_linux_epoll" {
+    try test_async_fd_task_queue_shared_linux_epoll();
+}

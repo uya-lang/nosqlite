@@ -1,0 +1,9 @@
+// test_asm_duplicate_output.uya - @asm 多输出变量测试
+
+test "asm duplicate output" {
+    var x: i32 = 0;
+    var y: i32 = 0;
+    @asm {
+        "nop" (-> x, y);
+    }
+}

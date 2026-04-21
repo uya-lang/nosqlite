@@ -1,0 +1,14 @@
+// error_await_outside_async.uya
+//
+// 功能：验证 @await 只能在 @async_fn 函数内使用
+// 预期：编译失败，报告 "@await 只能在 @async_fn 函数内使用"
+
+@async_fn
+fn async_get() i32 {
+    return 42;
+}
+
+fn not_async() i32 {
+    const result: i32 = @await async_get();
+    return result;
+}

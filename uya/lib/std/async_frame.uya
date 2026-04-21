@@ -1,0 +1,621 @@
+// lib/std/async_frame.uya - 异步帧池运行时支持
+//
+// 模块路径：use std.async_frame
+// 提供：AsyncFramePool、async_frame_pool_alloc、async_frame_pool_free
+
+use libc.stdlib;
+use libc.memset;
+use std.mem.allocator.IAllocator;
+use std.mem.allocator.AllocOutOfMemory;
+use std.mem.allocator.AllocInvalidSize;
+
+// 帧描述符（编译期生成静态表，运行时只读）
+export struct AsyncFrameDescriptor {
+    size: usize,
+    align: usize,
+    drop_fn: &byte,  // 函数指针类型在 Uya 中暂用 &byte 表示
+}
+
+// size class 分桶：按 (size, align) 组合分桶
+const ASYNC_FRAME_POOL_MAX_BUCKETS: i32 = 128;
+const ASYNC_FRAME_POOL_MAX_PER_BUCKET: i32 = 4096;
+
+struct AsyncFramePoolBucket {
+    size: usize,
+    align: usize,
+    // free list 用简单数组模拟：存储指向已分配内存的指针
+    slots: [&byte: ASYNC_FRAME_POOL_MAX_PER_BUCKET],
+    slot_count: i32,
+    capacity: i32,
+    // 已从系统 malloc 出来的总块数（含已外借和 free list 中的）
+    committed_count: i32,
+    alloc_count: i32,
+    free_count: i32,
+}
+
+const ASYNC_FRAME_POOL_IALLOC_ALIGN: usize = 8;
+
+// 异步帧池（同时实现 IAllocator 接口，支持线程本地注入）
+export struct AsyncFramePool : IAllocator {
+    buckets: [AsyncFramePoolBucket: ASYNC_FRAME_POOL_MAX_BUCKETS],
+    bucket_count: i32,
+    // 统计
+    total_alloc_count: i32,
+    total_free_count: i32,
+    pool_full_count: i32,
+    debug_heap_fallback_count: i32,
+    // 调试开关（由初始化时传入，也可通过环境变量覆盖）
+    debug_heap_fallback: i32,
+    // 栈分配大小限制：超过此大小的 frame 即使候选也强制走 pool
+    stack_limit: usize,
+    // 可选：由调用方提供的 backing buffer。设置后优先从该缓冲区分配，
+    // 用于 worker-local / stack-owned 零堆场景。
+    buffer: &byte = null,
+    buffer_size: usize = 0,
+    buffer_used: usize = 0,
+
+    // IAllocator 实现：通过 header 记录 raw_ptr，dealloc 时无需外部传入 size
+    fn alloc(self: &Self, size: usize) !&byte {
+        if size == 0 {
+            return error.AllocInvalidSize;
+        }
+        const header_size: usize = @size_of(usize) + @size_of(&byte);
+        const total_size: usize = header_size + size;
+        const align: usize = ASYNC_FRAME_POOL_IALLOC_ALIGN;
+        const raw_ptr: &byte = async_frame_pool_alloc_aligned(self, total_size, align);
+        if raw_ptr == null {
+            return error.AllocOutOfMemory;
+        }
+        // 在 raw_ptr 开头存 total_size
+        const size_slot: &usize = raw_ptr as &usize;
+        *size_slot = total_size;
+        // 计算满足对齐的 user_ptr 偏移
+        var offset: usize = header_size;
+        if (offset % align) != 0 {
+            offset = offset + (align - (offset % align));
+        }
+        const user_ptr: &byte = (raw_ptr as usize + offset) as &byte;
+        // 在 user_ptr 前面存 raw_ptr 地址
+        const raw_slot: &usize = (user_ptr as usize - @size_of(&byte)) as &usize;
+        *raw_slot = raw_ptr as usize;
+        return user_ptr;
+    }
+
+    fn dealloc(self: &Self, ptr: &byte) void {
+        if ptr == null {
+            return;
+        }
+        const raw_slot: &usize = (ptr as usize - @size_of(&byte)) as &usize;
+        const raw_ptr_addr: usize = *raw_slot;
+        const raw_ptr: &byte = raw_ptr_addr as &byte;
+        if raw_ptr == null {
+            return;
+        }
+        const total_size: usize = *(raw_ptr as &usize);
+        const align: usize = ASYNC_FRAME_POOL_IALLOC_ALIGN;
+        async_frame_pool_free_aligned(self, raw_ptr, total_size, align);
+    }
+
+    fn realloc(self: &Self, ptr: &byte, new_size: usize) !&byte {
+        if ptr == null {
+            return self.alloc(new_size);
+        }
+        if new_size == 0 {
+            self.dealloc(ptr);
+            return error.AllocInvalidSize;
+        }
+        const new_ptr: !&byte = self.alloc(new_size);
+        const p: &byte = new_ptr catch {
+            return new_ptr as! &byte;
+        };
+        self.dealloc(ptr);
+        return p;
+    }
+}
+
+// 包装结构体，使 extern 变量能被 checker 接受
+struct AsyncFrameDescriptorTable {
+    entries: [AsyncFrameDescriptor: 512],
+}
+
+// 全局静态 descriptor 表（由编译器填充）
+// 在 Uya 中，我们通过弱符号/外部声明让链接器合并
+extern var _uya_async_frame_descriptors: AsyncFrameDescriptorTable;
+extern var _uya_async_frame_descriptor_count: i32;
+
+// 编译期开关：--async-frame-heap=on 时由 codegen 生成为 1
+extern var _uya_async_frame_heap_fallback: i32;
+
+// 默认全局异步帧池（懒初始化）
+var _uya_default_async_frame_pool: &AsyncFramePool = null;
+var _uya_default_async_frame_pool_initialized: i32 = 0;
+
+export fn async_frame_pool_default() &AsyncFramePool {
+    if _uya_default_async_frame_pool_initialized == 0 {
+        _uya_default_async_frame_pool_initialized = 1;
+        // 默认关闭 debug heap fallback（栈优先 + 池兜底）
+        var fallback: i32 = 0;
+        if _uya_async_frame_heap_fallback != 0 {
+            fallback = 1;
+        }
+        // 环境变量 ASYNC_FRAME_DEBUG_HEAP=1 可显式开启回退
+        const env: &byte = getenv("ASYNC_FRAME_DEBUG_HEAP" as &const byte);
+        if env != null && env[0] != 0 as byte {
+            const c: byte = env[0];
+            if c == '1' as byte || c == 't' as byte || c == 'T' as byte || c == 'y' as byte || c == 'Y' as byte || c == 'o' as byte || c == 'O' as byte {
+                fallback = 1;
+            }
+        }
+        // 环境变量 ASYNC_FRAME_STACK_LIMIT 覆盖默认栈分配阈值（字节）
+        var stack_limit: usize = 65536;
+        const stack_env: &byte = getenv("ASYNC_FRAME_STACK_LIMIT" as &const byte);
+        if stack_env != null && stack_env[0] != 0 as byte {
+            const limit_i32: i32 = atoi(stack_env as &const byte);
+            if limit_i32 > 0 {
+                stack_limit = limit_i32 as usize;
+            }
+        }
+        _uya_default_async_frame_pool = malloc(@size_of(AsyncFramePool) as usize) as &AsyncFramePool;
+        if _uya_default_async_frame_pool != null {
+            async_frame_pool_init(_uya_default_async_frame_pool, fallback, stack_limit);
+        }
+    }
+    return _uya_default_async_frame_pool;
+}
+
+fn async_frame_descriptor_entry(frame_idx: usize) &AsyncFrameDescriptor {
+    if frame_idx >= @len(_uya_async_frame_descriptors.entries) {
+        return null;
+    }
+    const base: &AsyncFrameDescriptor = &_uya_async_frame_descriptors.entries[0];
+    const off: usize = frame_idx * @size_of(AsyncFrameDescriptor);
+    return @ptr_from_usize(@usize_from_ptr(base as &void) + off) as &AsyncFrameDescriptor;
+}
+
+fn async_frame_pool_bucket_ptr(pool: &AsyncFramePool, idx: i32) &AsyncFramePoolBucket {
+    if pool == null || idx < 0 {
+        return null;
+    }
+    const bucket_idx: usize = idx as usize;
+    if bucket_idx >= ASYNC_FRAME_POOL_MAX_BUCKETS as usize {
+        return null;
+    }
+    const base: &AsyncFramePoolBucket = &pool.buckets[0];
+    const off: usize = bucket_idx * @size_of(AsyncFramePoolBucket);
+    return @ptr_from_usize(@usize_from_ptr(base as &void) + off) as &AsyncFramePoolBucket;
+}
+
+fn async_frame_bucket_slot_ptr(bucket: &AsyncFramePoolBucket, idx: i32) &&byte {
+    if bucket == null || idx < 0 {
+        return null;
+    }
+    const slot_idx: usize = idx as usize;
+    if slot_idx >= ASYNC_FRAME_POOL_MAX_PER_BUCKET as usize {
+        return null;
+    }
+    return (@usize_from_ptr(&bucket.slots[0] as &void) + slot_idx * @size_of(&byte)) as &&byte;
+}
+
+// 获取某个 frame_id 对应的 descriptor
+fn async_frame_pool_descriptor(frame_id: u32) &AsyncFrameDescriptor {
+    const desc_cap: u32 = @len(_uya_async_frame_descriptors.entries) as u32;
+    if frame_id < desc_cap {
+        const frame_idx: usize = frame_id as usize;
+        if frame_idx >= 0 && frame_idx < @len(_uya_async_frame_descriptors.entries) {
+            return async_frame_descriptor_entry(frame_idx);
+        }
+    }
+    return null;
+}
+
+// 查找或创建 bucket
+fn async_frame_pool_find_or_create_bucket(pool: &AsyncFramePool, size: usize, align: usize) &AsyncFramePoolBucket {
+    if pool == null {
+        return null;
+    }
+    const bucket_cap: i32 = @len(pool.buckets) as i32;
+    var i: i32 = 0;
+    while i < pool.bucket_count && i < bucket_cap {
+        const b: &AsyncFramePoolBucket = async_frame_pool_bucket_ptr(pool, i);
+        if b == null {
+            break;
+        }
+        if b.size == size && b.align == align {
+            return b;
+        }
+        i = i + 1;
+    }
+    if pool.bucket_count >= bucket_cap {
+        return null;
+    }
+    const idx: i32 = pool.bucket_count;
+    if idx < 0 || idx >= bucket_cap {
+        return null;
+    }
+    const b: &AsyncFramePoolBucket = async_frame_pool_bucket_ptr(pool, idx);
+    if b != null {
+        b.size = size;
+        b.align = align;
+        b.slot_count = 0;
+        b.capacity = ASYNC_FRAME_POOL_MAX_PER_BUCKET;
+        b.committed_count = 0;
+        b.alloc_count = 0;
+        b.free_count = 0;
+        pool.bucket_count = pool.bucket_count + 1;
+        return b;
+    }
+    return null;
+}
+
+// 初始化帧池
+export fn async_frame_pool_init(pool: &AsyncFramePool, debug_heap_fallback: i32, stack_limit: usize) void {
+    if pool == null {
+        return;
+    }
+    pool.bucket_count = 0;
+    pool.total_alloc_count = 0;
+    pool.total_free_count = 0;
+    pool.pool_full_count = 0;
+    pool.debug_heap_fallback_count = 0;
+    pool.debug_heap_fallback = debug_heap_fallback;
+    pool.stack_limit = stack_limit;
+    pool.buffer = null;
+    pool.buffer_size = 0;
+    pool.buffer_used = 0;
+    const bucket_cap: i32 = @len(pool.buckets) as i32;
+    var i: i32 = 0;
+    while i < bucket_cap {
+        const b: &AsyncFramePoolBucket = async_frame_pool_bucket_ptr(pool, i);
+        if b == null {
+            break;
+        }
+        b.size = 0;
+        b.align = 0;
+        b.slot_count = 0;
+        b.capacity = 0;
+        b.committed_count = 0;
+        b.alloc_count = 0;
+        b.free_count = 0;
+        var j: i32 = 0;
+        const slot_cap: i32 = @len(b.slots) as i32;
+        while j < slot_cap {
+            const slot_ptr: &&byte = async_frame_bucket_slot_ptr(b, j);
+            if slot_ptr == null {
+                break;
+            }
+            slot_ptr[0] = null;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+}
+
+// 使用调用方提供的 backing buffer 初始化帧池。
+// 适合 worker-local 栈缓冲：alloc / free 均通过 free list 复用，不会触发系统堆。
+export fn async_frame_pool_init_with_buffer(pool: &AsyncFramePool, buffer: &byte, size: usize, debug_heap_fallback: i32, stack_limit: usize) void {
+    async_frame_pool_init(pool, debug_heap_fallback, stack_limit);
+    if pool == null {
+        return;
+    }
+    pool.buffer = buffer;
+    pool.buffer_size = size;
+    pool.buffer_used = 0;
+}
+
+fn async_frame_pool_align_up(n: usize, align: usize) usize {
+    if align == 0 {
+        return n;
+    }
+    const m: usize = n + align - 1;
+    return m - (m % align);
+}
+
+fn async_frame_pool_ptr_in_buffer(pool: &AsyncFramePool, ptr: &byte) i32 {
+    if pool == null || pool.buffer == null || ptr == null || pool.buffer_size == 0 {
+        return 0;
+    }
+    const base: usize = @usize_from_ptr(pool.buffer as &void);
+    const p: usize = @usize_from_ptr(ptr as &void);
+    return (p >= base && p < base + pool.buffer_size) as i32;
+}
+
+fn async_frame_pool_alloc_from_buffer(pool: &AsyncFramePool, size: usize, align: usize) &byte {
+    if pool == null || pool.buffer == null || size == 0 {
+        return null;
+    }
+    var used: usize = async_frame_pool_align_up(pool.buffer_used, align);
+    if used + size > pool.buffer_size {
+        return null;
+    }
+    if used >= pool.buffer_size {
+        return null;
+    }
+    const ptr: &byte = &pool.buffer[used];
+    pool.buffer_used = used + size;
+    return ptr;
+}
+
+// 从帧池分配
+// 返回的指针按 descriptor.align 对齐；失败返回 null
+export fn async_frame_pool_alloc(pool: &AsyncFramePool, frame_id: u32) &byte {
+    if pool == null {
+        return null;
+    }
+    const desc: &AsyncFrameDescriptor = async_frame_pool_descriptor(frame_id);
+    if desc == null || desc.size == 0 {
+        return null;
+    }
+    const bucket: &AsyncFramePoolBucket = async_frame_pool_find_or_create_bucket(pool, desc.size, desc.align);
+    if bucket == null {
+        // bucket 满了或者无法创建新 bucket：尝试 debug heap fallback（仅限非 buffer-backed pool）
+        if pool.buffer == null && pool.debug_heap_fallback != 0 {
+            const ptr: &byte = malloc(desc.size) as &byte;
+            if ptr != null {
+                pool.debug_heap_fallback_count = pool.debug_heap_fallback_count + 1;
+            }
+            return ptr;
+        }
+        pool.pool_full_count = pool.pool_full_count + 1;
+        return null;
+    }
+    // 优先从 free list 复用
+    const slot_cap: i32 = @len(bucket.slots) as i32;
+    if bucket.slot_count > 0 && bucket.slot_count <= slot_cap {
+        bucket.slot_count = bucket.slot_count - 1;
+        const slot_idx: i32 = bucket.slot_count;
+        if slot_idx >= 0 && slot_idx < slot_cap {
+            const slot_ptr: &&byte = async_frame_bucket_slot_ptr(bucket, slot_idx);
+            if slot_ptr != null {
+                const ptr: &byte = slot_ptr[0];
+                slot_ptr[0] = null;
+                bucket.alloc_count = bucket.alloc_count + 1;
+                pool.total_alloc_count = pool.total_alloc_count + 1;
+                return ptr;
+            }
+        }
+    }
+    // free list 空：如果总容量未满，malloc 新页（lazy commit 语义）
+    if bucket.committed_count < bucket.capacity {
+        const ptr: &byte = async_frame_pool_alloc_from_buffer(pool, desc.size, desc.align);
+        if ptr == null {
+            if pool.buffer == null && pool.debug_heap_fallback != 0 {
+                const heap_ptr: &byte = malloc(desc.size) as &byte;
+                if heap_ptr == null {
+                    pool.pool_full_count = pool.pool_full_count + 1;
+                    return null;
+                }
+                bucket.committed_count = bucket.committed_count + 1;
+                bucket.alloc_count = bucket.alloc_count + 1;
+                pool.total_alloc_count = pool.total_alloc_count + 1;
+                return heap_ptr;
+            }
+            pool.pool_full_count = pool.pool_full_count + 1;
+            return null;
+        }
+        bucket.committed_count = bucket.committed_count + 1;
+        bucket.alloc_count = bucket.alloc_count + 1;
+        pool.total_alloc_count = pool.total_alloc_count + 1;
+        return ptr;
+    }
+    // bucket 容量满
+    if pool.buffer == null && pool.debug_heap_fallback != 0 {
+        const ptr: &byte = malloc(desc.size) as &byte;
+        if ptr != null {
+            pool.debug_heap_fallback_count = pool.debug_heap_fallback_count + 1;
+            bucket.alloc_count = bucket.alloc_count + 1;
+            pool.total_alloc_count = pool.total_alloc_count + 1;
+            return ptr;
+        }
+    }
+    pool.pool_full_count = pool.pool_full_count + 1;
+    return null;
+}
+
+// 按 (size, align) 直接分配（供 IAllocator 使用）
+export fn async_frame_pool_alloc_aligned(pool: &AsyncFramePool, size: usize, align: usize) &byte {
+    if pool == null || size == 0 {
+        return null;
+    }
+    const bucket: &AsyncFramePoolBucket = async_frame_pool_find_or_create_bucket(pool, size, align);
+    if bucket == null {
+        if pool.buffer == null && pool.debug_heap_fallback != 0 {
+            const ptr: &byte = malloc(size) as &byte;
+            if ptr != null {
+                pool.debug_heap_fallback_count = pool.debug_heap_fallback_count + 1;
+            }
+            return ptr;
+        }
+        pool.pool_full_count = pool.pool_full_count + 1;
+        return null;
+    }
+    const slot_cap: i32 = @len(bucket.slots) as i32;
+    if bucket.slot_count > 0 && bucket.slot_count <= slot_cap {
+        bucket.slot_count = bucket.slot_count - 1;
+        const slot_idx: i32 = bucket.slot_count;
+        if slot_idx >= 0 && slot_idx < slot_cap {
+            const slot_ptr: &&byte = async_frame_bucket_slot_ptr(bucket, slot_idx);
+            if slot_ptr != null {
+                const ptr: &byte = slot_ptr[0];
+                slot_ptr[0] = null;
+                bucket.alloc_count = bucket.alloc_count + 1;
+                pool.total_alloc_count = pool.total_alloc_count + 1;
+                return ptr;
+            }
+        }
+    }
+    if bucket.committed_count < bucket.capacity {
+        const ptr: &byte = async_frame_pool_alloc_from_buffer(pool, size, align);
+        if ptr == null {
+            if pool.buffer == null && pool.debug_heap_fallback != 0 {
+                const heap_ptr: &byte = malloc(size) as &byte;
+                if heap_ptr == null {
+                    pool.pool_full_count = pool.pool_full_count + 1;
+                    return null;
+                }
+                bucket.committed_count = bucket.committed_count + 1;
+                bucket.alloc_count = bucket.alloc_count + 1;
+                pool.total_alloc_count = pool.total_alloc_count + 1;
+                return heap_ptr;
+            }
+            pool.pool_full_count = pool.pool_full_count + 1;
+            return null;
+        }
+        bucket.committed_count = bucket.committed_count + 1;
+        bucket.alloc_count = bucket.alloc_count + 1;
+        pool.total_alloc_count = pool.total_alloc_count + 1;
+        return ptr;
+    }
+    if pool.buffer == null && pool.debug_heap_fallback != 0 {
+        const ptr: &byte = malloc(size) as &byte;
+        if ptr != null {
+            pool.debug_heap_fallback_count = pool.debug_heap_fallback_count + 1;
+            bucket.alloc_count = bucket.alloc_count + 1;
+            pool.total_alloc_count = pool.total_alloc_count + 1;
+            return ptr;
+        }
+    }
+    pool.pool_full_count = pool.pool_full_count + 1;
+    return null;
+}
+
+// 按 (size, align) 直接归还
+export fn async_frame_pool_free_aligned(pool: &AsyncFramePool, ptr: &byte, size: usize, align: usize) void {
+    if pool == null || ptr == null {
+        return;
+    }
+    const bucket: &AsyncFramePoolBucket = async_frame_pool_find_or_create_bucket(pool, size, align);
+    if bucket == null || bucket.slot_count >= bucket.capacity {
+        if async_frame_pool_ptr_in_buffer(pool, ptr) != 0 {
+            return;
+        }
+        free(ptr as *void);
+        return;
+    }
+    const slot_cap: i32 = @len(bucket.slots) as i32;
+    if bucket.slot_count >= 0 && bucket.slot_count < slot_cap {
+        const slot_idx: i32 = bucket.slot_count;
+        if slot_idx >= 0 && slot_idx < slot_cap {
+            const slot_ptr: &&byte = async_frame_bucket_slot_ptr(bucket, slot_idx);
+            if slot_ptr == null {
+                return;
+            }
+            slot_ptr[0] = ptr;
+            bucket.slot_count = bucket.slot_count + 1;
+        } else {
+            return;
+        }
+    } else {
+        return;
+    }
+    bucket.free_count = bucket.free_count + 1;
+    pool.total_free_count = pool.total_free_count + 1;
+}
+
+// 归还帧到池
+export fn async_frame_pool_free(pool: &AsyncFramePool, ptr: &byte, frame_id: u32) void {
+    if pool == null || ptr == null {
+        return;
+    }
+    const desc: &AsyncFrameDescriptor = async_frame_pool_descriptor(frame_id);
+    if desc == null || desc.size == 0 {
+        free(ptr as *void);
+        return;
+    }
+    async_frame_pool_free_aligned(pool, ptr, desc.size, desc.align);
+}
+
+// 重置帧池（释放所有 bucket 中的内存到系统）
+export fn async_frame_pool_reset(pool: &AsyncFramePool) void {
+    if pool == null {
+        return;
+    }
+    if pool.buffer != null {
+        const bucket_cap: i32 = @len(pool.buckets) as i32;
+        var bi: i32 = 0;
+        while bi < pool.bucket_count && bi < bucket_cap {
+            const b: &AsyncFramePoolBucket = async_frame_pool_bucket_ptr(pool, bi);
+            if b == null {
+                break;
+            }
+            var bj: i32 = 0;
+            const slot_cap: i32 = @len(b.slots) as i32;
+            while bj < b.slot_count && bj < slot_cap {
+                const slot_ptr: &&byte = async_frame_bucket_slot_ptr(b, bj);
+                if slot_ptr == null {
+                    break;
+                }
+                const p: &byte = slot_ptr[0];
+                if p != null && async_frame_pool_ptr_in_buffer(pool, p) == 0 {
+                    free(p as *void);
+                }
+                slot_ptr[0] = null;
+                bj = bj + 1;
+            }
+            b.slot_count = 0;
+            b.committed_count = 0;
+            b.alloc_count = 0;
+            b.free_count = 0;
+            bi = bi + 1;
+        }
+        pool.buffer_used = 0;
+        pool.total_alloc_count = 0;
+        pool.total_free_count = 0;
+        pool.pool_full_count = 0;
+        pool.debug_heap_fallback_count = 0;
+        return;
+    }
+    const bucket_cap2: i32 = @len(pool.buckets) as i32;
+    var i: i32 = 0;
+    while i < pool.bucket_count && i < bucket_cap2 {
+        const b: &AsyncFramePoolBucket = async_frame_pool_bucket_ptr(pool, i);
+        if b == null {
+            break;
+        }
+        // 注意：这里无法区分哪些 slot 是 free list 中的，哪些是从来没被复用的
+        // 简化处理：遍历所有可能存过指针的 slot，逐个 free
+        // 对于频繁 alloc/free 的场景，这会有重复 free 风险。
+        // 更安全的方式是：只 free 真正从系统 malloc 出来且当前在 free list 中的指针。
+        // 由于我们的 alloc 路径没有单独记录“系统分配集合”，这里只 free free-list 中的。
+        var j: i32 = 0;
+        const slot_cap: i32 = @len(b.slots) as i32;
+        while j < b.slot_count && j < slot_cap {
+            const slot_ptr: &&byte = async_frame_bucket_slot_ptr(b, j);
+            if slot_ptr == null {
+                break;
+            }
+            if slot_ptr[0] != null {
+                free(slot_ptr[0] as *void);
+            }
+            j = j + 1;
+        }
+        b.slot_count = 0;
+        b.committed_count = 0;
+        b.capacity = 0;  // 标记为僵尸 bucket，防止 reset 后外部归还的帧被错误复用
+        b.alloc_count = 0;
+        b.free_count = 0;
+        i = i + 1;
+    }
+    pool.total_alloc_count = 0;
+    pool.total_free_count = 0;
+    pool.pool_full_count = 0;
+    pool.debug_heap_fallback_count = 0;
+}
+
+// 调试辅助：获取统计摘要
+export fn async_frame_pool_stats(pool: &AsyncFramePool, alloc_out: &i32, free_out: &i32, full_out: &i32, heap_fallback_out: &i32) void {
+    if pool == null {
+        return;
+    }
+    if alloc_out != null {
+        *alloc_out = pool.total_alloc_count;
+    }
+    if free_out != null {
+        *free_out = pool.total_free_count;
+    }
+    if full_out != null {
+        *full_out = pool.pool_full_count;
+    }
+    if heap_fallback_out != null {
+        *heap_fallback_out = pool.debug_heap_fallback_count;
+    }
+}

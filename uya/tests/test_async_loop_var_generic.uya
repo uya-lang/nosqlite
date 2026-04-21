@@ -1,0 +1,35 @@
+// test_async_loop_var_generic.uya - 测试通用循环变量名在 await 后的持久化
+// 使用非 n/written 的变量名，验证循环变量在跨 await 后值不丢失
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+test "loop_var_persist_generic_names" {
+    var src: [byte: 8] = [ 1, 2, 3, 4, 5, 6, 7, 8 ];
+    var r: MemAsyncReader = mem_async_reader_new(&src[0] as &const byte, 8);
+    var w: MemAsyncWriter = mem_async_writer_new();
+    var buf: [byte: 4] = [];
+
+    // 使用不同的变量名：bytes_read 和 bytes_written（而非 n/written）
+    const f: Future<!usize> = async_copy_generic(&r, &w, &buf[0], 4);
+    const bo: !usize = block_on<usize>(f);
+    const total: usize = bo catch { 0 as usize; };
+    try assert_eq_i32(total as i32, 8);
+}
+
+// 使用通用变量名的 async_copy 版本
+// 关键：使用 rd/wr 替代 n/written，但语义相同
+@async_fn fn async_copy_generic(reader: &MemAsyncReader, writer: &MemAsyncWriter, buf: &byte, buf_len: usize) Future<!usize> {
+    var total: usize = 0;
+    while true {
+        const rd: usize = try @await reader.read(buf, buf_len);
+        if rd == 0 {
+            return total;
+        }
+        const wr: usize = try @await writer.write(buf as &const byte, rd);
+        total = total + wr;
+        if wr < rd {
+            return total;
+        }
+    }
+}

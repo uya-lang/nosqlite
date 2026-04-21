@@ -1,0 +1,15 @@
+// test_multifile_main.uya - 主程序文件
+
+fn main() i32 {
+    const result1: i32 = add(10, 20);
+    const result2: i32 = multiply(5, 6);
+    const expected: i32 = 60;
+    const actual: i32 = result1 + result2;
+    // 验证结果：30 + 30 = 60
+    if actual == expected {
+        return 0;  // 测试通过
+    } else {
+        return 1;  // 测试失败
+    }
+}
+

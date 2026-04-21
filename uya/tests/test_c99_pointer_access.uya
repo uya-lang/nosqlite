@@ -1,0 +1,131 @@
+// 测试程序：专门测试 C99 代码生成器中的指针访问
+use std.runtime.entry;
+// 验证生成的 C 代码是否正确使用 -> 操作符
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct CodeGen {
+    count: i32,
+    name: &byte,
+}
+
+struct Parser {
+    codegen: &CodeGen,
+    token_count: i32,
+}
+
+struct Holder {
+    parser: &Parser,
+}
+
+struct Accessor {
+    holder: &Holder,
+}
+
+Accessor {
+    fn read_count(self: &Self) i32 {
+        return self.holder.parser.codegen.count;
+    }
+
+    fn write_count(self: &Self, value: i32) void {
+        self.holder.parser.codegen.count = value;
+    }
+}
+
+fn test_single_pointer() !void {
+    var codegen: CodeGen = CodeGen{ count: 0, name: null };
+    const count: i32 = codegen.count;
+    try assert_eq_i32(count, 0);
+    
+    codegen.count = 10;
+    try assert_eq_i32(codegen.count, 10);
+}
+
+fn test_nested_pointer() !void {
+    var codegen: CodeGen = CodeGen{ count: 0, name: null };
+    var parser: Parser = Parser{ codegen: &codegen, token_count: 0 };
+    
+    const count: i32 = parser.codegen.count;
+    try assert_eq_i32(count, 0);
+    
+    parser.codegen.count = 20;
+    try assert_eq_i32(parser.codegen.count, 20);
+    
+    const cg: &CodeGen = parser.codegen;
+    cg.count = 30;
+    try assert_eq_i32(parser.codegen.count, 30);
+    cg.count = 20;
+    
+    parser.token_count = 5;
+    try assert_eq_i32(parser.token_count, 5);
+}
+
+fn test_local_pointer() !void {
+    var codegen: CodeGen = CodeGen{ count: 0, name: null };
+    const ptr: &CodeGen = &codegen;
+    
+    try expect(ptr.count == 0);
+    
+    ptr.count = 30;
+    try assert_eq_i32(codegen.count, 30);
+}
+
+fn test_safe_identifier_pointer() !void {
+    var codegen: CodeGen = CodeGen{ count: 0, name: null };
+    const st_atime: &CodeGen = &codegen;
+
+    try expect(st_atime.count == 0);
+
+    st_atime.count = 35;
+    try assert_eq_i32(codegen.count, 35);
+}
+
+fn test_struct_pointer_field() !void {
+    var codegen: CodeGen = CodeGen{ count: 0, name: null };
+    var parser: Parser = Parser{ codegen: &codegen, token_count: 0 };
+    
+    const count: i32 = parser.codegen.count;
+    try assert_eq_i32(count, 0);
+    
+    parser.codegen.count = 40;
+    try assert_eq_i32(parser.codegen.count, 40);
+}
+
+fn test_deep_nested_pointer_chain() !void {
+    var codegen: CodeGen = CodeGen{ count: 0, name: null };
+    var parser: Parser = Parser{ codegen: &codegen, token_count: 0 };
+    var holder: Holder = Holder{ parser: &parser };
+
+    try assert_eq_i32(holder.parser.codegen.count, 0);
+    holder.parser.codegen.count = 50;
+    try assert_eq_i32(codegen.count, 50);
+    try assert_eq_i32(holder.parser.codegen.count, 50);
+}
+
+fn test_self_nested_pointer_chain() !void {
+    var codegen: CodeGen = CodeGen{ count: 0, name: null };
+    var parser: Parser = Parser{ codegen: &codegen, token_count: 0 };
+    var holder: Holder = Holder{ parser: &parser };
+    var accessor: Accessor = Accessor{ holder: &holder };
+
+    try assert_eq_i32(accessor.read_count(), 0);
+    accessor.write_count(60);
+    try assert_eq_i32(codegen.count, 60);
+    try assert_eq_i32(accessor.read_count(), 60);
+}
+
+export fn main() i32 {
+    test_suite_begin("C99 Pointer Access Tests");
+    run_test("single pointer", test_single_pointer);
+    run_test("nested pointer", test_nested_pointer);
+    run_test("local pointer", test_local_pointer);
+    run_test("safe identifier pointer", test_safe_identifier_pointer);
+    run_test("struct pointer field", test_struct_pointer_field);
+    run_test("deep nested pointer chain", test_deep_nested_pointer_chain);
+    run_test("self nested pointer chain", test_self_nested_pointer_chain);
+    return test_suite_end();
+}

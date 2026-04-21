@@ -1,0 +1,84 @@
+// test_task_std_async.uya - 验证 std.async 提供 Task<T> 与 interface Future<T>
+// 设计见 docs/std_async_design.md 阶段 2；TDD：先写测试，再实现。
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+test "task_ready_poll_returns_ready" {
+    const t: Task<i32> = task_ready(42);
+    const w: Waker = Waker{};
+    const p: Poll<i32> = t.poll(&w);
+    var result: i32 = 0 - 1;
+    match p {
+        .Ready(x) => { result = x; },
+        .Pending(_) => { result = 0 - 2; },
+    };
+    try assert_eq_i32(result, 42);
+}
+
+test "task_ready_ok_i32_poll_returns_ok_branch" {
+    const t: Task<!i32> = task_ready_ok<i32>(17);
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = t.poll(&w);
+    var result: i32 = 0 - 3;
+    match p {
+        .Ready(v) => { result = v catch { 0 - 4; }; },
+        .Pending(_) => { result = 0 - 5; },
+    };
+    try assert_eq_i32(result, 17);
+}
+
+test "task_ready_ok_u32_poll_returns_ok_branch" {
+    const t: Task<!u32> = task_ready_ok<u32>(99 as u32);
+    const w: Waker = Waker{};
+    const p: Poll<!u32> = t.poll(&w);
+    var result: u32 = 0 as u32;
+    match p {
+        .Ready(v) => { result = v catch { 0 as u32; }; },
+        .Pending(_) => { result = 1 as u32; },
+    };
+    try assert_eq_i32(result as i32, 99);
+}
+
+test "task_ready_ok_usize_poll_returns_ok_branch" {
+    const t: Task<!usize> = task_ready_ok<usize>(1001 as usize);
+    const w: Waker = Waker{};
+    const p: Poll<!usize> = t.poll(&w);
+    var result: usize = 0 as usize;
+    match p {
+        .Ready(v) => { result = v catch { 0 as usize; }; },
+        .Pending(_) => { result = 1 as usize; },
+    };
+    try assert_eq_i32(result as i32, 1001);
+}
+
+struct PollReadyOkI32Probe : Future<!i32> {
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        _ = self;
+        _ = waker;
+        return poll_ready_ok<i32>(55);
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+test "poll_ready_ok_i32_helper_in_poll" {
+    const f: Future<!i32> = PollReadyOkI32Probe{};
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = f.poll(&w);
+    var result: i32 = 0 - 1;
+    match p {
+        .Ready(v) => { result = v catch { 0 - 2; }; },
+        .Pending(_) => { result = 0 - 3; },
+    };
+    try assert_eq_i32(result, 55);
+}
+
+test "future_ready_ok_i32_block_on" {
+    const f: Future<!i32> = future_ready_ok<i32>(88);
+    const bo: !i32 = block_on<i32>(f);
+    const result: i32 = bo catch { 0 - 1; };
+    try assert_eq_i32(result, 88);
+}

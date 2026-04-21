@@ -1,0 +1,40 @@
+// test_syscall_thread.uya - syscall 层线程测试
+// 测试 sys_gettid, sys_getpid
+
+use libc.sys_getpid;
+use libc.sys_gettid;
+use std.testing.expect;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+test "sys_gettid_basic" {
+    // 获取线程 ID
+    const tid: i32 = try sys_gettid();
+    // 线程 ID 应该 > 0
+    try expect(tid > 0);
+}
+
+test "tid_pid_relationship" {
+    // 测试线程 ID 和进程 ID 的关系
+    const pid: i64 = try sys_getpid();
+    const tid: i32 = try sys_gettid();
+    
+    // 在主线程中，线程 ID 通常等于进程 ID
+    // 但这取决于具体的实现，所以我们只验证两者都是有效的
+    try expect(pid > 0);
+    try expect(tid > 0);
+}
+
+test "sys_gettid_positive" {
+    // 测试获取的线程 ID 是正数
+    const tid1: i32 = try sys_gettid();
+    const tid2: i32 = try sys_gettid();
+    
+    // 两次获取的线程 ID 应该相等（同一线程）
+    try expect(tid1 == tid2);
+    
+    // 线程 ID 应该是正数
+    try expect(tid1 > 0);
+}

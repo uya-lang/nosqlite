@@ -1,0 +1,46 @@
+// 函数调用返回指针类型测试程序
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Node {
+    value: i32,
+    next: &Node,
+}
+
+fn create_node(value: i32) &Node {
+    return null;
+}
+
+fn get_ptr(x: &i32) &i32 {
+    return x;
+}
+
+fn test_return_null_ptr() !void {
+    var node_ptr: &Node = create_node(42);
+    try expect(node_ptr == null);
+}
+
+fn test_return_valid_ptr() !void {
+    var x: i32 = 10;
+    var ptr: &i32 = get_ptr(&x);
+    try expect(ptr != null);
+    try assert_eq_i32(*ptr, 10);
+}
+
+fn test_as_var_init() !void {
+    var node_ptr2: &Node = create_node(100);
+    try expect(node_ptr2 == null);
+}
+
+export fn main() i32 {
+    test_suite_begin("Function Call Pointer Return Tests");
+    run_test("return null ptr", test_return_null_ptr);
+    run_test("return valid ptr", test_return_valid_ptr);
+    run_test("as var init", test_as_var_init);
+    return test_suite_end();
+}

@@ -1,0 +1,14 @@
+// 移动语义：移动后的变量不能再次使用（规范 §12.5.4）
+// 预期：编译失败，错误信息含「已被移动」或「不能再次使用」
+
+struct S {
+  id: i32
+}
+
+fn main() i32 {
+  const a: S = S{ id: 42 };
+  const b: S = a;
+  const x: i32 = b.id;
+  const y: i32 = a.id;
+  return 0;
+}

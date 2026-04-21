@@ -1,0 +1,103 @@
+// 枚举类型作为返回值测试程序
+use std.runtime.entry;
+// 测试枚举类型作为函数返回类型的功能
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+enum Color {
+    RED,
+    GREEN,
+    BLUE,
+}
+
+enum Status {
+    PENDING = 1,
+    RUNNING = 2,
+    COMPLETED = 3,
+}
+
+enum Priority {
+    LOW = 10,
+    MEDIUM = 20,
+    HIGH = 30,
+}
+
+fn get_red() Color {
+    return Color.RED;
+}
+
+fn get_green() Color {
+    return Color.GREEN;
+}
+
+fn get_blue() Color {
+    return Color.BLUE;
+}
+
+fn get_status_by_value(value: i32) Status {
+    if value == 1 {
+        return Status.PENDING;
+    } else if value == 2 {
+        return Status.RUNNING;
+    } else {
+        return Status.COMPLETED;
+    }
+}
+
+fn get_priority_by_level(level: i32) Priority {
+    if level < 15 {
+        return Priority.LOW;
+    } else if level < 25 {
+        return Priority.MEDIUM;
+    } else {
+        return Priority.HIGH;
+    }
+}
+
+fn get_default_color() Color {
+    return get_red();
+}
+
+fn check_color_match(c: Color) bool {
+    return c == Color.RED;
+}
+
+fn test_return_enum_values() !void {
+    try expect(get_red() == Color.RED);
+    try expect(get_green() == Color.GREEN);
+    try expect(get_blue() == Color.BLUE);
+}
+
+fn test_conditional_return() !void {
+    try expect(get_status_by_value(1) == Status.PENDING);
+    try expect(get_status_by_value(2) == Status.RUNNING);
+    try expect(get_status_by_value(3) == Status.COMPLETED);
+}
+
+fn test_priority_by_level() !void {
+    try expect(get_priority_by_level(10) == Priority.LOW);
+    try expect(get_priority_by_level(20) == Priority.MEDIUM);
+    try expect(get_priority_by_level(30) == Priority.HIGH);
+}
+
+fn test_nested_function_return() !void {
+    try expect(get_default_color() == Color.RED);
+}
+
+fn test_return_and_compare() !void {
+    try expect(check_color_match(Color.RED) == true);
+    try expect(check_color_match(Color.GREEN) == false);
+}
+
+export fn main() i32 {
+    test_suite_begin("Enum Return Tests");
+    run_test("return enum values", test_return_enum_values);
+    run_test("conditional return", test_conditional_return);
+    run_test("priority by level", test_priority_by_level);
+    run_test("nested function return", test_nested_function_return);
+    run_test("return and compare", test_return_and_compare);
+    return test_suite_end();
+}

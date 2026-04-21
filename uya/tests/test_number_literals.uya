@@ -1,0 +1,56 @@
+// 测试不同进制的整数字面量和下划线分隔符
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+test "decimal" {
+    const dec1: i32 = 42;
+    const dec2: i32 = 1_000_000;
+    const dec3: i32 = 123_456_789;
+    
+    try assert_eq_i32(dec1, 42);
+    try assert_eq_i32(dec2, 1000000);
+    try assert_eq_i32(dec3, 123456789);
+}
+
+test "hexadecimal" {
+    const hex1: i32 = 0xFF;
+    const hex2: i32 = 0x1A2B;
+    const hex3: i32 = 0xDEAD_BEEF;
+    const hex4: i32 = 0Xabcd;
+    
+    try assert_eq_i32(hex1, 255);
+    try assert_eq_i32(hex2, 6699);
+    try assert_eq_i32(hex3, -559038737);  // 0xDEADBEEF 作为有符号 i32
+    try assert_eq_i32(hex4, 43981);
+}
+
+test "octal" {
+    const oct1: i32 = 0o755;
+    const oct2: i32 = 0O644;
+    const oct3: i32 = 0o7_777;
+    
+    try assert_eq_i32(oct1, 493);   // 0o755 = 493
+    try assert_eq_i32(oct2, 420);   // 0O644 = 420
+    try assert_eq_i32(oct3, 4095);  // 0o7777 = 4095
+}
+
+test "binary" {
+    const bin1: i32 = 0b1010;
+    const bin2: i32 = 0B11110000;
+    const bin3: i32 = 0b1111_0000_1010_0101;
+    
+    try assert_eq_i32(bin1, 10);     // 0b1010 = 10
+    try assert_eq_i32(bin2, 240);    // 0b11110000 = 240
+    try assert_eq_i32(bin3, 61605);  // = 61605
+}
+
+test "float underscore" {
+    const float1: f64 = 1_000.5;
+    const float2: f64 = 3.141_592_653;
+    const float3: f64 = 1.0e1_0;
+    
+    try expect(float1 > 999.9 && float1 < 1000.6);
+    try expect(float2 > 3.14 && float2 < 3.15);
+    try expect(float3 > 1.0e9);
+}

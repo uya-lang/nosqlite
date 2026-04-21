@@ -1,0 +1,44 @@
+// 测试 Uya 函数导出给 C 调用（完整示例）
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+// 导出简单函数给 C 调用
+export fn uya_add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+export fn uya_multiply(a: i32, b: i32) i32 {
+    return a * b;
+}
+
+// 导出带字符串的函数
+export fn uya_strlen(s: &const byte) i32 {
+    var len: i32 = 0;
+    while s[len] != 0 as byte {
+        len = len + 1;
+    }
+    return len;
+}
+
+// 导出 void 函数
+export fn uya_print_answer() void {
+}
+
+// 内部函数（C 无法调用）
+fn internal_func(x: i32) i32 {
+    return x * 2;
+}
+
+test "test_export_functions" {
+    try assert_eq_i32(uya_add(10, 20), 30);
+    try assert_eq_i32(uya_multiply(5, 6), 30);
+    try assert_eq_i32(internal_func(21), 42);
+}
+
+test "test_strlen" {
+    const test_str: [byte: 6] = [72, 101, 108, 108, 111, 0];  // "Hello\0"
+    const len: i32 = uya_strlen(&test_str[0] as &byte);
+    try assert_eq_i32(len, 5);
+}

@@ -1,0 +1,36 @@
+// SIMD：@vector(i16, 4) 算术与比较
+type Vec4i16 = @vector(i16, 4);
+type Mask4 = @mask(4);
+
+export fn main() i32 {
+    const a: Vec4i16 = @vector.splat(100);
+    const b: Vec4i16 = @vector.splat(23);
+    const s: Vec4i16 = a + b;
+    const ok: Mask4 = s == @vector.splat(123);
+    if @vector.all(ok) == false {
+        return 1;
+    }
+    const d: Vec4i16 = a - b;
+    const ok2: Mask4 = d == @vector.splat(77);
+    if @vector.all(ok2) == false {
+        return 2;
+    }
+    const p: Vec4i16 = b * @vector.splat(4);
+    const ok3: Mask4 = p == @vector.splat(92);
+    if @vector.all(ok3) == false {
+        return 3;
+    }
+    const n: Vec4i16 = -a;
+    if @vector.all(n == @vector.splat(-100)) == false {
+        return 4;
+    }
+    const ne_m: Mask4 = a != b;
+    if @vector.all(ne_m) == false {
+        return 5;
+    }
+    const lt_m: Mask4 = b < a;
+    if @vector.all(lt_m) == false {
+        return 6;
+    }
+    return 0;
+}

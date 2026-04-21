@@ -1,0 +1,45 @@
+// 测试指针转换函数实现指针算术
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+test "ptr arithmetic" {
+    var arr: [i32: 5] = [];
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[2] = 30;
+    arr[3] = 40;
+    arr[4] = 50;
+    
+    const base_ptr: &i32 = &arr[0];
+    const base_addr: usize = @usize_from_ptr(base_ptr as &void);
+    
+    const i32_size: usize = @size_of(i32);
+    const second_addr: usize = base_addr + i32_size;
+    const second_ptr: &void = @ptr_from_usize(second_addr);
+    
+    const second_value_ptr: &i32 = second_ptr as &i32;
+    const second_value: i32 = second_value_ptr[0];
+    
+    try assert_eq_i32(second_value, 20);
+    
+    const third_addr: usize = base_addr + i32_size * 2;
+    const third_ptr: &i32 = @ptr_from_usize(third_addr) as &i32;
+    const third_value: i32 = third_ptr[0];
+    
+    try assert_eq_i32(third_value, 30);
+}
+
+test "ptr diff" {
+    var arr: [i32: 5] = [10, 20, 30, 40, 50];
+    
+    const ptr1: &i32 = &arr[0];
+    const ptr2: &i32 = &arr[2];
+    const addr1: usize = @usize_from_ptr(ptr1 as &void);
+    const addr2: usize = @usize_from_ptr(ptr2 as &void);
+    const diff: usize = addr2 - addr1;
+    const i32_size: usize = @size_of(i32);
+    const expected_diff: usize = i32_size * 2;
+    
+    try expect(diff == expected_diff);
+}

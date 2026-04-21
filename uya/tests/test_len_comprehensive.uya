@@ -1,0 +1,75 @@
+use std.testing.expect;
+use std.runtime.entry;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_basic_array_len() !void {
+    var arr1: [i32: 3] = [1, 2, 3];
+    const len1: i32 = @len(arr1);
+    try assert_eq_i32(len1, 3);
+}
+
+fn test_different_types() !void {
+    var arr2: [byte: 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    const len2: i32 = @len(arr2);
+    try assert_eq_i32(len2, 10);
+}
+
+fn test_single_element() !void {
+    var arr3: [i32: 1] = [42];
+    const len3: i32 = @len(arr3);
+    try assert_eq_i32(len3, 1);
+}
+
+fn test_large_array() !void {
+    var arr4: [i32: 100] = [];
+    const len4: i32 = @len(arr4);
+    try assert_eq_i32(len4, 100);
+}
+
+fn test_len_in_loop() !void {
+    var arr5: [i32: 5] = [1, 2, 3, 4, 5];
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    while i < @len(arr5) {
+        sum = sum + arr5[i];
+        i = i + 1;
+    }
+    try assert_eq_i32(sum, 15);
+}
+
+fn test_len_vs_sizeof() !void {
+    var arr6: [i32: 4] = [1, 2, 3, 4];
+    const size6: i32 = @size_of(arr6);
+    const len6: i32 = @len(arr6);
+    try assert_eq_i32(size6, 16);
+    try assert_eq_i32(len6, 4);
+}
+
+fn test_const_array() !void {
+    const arr7: [i32: 7] = [1, 2, 3, 4, 5, 6, 7];
+    const len7: i32 = @len(arr7);
+    try assert_eq_i32(len7, 7);
+}
+
+fn test_len_in_conditional() !void {
+    var arr8: [i32: 2] = [1, 2];
+    const len8: i32 = @len(arr8);
+    try assert_eq_i32(len8, 2);
+    try expect(@len(arr8) == 2);
+}
+
+export fn main() i32 {
+    test_suite_begin("Len Comprehensive Tests");
+    run_test("basic array len", test_basic_array_len);
+    run_test("different types", test_different_types);
+    run_test("single element", test_single_element);
+    run_test("large array", test_large_array);
+    run_test("len in loop", test_len_in_loop);
+    run_test("len vs sizeof", test_len_vs_sizeof);
+    run_test("const array", test_const_array);
+    run_test("len in conditional", test_len_in_conditional);
+    return test_suite_end();
+}

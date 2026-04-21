@@ -1,0 +1,90 @@
+// test_stdlib.uya - stdlib 模块测试
+use std.runtime.entry;
+// 使用 lib/std/testing.uya 测试框架
+
+use libc.malloc;
+use libc.free;
+use libc.abs;
+use libc.labs;
+use libc.strtoul;
+
+// 导入测试框架
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_i64;
+use std.testing.assert_eq_u64;
+use std.testing.expect_not_null;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// ============================================================
+// abs/labs 测试
+// ============================================================
+
+fn test_abs() !void {
+    try assert_eq_i32(abs(42), 42);
+    try assert_eq_i32(abs(0 - 42), 42);
+    try assert_eq_i32(abs(0), 0);
+    try assert_eq_i32(abs(2147483647), 2147483647);
+}
+
+fn test_labs() !void {
+    try assert_eq_i64(labs(123456789), 123456789);
+    try assert_eq_i64(labs(0 - 123456789), 123456789);
+    try assert_eq_i64(labs(0), 0);
+}
+
+// ============================================================
+// strtoul 测试
+// ============================================================
+
+fn test_strtoul_decimal() !void {
+    const v: u64 = strtoul("12345\0" as &const byte, null as & &const byte, 10);
+    try assert_eq_u64(v, 12345);
+}
+
+fn test_strtoul_hex() !void {
+    const v: u64 = strtoul("ff\0" as &const byte, null as & &const byte, 16);
+    try assert_eq_u64(v, 255);
+}
+
+fn test_strtoul_octal() !void {
+    const v: u64 = strtoul("777\0" as &const byte, null as & &const byte, 8);
+    try assert_eq_u64(v, 511);
+}
+
+fn test_strtoul_zero() !void {
+    const v: u64 = strtoul("0\0" as &const byte, null as & &const byte, 10);
+    try assert_eq_u64(v, 0);
+}
+
+// ============================================================
+// malloc/free 测试
+// ============================================================
+
+fn test_malloc_free() !void {
+    const ptr: *byte = malloc(100);
+    try expect_not_null(ptr as &byte);
+    
+    defer {
+        free(ptr);
+    }
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    test_suite_begin("libc.stdlib");
+
+    run_test("abs", test_abs);
+    run_test("labs", test_labs);
+    run_test("strtoul decimal", test_strtoul_decimal);
+    run_test("strtoul hex", test_strtoul_hex);
+    run_test("strtoul octal", test_strtoul_octal);
+    run_test("strtoul zero", test_strtoul_zero);
+    run_test("malloc/free", test_malloc_free);
+
+    return test_suite_end();
+}

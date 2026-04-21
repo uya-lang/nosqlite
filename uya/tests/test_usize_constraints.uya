@@ -1,0 +1,97 @@
+// test_usize_constraints.uya - usize 类型约束测试
+use std.runtime.entry;
+//
+// 功能：验证 usize 类型变量能够正确参与约束系统，
+//       自动获得 >= 0 的下界约束（无符号语义）。
+//
+// 测试场景：
+// 1. usize 变量用于数组索引，编译器能证明安全（因为 usize >= 0）
+// 2. usize 变量用于数组索引，只需检查上界
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 测试：usize 索引只需检查上界（下界自动为 0）
+fn test_usize_upper_bound_only() !void {
+    var arr: [i32: 10] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    var i: usize = 5 as usize;
+    
+    // usize 类型自动满足 i >= 0，只需检查上界
+    if i < 10 as usize {
+        arr[i] = 42;
+    }
+    
+    try assert_eq_i32(arr[5], 42);
+}
+
+// 测试：usize 索引在循环中使用
+fn test_usize_loop_index() !void {
+    var arr: [i32: 5] = [0, 0, 0, 0, 0];
+    var sum: i32 = 0;
+    
+    // for 循环中 usize 索引
+    for 0..5 |idx| {
+        arr[idx] = (idx as i32) + 1;
+        sum = sum + arr[idx];
+    }
+    
+    try assert_eq_i32(sum, 15);  // 1+2+3+4+5 = 15
+}
+
+// 测试：usize 索引的嵌套条件
+fn test_usize_nested_if() !void {
+    var arr: [i32: 10] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    var i: usize = 3 as usize;
+    
+    // 嵌套条件：外层检查下界（可选），内层检查上界
+    if i >= 0 as usize {  // 这对 usize 总是成立，但编译器应该能识别
+        if i < 10 as usize {
+            arr[i] = 100;
+        }
+    }
+    
+    try assert_eq_i32(arr[3], 100);
+}
+
+// 测试：usize 索引与线性表达式
+fn test_usize_linear_expr() !void {
+    var arr: [i32: 20] = [0: 20];
+    var base: usize = 5 as usize;
+    
+    // 线性表达式：arr[base + 3]
+    // 需要 base >= 0（自动满足）且 base + 3 < 20
+    // 即 base < 17
+    if base < 17 as usize {
+        arr[base + 3 as usize] = 42;
+    }
+    
+    try assert_eq_i32(arr[8], 42);
+}
+
+// 测试：usize 变量递增后仍满足约束
+fn test_usize_increment() !void {
+    var arr: [i32: 10] = [0: 10];
+    var i: usize = 0 as usize;
+    
+    // 循环递增
+    while i < 10 as usize {
+        arr[i] = (i as i32) * 2;
+        i = i + 1 as usize;
+    }
+    
+    try assert_eq_i32(arr[0], 0);
+    try assert_eq_i32(arr[5], 10);
+    try assert_eq_i32(arr[9], 18);
+}
+
+export fn main() i32 {
+    test_suite_begin("Usize Constraints Tests");
+    run_test("usize upper bound only", test_usize_upper_bound_only);
+    run_test("usize loop index", test_usize_loop_index);
+    run_test("usize nested if", test_usize_nested_if);
+    run_test("usize linear expr", test_usize_linear_expr);
+    run_test("usize increment", test_usize_increment);
+    return test_suite_end();
+}

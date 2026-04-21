@@ -1,0 +1,32 @@
+use std.testing.assert_eq_i32;
+
+test "basic len" {
+    var arr: [i32: 5] = [1, 2, 3, 4, 5];
+    const len_val: i32 = @len(arr);
+    try assert_eq_i32(len_val, 5);
+}
+
+test "different types" {
+    var bytes: [byte: 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    const byte_len: i32 = @len(bytes);
+    try assert_eq_i32(byte_len, 10);
+}
+
+test "len in loop" {
+    var arr: [i32: 5] = [1, 2, 3, 4, 5];
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    while i < @len(arr) {
+        sum = sum + arr[i];
+        i = i + 1;
+    }
+    try assert_eq_i32(sum, 15);
+}
+
+test "len vs sizeof" {
+    var arr: [i32: 5] = [1, 2, 3, 4, 5];
+    const arr_size: i32 = @size_of(arr);
+    const arr_len: i32 = @len(arr);
+    try assert_eq_i32(arr_size, 20);
+    try assert_eq_i32(arr_len, 5);
+}

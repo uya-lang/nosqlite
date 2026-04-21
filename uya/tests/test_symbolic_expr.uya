@@ -1,0 +1,70 @@
+// test_symbolic_expr.uya - 符号表达式索引测试
+use std.runtime.entry;
+// 
+// 功能：验证编译器能够处理 var + constant 形式的数组索引
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_var_plus_const() !void {
+    var arr: [i32: 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    var i: i32 = 3;
+    
+    // arr[i + 1] 需要 i >= -1 && i < 9
+    // 当前 i = 3，满足条件
+    if i >= 0 {
+        if i < 9 {
+            try assert_eq_i32(arr[i + 1], 4);
+        }
+    }
+}
+
+fn test_var_minus_const() !void {
+    var arr: [i32: 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    var i: i32 = 5;
+    
+    // arr[i - 1] 需要 i >= 1 && i < 11
+    // 当前 i = 5，满足条件
+    if i >= 1 {
+        if i < 10 {
+            try assert_eq_i32(arr[i - 1], 4);
+        }
+    }
+}
+
+fn test_const_plus_var() !void {
+    var arr: [i32: 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    var i: i32 = 2;
+    
+    // arr[1 + i] 需要 i >= -1 && i < 9
+    // 当前 i = 2，满足条件
+    if i >= 0 {
+        if i < 9 {
+            try assert_eq_i32(arr[1 + i], 3);
+        }
+    }
+}
+
+fn test_for_with_offset() !void {
+    var arr: [i32: 10] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    
+    // 使用 arr[i + 1] 在循环中赋值
+    for 0..9 |i| {
+        // i >= 0 && i < 9，所以 i + 1 在 [1, 9] 范围内
+        arr[i + 1] = i * 2 + 1;
+    }
+    
+    try assert_eq_i32(arr[1], 1);
+    try assert_eq_i32(arr[9], 17);
+}
+
+export fn main() i32 {
+    test_suite_begin("Symbolic Expression Tests");
+    run_test("var plus const", test_var_plus_const);
+    run_test("var minus const", test_var_minus_const);
+    run_test("const plus var", test_const_plus_var);
+    run_test("for with offset", test_for_with_offset);
+    return test_suite_end();
+}

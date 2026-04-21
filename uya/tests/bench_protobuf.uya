@@ -1,0 +1,211 @@
+// bench_protobuf.uya - Protobuf wire / 类型化 decode+encode 性能基准
+// 内嵌负载与 test_protobuf_encode_basic、test_protobuf_packed 对齐；gettimeofday 墙钟微秒；decode 每轮 arena_reset。
+// 运行：与 tests 其它 bench 一样由 run_programs_parallel 编译执行，退出码 0 即通过。
+//
+// 参考：docs/todo_protobuf.md Benchmark；计时方式对齐 tests/bench_json.uya（不用 clock()）。
+
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.mem.arena.arena_reset;
+use std.protobuf.demo.DemoIntList;
+use std.protobuf.demo.DemoUser;
+use std.protobuf.demo.PbI32Strip;
+use std.protobuf.demo.PbStrView;
+use std.protobuf.decode.decode_demo_int_list;
+use std.protobuf.decode.decode_demo_user;
+use std.protobuf.encode.encode_demo_int_list_packed_to;
+use std.protobuf.encode.encode_demo_user_to;
+use std.protobuf.wire.PbCursor;
+use std.protobuf.wire.pb_cursor;
+use std.protobuf.wire.pb_read_varint_u64;
+use std.protobuf.wire.pb_skip_field;
+use std.protobuf.wire.pb_tag_field_number;
+use std.protobuf.wire.pb_tag_wire_type;
+use std.protobuf.wire.pb_validate_field_number;
+use std.protobuf.wire.pb_buf_store_u32_le_at;
+
+extern "libc" fn printf(fmt: *byte, ...) i32;
+
+struct BenchTv {
+    tv_sec: i64,
+    tv_usec: i64,
+}
+
+const SYS_GETTIMEOFDAY: i64 = 96;
+const USEC_PER_SEC: i64 = 1000000;
+
+fn bench_usec_now() i64 {
+    var tv: BenchTv = BenchTv{ tv_sec: 0, tv_usec: 0 };
+    const gr: !i64 = @syscall(SYS_GETTIMEOFDAY, (&tv) as i64, 0);
+    _ = gr catch { return 0; };
+    return tv.tv_sec * USEC_PER_SEC + tv.tv_usec;
+}
+
+const MB_F: f64 = 1048576.0;
+
+// 64 组「field1 varint 1」: 每对 08 01，共 128 字节，扫一遍即 64 次 tag+skip(varint)
+const TAG_SCAN_CAP: usize = 128;
+
+fn wire_scan_message(ptr: &byte, buf_len: usize) !void {
+    var c: PbCursor = pb_cursor(ptr, buf_len);
+    while true {
+        if c.pos >= c.len {
+            break;
+        }
+        const key: u64 = try pb_read_varint_u64(&c);
+        const field: u32 = pb_tag_field_number(key);
+        const wt: u32 = pb_tag_wire_type(key);
+        try pb_validate_field_number(field);
+        try pb_skip_field(&c, wt);
+    }
+}
+
+export fn main() i32 {
+    var tag_scan: [byte: TAG_SCAN_CAP] = [];
+    var k: usize = 0;
+    while k + 1 < TAG_SCAN_CAP {
+        tag_scan[k] = 8;
+        tag_scan[k + 1] = 1;
+        k = k + 2;
+    }
+
+    const WIRE_SCAN_ITER: i32 = 80000;
+    var start: i64 = bench_usec_now();
+    var wi: i32 = 0;
+    while wi < WIRE_SCAN_ITER {
+        wire_scan_message(&tag_scan[0], TAG_SCAN_CAP) catch {
+            return 1;
+        };
+        wi = wi + 1;
+    }
+    var end: i64 = bench_usec_now();
+    const wire_ticks: i64 = end - start;
+    const wire_total: i64 = (TAG_SCAN_CAP as i64) * (WIRE_SCAN_ITER as i64);
+    var wire_sec: f64 = 1.0;
+    if wire_ticks > 0 {
+        wire_sec = (wire_ticks as f64) / (USEC_PER_SEC as f64);
+    }
+    const wire_mbs: f64 = (wire_total as f64) / (wire_sec * MB_F);
+    printf("bench_protobuf: wire scan %d x %zu B (64x varint/tag) => %ld usec (%.4f MB/s)\n" as *byte,
+           WIRE_SCAN_ITER, TAG_SCAN_CAP, wire_ticks, wire_mbs);
+
+    var arena_buf: [byte: 4096] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 4096);
+
+    var nm: [byte: 4] = [ 120, 121, 122, 0 ];
+    const du: DemoUser = DemoUser{
+        id: -7 as i64,
+        name: PbStrView{ ptr: &nm[0], len: 3 },
+        active: false,
+    };
+    var user_out: [byte: 64] = [];
+    const user_enc: usize = encode_demo_user_to(&du, &user_out[0], 64) catch {
+        return 2;
+    };
+    _ = decode_demo_user(&a, &user_out[0], user_enc) catch {
+        return 3;
+    };
+    arena_reset(&a);
+
+    const USER_DEC_ITER: i32 = 50000;
+    start = bench_usec_now();
+    var ui: i32 = 0;
+    while ui < USER_DEC_ITER {
+        arena_reset(&a);
+        const _u: DemoUser = decode_demo_user(&a, &user_out[0], user_enc) catch {
+            return 4;
+        };
+        ui = ui + 1;
+    }
+    end = bench_usec_now();
+    const udec_ticks: i64 = end - start;
+    const udec_total: i64 = (user_enc as i64) * (USER_DEC_ITER as i64);
+    var udec_sec: f64 = 1.0;
+    if udec_ticks > 0 {
+        udec_sec = (udec_ticks as f64) / (USEC_PER_SEC as f64);
+    }
+    const udec_mbs: f64 = (udec_total as f64) / (udec_sec * MB_F);
+    printf("bench_protobuf: decode_demo_user %d x %zu B => %ld usec (%.4f MB/s)\n" as *byte,
+           USER_DEC_ITER, user_enc, udec_ticks, udec_mbs);
+
+    const USER_ENC_ITER: i32 = 50000;
+    start = bench_usec_now();
+    ui = 0;
+    while ui < USER_ENC_ITER {
+        const _n: usize = encode_demo_user_to(&du, &user_out[0], 64) catch {
+            return 5;
+        };
+        ui = ui + 1;
+    }
+    end = bench_usec_now();
+    const uenc_ticks: i64 = end - start;
+    const uenc_total: i64 = (user_enc as i64) * (USER_ENC_ITER as i64);
+    var uenc_sec: f64 = 1.0;
+    if uenc_ticks > 0 {
+        uenc_sec = (uenc_ticks as f64) / (USEC_PER_SEC as f64);
+    }
+    const uenc_mbs: f64 = (uenc_total as f64) / (uenc_sec * MB_F);
+    printf("bench_protobuf: encode_demo_user_to %d x ~%zu B => %ld usec (%.4f MB/s)\n" as *byte,
+           USER_ENC_ITER, user_enc, uenc_ticks, uenc_mbs);
+
+    var nb: [byte: 32] = [];
+    var ii: usize = 0;
+    while ii < 8 {
+        pb_buf_store_u32_le_at(&nb[0], ii * 4, (ii + 1) as u32);
+        ii = ii + 1;
+    }
+    const lst: DemoIntList = DemoIntList{ nums: PbI32Strip{ data: &nb[0], count: 8 } };
+    var packed: [byte: 128] = [];
+    const plen: usize = encode_demo_int_list_packed_to(&lst, &packed[0], 128) catch {
+        return 6;
+    };
+    _ = decode_demo_int_list(&a, &packed[0], plen) catch {
+        return 7;
+    };
+    arena_reset(&a);
+
+    const PACK_DEC_ITER: i32 = 40000;
+    start = bench_usec_now();
+    var pi: i32 = 0;
+    while pi < PACK_DEC_ITER {
+        arena_reset(&a);
+        const _d: DemoIntList = decode_demo_int_list(&a, &packed[0], plen) catch {
+            return 8;
+        };
+        pi = pi + 1;
+    }
+    end = bench_usec_now();
+    const pdec_ticks: i64 = end - start;
+    const pdec_total: i64 = (plen as i64) * (PACK_DEC_ITER as i64);
+    var pdec_sec: f64 = 1.0;
+    if pdec_ticks > 0 {
+        pdec_sec = (pdec_ticks as f64) / (USEC_PER_SEC as f64);
+    }
+    const pdec_mbs: f64 = (pdec_total as f64) / (pdec_sec * MB_F);
+    printf("bench_protobuf: decode_demo_int_list packed %d x %zu B (8xi32) => %ld usec (%.4f MB/s)\n" as *byte,
+           PACK_DEC_ITER, plen, pdec_ticks, pdec_mbs);
+
+    const PACK_ENC_ITER: i32 = 50000;
+    start = bench_usec_now();
+    pi = 0;
+    while pi < PACK_ENC_ITER {
+        const _pe: usize = encode_demo_int_list_packed_to(&lst, &packed[0], 128) catch {
+            return 9;
+        };
+        pi = pi + 1;
+    }
+    end = bench_usec_now();
+    const penc_ticks: i64 = end - start;
+    const penc_total: i64 = (plen as i64) * (PACK_ENC_ITER as i64);
+    var penc_sec: f64 = 1.0;
+    if penc_ticks > 0 {
+        penc_sec = (penc_ticks as f64) / (USEC_PER_SEC as f64);
+    }
+    const penc_mbs: f64 = (penc_total as f64) / (penc_sec * MB_F);
+    printf("bench_protobuf: encode_demo_int_list_packed_to %d x ~%zu B => %ld usec (%.4f MB/s)\n" as *byte,
+           PACK_ENC_ITER, plen, penc_ticks, penc_mbs);
+
+    return 0;
+}

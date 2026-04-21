@@ -1,0 +1,40 @@
+// 测试比较运算符
+use std.runtime.entry;
+
+use std.testing.assert;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+fn test_greater_than() !void {
+    const x: i32 = 10;
+    try assert(x > 0, "10 should be greater than 0");
+}
+
+fn test_modulo() !void {
+    const x: i32 = 10;
+    try assert((x % 2) == 0, "10 % 2 should be 0");
+}
+
+fn test_combined() !void {
+    const x: i32 = 10;
+    try assert(x > 0 && (x % 2) == 0, "10 is positive and even");
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    test_suite_begin("Compare Simple Tests");
+    
+    run_test("greater_than", test_greater_than);
+    run_test("modulo", test_modulo);
+    run_test("combined", test_combined);
+    
+    return test_suite_end();
+}

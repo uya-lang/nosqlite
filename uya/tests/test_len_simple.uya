@@ -1,0 +1,17 @@
+use std.testing.assert_eq_i32;
+use std.runtime.entry;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_len_simple() !void {
+    var arr: [i32: 3] = [1, 2, 3];
+    const len_val: i32 = @len(arr);
+    try assert_eq_i32(len_val, 3);
+}
+
+export fn main() i32 {
+    test_suite_begin("Len Simple Tests");
+    run_test("len simple", test_len_simple);
+    return test_suite_end();
+}

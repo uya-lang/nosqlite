@@ -1,0 +1,30 @@
+// 测试 FFI 指针转换功能
+use std.runtime.entry;
+// 验证 &T as *T 的转换是否正常工作
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+// 声明外部函数，用于测试 FFI 指针
+extern fn test_ffi_ptr(ptr: *Point) i32;
+extern "libc" fn puts(s: *byte) i32;
+
+export fn main() i32 {
+    // 创建一个结构体实例
+    var p: Point = Point{ x: 10, y: 20 };
+    
+    // 获取结构体的普通指针
+    var ptr: &Point = &p;
+    
+    // 将普通指针转换为 FFI 指针并传递给外部函数
+    const result: i32 = test_ffi_ptr(ptr as *Point);
+    
+    // 测试字符串字面量（本身就是 *byte 类型）
+    const str_result: i32 = puts("FFI pointer cast test passed!");
+    if str_result < 0 {
+        return 1;
+    }
+    return 0;  // 程序成功执行
+}

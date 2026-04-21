@@ -1,0 +1,71 @@
+// test_block_on.uya
+// 测试 std.async.block_on：同步运行 Future<!T> 直到 Ready
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+fn ready(v: i32) Future<!i32> {
+    const p: Poll<!i32> = Poll<!i32>.Ready(ok<i32>(v));
+    return Future<!i32>{ state: p };
+}
+
+fn ready_u32(v: u32) Future<!u32> {
+    const p: Poll<!u32> = Poll<!u32>.Ready(ok<u32>(v));
+    return Future<!u32>{ state: p };
+}
+
+@async_fn
+fn two_awaits() Future<!i32> {
+    const a: i32 = try @await ready(1);
+    const b: i32 = try @await ready(2);
+    return a + b;
+}
+
+var block_on_reset_poll_count: i32 = 0;
+
+struct WakeThenCheckReset : Future<!i32> {
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        _ = self;
+        if block_on_reset_poll_count == 0 {
+            block_on_reset_poll_count = block_on_reset_poll_count + 1;
+            waker.wake();
+            return Poll<!i32>.Pending({});
+        }
+        block_on_reset_poll_count = block_on_reset_poll_count + 1;
+        if waker.is_woken() {
+            return Poll<!i32>.Ready(ok<i32>(0 - 1));
+        }
+        return Poll<!i32>.Ready(ok<i32>(7));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+fn wake_then_check_reset_future() Future<!i32> {
+    return WakeThenCheckReset{};
+}
+
+test "block_on_runs_until_ready" {
+    const f: Future<!i32> = two_awaits();
+    const bo: !i32 = block_on<i32>(f);
+    const result: i32 = bo catch { 0 - 1; };
+    try assert_eq_i32(result, 3);
+}
+
+test "block_on_resets_waker_between_polls" {
+    block_on_reset_poll_count = 0;
+    const f: Future<!i32> = wake_then_check_reset_future();
+    const bo: !i32 = block_on<i32>(f);
+    const result: i32 = bo catch { 0 - 2; };
+    try assert_eq_i32(result, 7);
+    try assert_eq_i32(block_on_reset_poll_count, 2);
+}
+
+test "block_on_u32_runs_until_ready" {
+    const f: Future<!u32> = ready_u32(9 as u32);
+    const bo: !u32 = block_on<u32>(f);
+    const result: u32 = bo catch { 0 as u32; };
+    try assert_eq_i32(result as i32, 9);
+}

@@ -1,0 +1,98 @@
+// 容器状态与轮询调度桩
+
+use kernel.container;
+use kernel.scheduler;
+use std.testing.assert_eq_i32;
+
+test "scheduler_init_all_empty_no_runnable" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+
+    var none: i32 = 0;
+    const pick: u32 = scheduler_pick_next_rr(&sch) catch |err| {
+        none = 1;
+        0u32;
+    };
+    try assert_eq_i32(none, 1);
+}
+
+test "scheduler_rr_two_ready_round_robin" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+    try scheduler_set_slot_state(&sch, 2, ContainerState.cs_ready);
+    try scheduler_set_slot_state(&sch, 5, ContainerState.cs_ready);
+
+    const a: u32 = try scheduler_pick_next_rr(&sch);
+    try assert_eq_i32(a as i32, 2);
+    const b: u32 = try scheduler_pick_next_rr(&sch);
+    try assert_eq_i32(b as i32, 5);
+    const c: u32 = try scheduler_pick_next_rr(&sch);
+    try assert_eq_i32(c as i32, 2);
+}
+
+test "scheduler_running_is_runnable" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+    try scheduler_set_slot_state(&sch, 0, ContainerState.cs_running);
+
+    const a: u32 = try scheduler_pick_next_rr(&sch);
+    try assert_eq_i32(a as i32, 0);
+}
+
+test "scheduler_higher_priority_preempts_lower" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+    try scheduler_set_slot_state(&sch, 1, ContainerState.cs_ready);
+    try scheduler_set_slot_state(&sch, 4, ContainerState.cs_ready);
+    try scheduler_set_priority(&sch, 1, 200);
+    try scheduler_set_priority(&sch, 4, 32);
+
+    const next: u32 = try scheduler_pick_next_rr(&sch);
+    try assert_eq_i32(next as i32, 4);
+}
+
+test "scheduler_same_priority_still_round_robins" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+    try scheduler_set_slot_state(&sch, 1, ContainerState.cs_ready);
+    try scheduler_set_slot_state(&sch, 4, ContainerState.cs_ready);
+    try scheduler_set_priority(&sch, 1, 16);
+    try scheduler_set_priority(&sch, 4, 16);
+
+    const a: u32 = try scheduler_pick_next_rr(&sch);
+    try assert_eq_i32(a as i32, 1);
+    const b: u32 = try scheduler_pick_next_rr(&sch);
+    try assert_eq_i32(b as i32, 4);
+    const c: u32 = try scheduler_pick_next_rr(&sch);
+    try assert_eq_i32(c as i32, 1);
+}
+
+test "scheduler_priority_clamps_to_255" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+    try scheduler_set_slot_state(&sch, 2, ContainerState.cs_ready);
+    try scheduler_set_slot_state(&sch, 6, ContainerState.cs_ready);
+    try scheduler_set_priority(&sch, 2, 1024);
+    try scheduler_set_priority(&sch, 6, 254);
+
+    const next: u32 = try scheduler_pick_next_rr(&sch);
+    try assert_eq_i32(next as i32, 6);
+}
+
+test "scheduler_invalid_slot_state" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+
+    var bad: i32 = 0;
+    _ = scheduler_set_slot_state(&sch, 8, ContainerState.cs_ready) catch |err| {
+        bad = 1;
+    };
+    try assert_eq_i32(bad, 1);
+}
+
+test "container_state_runnable_bitmap" {
+    try assert_eq_i32(container_state_is_runnable(ContainerState.cs_ready), 1);
+    try assert_eq_i32(container_state_is_runnable(ContainerState.cs_running), 1);
+    try assert_eq_i32(container_state_is_runnable(ContainerState.cs_empty), 0);
+    try assert_eq_i32(container_state_is_runnable(ContainerState.cs_blocked), 0);
+}

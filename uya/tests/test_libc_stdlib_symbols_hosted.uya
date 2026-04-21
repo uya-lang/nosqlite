@@ -1,0 +1,7 @@
+use std.testing.assert_eq_i64;
+use libc.strtol;
+
+test "libc stdlib symbols compile in hosted mode" {
+    const parsed: i64 = strtol("123" as *const byte, null, 10);
+    try assert_eq_i64(parsed, 123);
+}

@@ -1,0 +1,42 @@
+// 测试逻辑与返回值
+use std.runtime.entry;
+
+use std.testing.assert;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+fn test_and_true() !void {
+    try assert(true && true, "true && true should be true");
+}
+
+fn test_and_false() !void {
+    try assert(!(true && false), "true && false should be false");
+}
+
+fn test_and_short_circuit() !void {
+    // 短路求值测试
+    var evaluated: i32 = 0;
+    if false && (evaluated = 1) != 0 {
+        // 不应该执行
+    }
+    try assert(evaluated == 0, "short circuit should prevent evaluation");
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    test_suite_begin("And Return Tests");
+    
+    run_test("and_true", test_and_true);
+    run_test("and_false", test_and_false);
+    run_test("and_short_circuit", test_and_short_circuit);
+    
+    return test_suite_end();
+}

@@ -1,0 +1,39 @@
+// test_bool.uya - 布尔类型测试
+// 使用 lib/std/testing.uya 测试框架
+
+use std.testing.assert;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+test "bool_true" {
+    const b: bool = true;
+    try assert(b, "true should be true");
+}
+
+test "bool_false" {
+    const b: bool = false;
+    try assert(b == false, "false should be false");
+}
+
+test "bool_not" {
+    const t: bool = true;
+    const f: bool = false;
+    try assert(!t == false, "!true should be false");
+    try assert(!f == true, "!false should be true");
+}
+
+test "bool_and" {
+    try assert(true && true, "true && true should be true");
+    try assert((true && false) == false, "true && false should be false");
+    try assert((false && true) == false, "false && true should be false");
+    try assert((false && false) == false, "false && false should be false");
+}
+
+test "bool_or" {
+    try assert(true || true, "true || true should be true");
+    try assert(true || false, "true || false should be true");
+    try assert(false || true, "false || true should be true");
+    try assert((false || false) == false, "false || false should be false");
+}

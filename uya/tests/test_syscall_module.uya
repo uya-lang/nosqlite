@@ -1,0 +1,31 @@
+// test_syscall_module.uya
+use std.runtime.entry;
+// 测试多个使用 @syscall 的函数（确保不会重复定义 err_union 结构体）
+// 注意：不得命名为 sys_write/sys_getpid，会与 entry→async 链引入的 libc/syscall 导出 C 符号冲突。
+
+const SYS_write: i64 = 1;
+const SYS_getpid: i64 = 39;
+
+fn test_module_syscall_write(fd: i64, buf: i64, count: i64) !i64 {
+    const result: !i64 = @syscall(SYS_write, fd, buf, count);
+    return result;
+}
+
+fn test_module_syscall_getpid() !i64 {
+    const result: !i64 = @syscall(SYS_getpid);
+    return result;
+}
+
+export fn main() i32 {
+    const msg: *byte = "Test!\n";
+    _ = test_module_syscall_write(1, msg as i64, 6) catch {
+        return 1;
+    };
+    
+    _ = test_module_syscall_getpid() catch {
+        return 2;
+    };
+    
+    return 0;
+}
+

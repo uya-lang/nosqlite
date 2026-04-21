@@ -1,0 +1,38 @@
+// 测试 std.json 编码：null、bool、数字、字符串
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.value.JsonStrView;
+use std.json.encoder.encode_to;
+
+export fn main() i32 {
+    var buf: [byte: 64] = [];
+
+    const vn: JsonValue = JsonValue.json_null();
+    const n_len: usize = encode_to(&vn, &buf[0], 64) catch { return 1; };
+    if n_len != 4 { return 2; }
+    if buf[0] != 110 || buf[1] != 117 || buf[2] != 108 || buf[3] != 108 { return 3; }
+
+    const vt: JsonValue = JsonValue.bool_val(true);
+    const t_len: usize = encode_to(&vt, &buf[0], 64) catch { return 4; };
+    if t_len != 4 { return 5; }
+    if buf[0] != 116 || buf[1] != 114 || buf[2] != 117 || buf[3] != 101 { return 6; }
+
+    const vf: JsonValue = JsonValue.bool_val(false);
+    const f_len: usize = encode_to(&vf, &buf[0], 64) catch { return 7; };
+    if f_len != 5 { return 8; }
+
+    const vi: JsonValue = JsonValue.int_val(123);
+    const i_len: usize = encode_to(&vi, &buf[0], 64) catch { return 9; };
+    if i_len != 3 { return 10; }
+    if buf[0] != 49 || buf[1] != 50 || buf[2] != 51 { return 11; }
+
+    var str_buf: [byte: 4] = [];
+    str_buf[0] = 97;
+    const view: JsonStrView = JsonStrView{ ptr: &str_buf[0], len: 1 };
+    const vs: JsonValue = JsonValue.str(view);
+    const s_len: usize = encode_to(&vs, &buf[0], 64) catch { return 12; };
+    if s_len != 3 { return 13; }
+    if buf[0] != 34 || buf[1] != 97 || buf[2] != 34 { return 14; }
+
+    return 0;
+}

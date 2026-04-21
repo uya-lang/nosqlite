@@ -1,0 +1,83 @@
+// test_crypto_md5.uya — MD5 RFC 1321 向量
+
+use std.crypto.md5;
+use std.testing.assert_eq_i32;
+
+fn hex_eq(digest: &[byte], expect_ascii: &[byte]) bool {
+    const hex: &[byte] = &"0123456789abcdef"[0: 16];
+    if expect_ascii.len != digest.len * 2 {
+        return false;
+    }
+    var i: usize = 0;
+    while i < digest.len {
+        const hi: usize = (digest.ptr[i] >> 4) as usize;
+        const lo: usize = (digest.ptr[i] & 15) as usize;
+        if expect_ascii.ptr[i * 2] != hex.ptr[hi] {
+            return false;
+        }
+        if expect_ascii.ptr[i * 2 + 1] != hex.ptr[lo] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+test "md5_empty" {
+    var z: [byte: 4] = [];
+    const empty: &[byte] = z[0: 0];
+    var d: [byte: 16] = [];
+    md5_digest(empty, d[0: 16]);
+    const exp: &[byte] = &"d41d8cd98f00b204e9800998ecf8427e"[0: 32];
+    if !hex_eq(d[0: 16], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "md5_abc" {
+    var d: [byte: 16] = [];
+    const data: &[byte] = &"abc"[0: 3];
+    md5_digest(data, d[0: 16]);
+    const exp: &[byte] = &"900150983cd24fb0d6963f7d28e17f72"[0: 32];
+    if !hex_eq(d[0: 16], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "md5_message_digest" {
+    var d: [byte: 16] = [];
+    const data: &[byte] = &"message digest"[0: 14];
+    md5_digest(data, d[0: 16]);
+    const exp: &[byte] = &"f96b697d7cb7938d525a2f31aaf161d0"[0: 32];
+    if !hex_eq(d[0: 16], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "md5_alnum_two_block_padding" {
+    var d: [byte: 16] = [];
+    const data: &[byte] = &"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"[0: 62];
+    md5_digest(data, d[0: 16]);
+    const exp: &[byte] = &"d174ab98d277d9f5a5611c2c9f419d9f"[0: 32];
+    if !hex_eq(d[0: 16], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "md5_short_buffer_no_write" {
+    var buf: [byte: 32] = [];
+    var i: usize = 0;
+    while i < 32 {
+        buf[i] = 0xab as byte;
+        i = i + 1;
+    }
+    const data: &[byte] = &"abc"[0: 3];
+    md5_digest(data, buf[0: 15]);
+    var j: usize = 0;
+    while j < 32 {
+        if buf[j] != (0xab as byte) {
+            try assert_eq_i32(0, 1);
+        }
+        j = j + 1;
+    }
+}

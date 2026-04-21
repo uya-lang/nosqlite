@@ -1,0 +1,14 @@
+// 回归：仅 f32×2 @vector.select → 生成 select_f32x2，不生成 x4 等其它 select 定义
+type V2f = @vector(f32, 2);
+
+export fn main() i32 {
+    const a: V2f = @vector.splat(1.0f32);
+    const b: V2f = @vector.splat(4.0f32);
+    const m: @mask(2) = a < b;
+    const z: V2f = @vector.splat(0.0f32);
+    const r: V2f = @vector.select(m, a, z);
+    if @vector.all(r == a) == false {
+        return 1;
+    }
+    return 0;
+}

@@ -1,0 +1,103 @@
+// 测试用宏生成方法
+// 验证 mc 宏在结构体方法块内的基本功能
+
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.testing.assert_eq_i32;
+use std.runtime.entry;
+
+// ========================================
+// 测试 1：宏生成普通方法（非泛型）
+// ========================================
+
+mc gen_getter() struct {
+    @mc_code(@mc_ast(
+        fn get_value(self: &Self) i32 {
+            return self.value;
+        }
+    ));
+}
+
+struct Container {
+    value: i32,
+}
+
+Container {
+    gen_getter();
+}
+
+fn test_basic_method() !void {
+    const c: Container = Container{ value: 42 };
+    try assert_eq_i32(c.get_value(), 42);
+}
+
+// ========================================
+// 测试 2：宏生成带参数的方法
+// ========================================
+
+mc gen_setter() struct {
+    @mc_code(@mc_ast(
+        fn set_value(self: &Self, val: i32) void {
+            self.value = val;
+        }
+    ));
+}
+
+struct Box {
+    value: i32,
+}
+
+Box {
+    gen_setter();
+}
+
+fn test_setter_method() !void {
+    var b: Box = Box{ value: 0 };
+    b.set_value(100);
+    try assert_eq_i32(b.value, 100);
+}
+
+// ========================================
+// 测试 3：多个宏生成多个方法
+// ========================================
+
+mc gen_get_first() struct {
+    @mc_code(@mc_ast(
+        fn get_first(self: &Self) i32 {
+            return self.first;
+        }
+    ));
+}
+
+mc gen_get_second() struct {
+    @mc_code(@mc_ast(
+        fn get_second(self: &Self) i32 {
+            return self.second;
+        }
+    ));
+}
+
+struct Pair {
+    first: i32,
+    second: i32,
+}
+
+Pair {
+    gen_get_first();
+    gen_get_second();
+}
+
+fn test_multi_methods() !void {
+    const p: Pair = Pair{ first: 10, second: 20 };
+    try assert_eq_i32(p.get_first(), 10);
+    try assert_eq_i32(p.get_second(), 20);
+}
+
+export fn main() i32 {
+    test_suite_begin("Macro Method Generation Tests");
+    run_test("basic_method", test_basic_method);
+    run_test("setter_method", test_setter_method);
+    run_test("multi_methods", test_multi_methods);
+    return test_suite_end();
+}

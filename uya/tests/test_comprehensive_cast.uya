@@ -1,0 +1,43 @@
+// 测试各种类型转换，包括 FFI 指针转换
+use std.runtime.entry;
+struct Node {
+    id: i32,
+}
+
+// 外部函数声明
+extern fn tn(node: *Node) i32;
+extern fn pt(s: *byte) i32;
+
+export fn main() i32 {
+    // 基础类型转换测试
+    const num: i32 = 256;
+    const byte_val: byte = num as byte;  // i32 as byte
+    const back_to_i32: i32 = byte_val as i32;  // byte as i32
+
+    const flag: bool = num as bool;  // i32 as bool
+    const back_to_num: i32 = flag as i32;  // bool as i32
+
+    // 指针转换测试
+    var node: Node = Node{ id: 1 };
+    var node_ptr: &Node = &node;  // 普通指针
+
+    // &T as *T 转换（这是关键的 FFI 指针转换）
+    var ffi_node_ptr: *Node = node_ptr as *Node;
+
+    // 调用外部函数，传入转换后的 FFI 指针
+    const visit_result: i32 = tn(ffi_node_ptr);
+
+    // 直接在函数调用中进行转换
+    const direct_visit: i32 = tn(&node as *Node);
+
+    // 字符串字面量测试（本身就是 *byte 类型）
+    const print_result: i32 = pt("Testing pointer conversions!");
+
+    // 计算最终结果
+    const final_result: i32 = visit_result + direct_visit + print_result + back_to_num;
+
+    if final_result != 4 {
+        return 1;
+    }
+    return 0;  // 程序成功执行
+}

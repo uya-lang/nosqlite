@@ -1,0 +1,511 @@
+
+// test_wchar.uya - 宽字符函数测试
+// 测试 lib/libc/wchar.uya 中的宽字符处理函数
+
+use libc.wchar;
+use std.testing.test_suite_begin;
+use std.testing.test_pass;
+use std.testing.test_fail;
+use std.testing.test_suite_end;
+use std.testing.expect;
+
+// ============================================================
+// 测试 1: mblen - 获取多字节字符长度
+// ============================================================
+fn test_mblen_ascii() !void {
+    // 测试 ASCII 字符 (1字节)
+    var s1: [byte:2] = [65, 0];  // 'A'
+    const len1: i32 = mblen(&s1[0], 2);
+    try expect(len1 == 1);
+}
+
+fn test_mblen_utf8_2bytes() !void {
+    // 测试 UTF-8 2字节字符
+    var s2: [byte:3] = [0xC3, 0xA9, 0];  // 'é'
+    const len2: i32 = mblen(&s2[0], 3);
+    try expect(len2 == 2);
+}
+
+fn test_mblen_utf8_3bytes() !void {
+    // 测试 UTF-8 3字节字符
+    var s3: [byte:4] = [0xE4, 0xB8, 0xAD, 0];  // '中'
+    const len3: i32 = mblen(&s3[0], 4);
+    try expect(len3 == 3);
+}
+
+fn test_mblen_utf8_4bytes() !void {
+    // 测试 UTF-8 4字节字符
+    var s4: [byte:5] = [0xF0, 0x9F, 0x98, 0x80, 0];  // emoji
+    const len4: i32 = mblen(&s4[0], 5);
+    try expect(len4 == 4);
+}
+
+fn test_mblen_null() !void {
+    // 测试 null 指针
+    const len: i32 = mblen(null as &byte, 10);
+    try expect(len == 0);
+}
+
+fn test_mblen_insufficient_bytes() !void {
+    // 测试字节不足的情况
+    var s: [byte:3] = [0xE4, 0xB8, 0];  // 需要3字节但只提供2
+    const len: i32 = mblen(&s[0], 2);
+    try expect(len == 0 - 1);
+}
+
+// ============================================================
+// 测试 2: mbtowc - 多字节字符转宽字符
+// ============================================================
+fn test_mbtowc_ascii() !void {
+    var s: [byte:2] = [65, 0];  // 'A'
+    var wc: wchar_t = 0;
+    const len: i32 = mbtowc(&wc, &s[0], 2);
+    try expect(len == 1);
+    try expect(wc == 65 as wchar_t);
+}
+
+fn test_mbtowc_utf8_2bytes() !void {
+    var s: [byte:3] = [0xC3, 0xA9, 0];  // 'é' (U+00E9)
+    var wc: wchar_t = 0;
+    const len: i32 = mbtowc(&wc, &s[0], 3);
+    try expect(len == 2);
+    try expect(wc == 0x00E9 as wchar_t);
+}
+
+fn test_mbtowc_utf8_3bytes() !void {
+    // 测试 UTF-8 3字节字符（使用 U+4E00）
+    var s: [byte:4] = [0xE4, 0xB8, 0x80, 0];  // '一' (U+4E00)
+    var wc: wchar_t = 0;
+    const len: i32 = mbtowc(&wc, &s[0], 4);
+    try expect(len == 3);
+    try expect(wc == 0x4E00 as wchar_t);
+}
+
+fn test_mbtowc_null_pwc() !void {
+    var s: [byte:2] = [65, 0];  // 'A'
+    const len: i32 = mbtowc(null as &wchar_t, &s[0], 2);
+    try expect(len == 1);
+}
+
+// ============================================================
+// 测试 3: wctomb - 宽字符转多字节字符
+// ============================================================
+fn test_wctomb_ascii() !void {
+    var buf: [byte:5] = [];
+    const len: i32 = wctomb(&buf[0], 65);  // 'A'
+    try expect(len == 1);
+    try expect(buf[0] == 65);
+}
+
+fn test_wctomb_utf8_2bytes() !void {
+    var buf: [byte:5] = [];
+    const len: i32 = wctomb(&buf[0], 0x00E9);  // 'é'
+    try expect(len == 2);
+    try expect(buf[0] == 0xC3);
+    try expect(buf[1] == 0xA9);
+}
+
+fn test_wctomb_utf8_3bytes() !void {
+    var buf: [byte:5] = [];
+    const len: i32 = wctomb(&buf[0], 0x4E00);  // '一'
+    try expect(len == 3);
+    try expect(buf[0] == 0xE4);
+    try expect(buf[1] == 0xB8);
+    try expect(buf[2] == 0x80);
+}
+
+fn test_wctomb_null() !void {
+    const len: i32 = wctomb(null as &byte, 65);
+    try expect(len == 0);
+}
+
+// ============================================================
+// 测试 4: mbstowcs - 多字节字符串转宽字符串
+// ============================================================
+fn test_mbstowcs_ascii() !void {
+    var mbstr: [byte:6] = [72, 101, 108, 108, 111, 0];  // "Hello"
+    var wcstr: [wchar_t:10] = [];
+    const count: usize = mbstowcs(&wcstr[0], &mbstr[0], 10);
+    try expect(count == 5);
+    try expect(wcstr[0] == 72 as wchar_t);  // 'H'
+    try expect(wcstr[1] == 101 as wchar_t); // 'e'
+    try expect(wcstr[2] == 108 as wchar_t); // 'l'
+    try expect(wcstr[3] == 108 as wchar_t); // 'l'
+    try expect(wcstr[4] == 111 as wchar_t); // 'o'
+    try expect(wcstr[5] == 0 as wchar_t);   // 终止符
+}
+
+fn test_mbstowcs_utf8() !void {
+    var mbstr: [byte:10] = [72, 101, 0xC3, 0xA9, 108, 108, 111, 0, 0, 0];  // "Héllo" (6 chars)
+    var wcstr: [wchar_t:10] = [];
+    const count: usize = mbstowcs(&wcstr[0], &mbstr[0], 10);
+    try expect(count == 6);
+    try expect(wcstr[0] == 72 as wchar_t);     // 'H'
+    try expect(wcstr[1] == 101 as wchar_t);    // 'e'
+    try expect(wcstr[2] == 0x00E9 as wchar_t); // 'é'
+    try expect(wcstr[3] == 108 as wchar_t);    // 'l'
+    try expect(wcstr[4] == 108 as wchar_t);    // 'l'
+    try expect(wcstr[5] == 111 as wchar_t);    // 'o'
+}
+
+// ============================================================
+// 测试 5: wcstombs - 宽字符串转多字节字符串
+// ============================================================
+fn test_wcstombs_ascii() !void {
+    var wcstr: [wchar_t:6] = [72, 101, 108, 108, 111, 0];  // "Hello"
+    var mbstr: [byte:10] = [];
+    const count: usize = wcstombs(&mbstr[0], &wcstr[0], 10);
+    try expect(count == 5);
+    try expect(mbstr[0] == 72);  // 'H'
+    try expect(mbstr[1] == 101); // 'e'
+    try expect(mbstr[2] == 108); // 'l'
+    try expect(mbstr[3] == 108); // 'l'
+    try expect(mbstr[4] == 111); // 'o'
+    try expect(mbstr[5] == 0);   // 终止符
+}
+
+fn test_wcstombs_utf8() !void {
+    var wcstr: [wchar_t:6] = [72, 101, 0x00E9, 108, 108, 0];  // "Héllo"
+    var mbstr: [byte:10] = [];
+    const count: usize = wcstombs(&mbstr[0], &wcstr[0], 10);
+    try expect(count == 6);
+    try expect(mbstr[0] == 72);    // 'H'
+    try expect(mbstr[1] == 101);   // 'e'
+    try expect(mbstr[2] == 0xC3);  // 'é' 第1字节
+    try expect(mbstr[3] == 0xA9);  // 'é' 第2字节
+    try expect(mbstr[4] == 108);   // 'l'
+    try expect(mbstr[5] == 108);   // 'l'
+}
+
+// ============================================================
+// 测试 6: wcslen - 宽字符串长度
+// ============================================================
+fn test_wcslen_empty() !void {
+    var wcstr: [wchar_t:1] = [0];
+    const len: usize = wcslen(&wcstr[0]);
+    try expect(len == 0);
+}
+
+fn test_wcslen_ascii() !void {
+    var wcstr: [wchar_t:6] = [72, 101, 108, 108, 111, 0];  // "Hello"
+    const len: usize = wcslen(&wcstr[0]);
+    try expect(len == 5);
+}
+
+fn test_wcslen_null() !void {
+    const len: usize = wcslen(null as &wchar_t);
+    try expect(len == 0);
+}
+
+// ============================================================
+// 测试 7: wcscpy - 宽字符串复制
+// ============================================================
+fn test_wcscpy_basic() !void {
+    var src: [wchar_t:6] = [72, 101, 108, 108, 111, 0];  // "Hello"
+    var dest: [wchar_t:10] = [];
+    const result: &wchar_t = wcscpy(&dest[0], &src[0]);
+    try expect(result == &dest[0]);
+    try expect(dest[0] == 72 as wchar_t);  // 'H'
+    try expect(dest[1] == 101 as wchar_t); // 'e'
+    try expect(dest[2] == 108 as wchar_t); // 'l'
+    try expect(dest[3] == 108 as wchar_t); // 'l'
+    try expect(dest[4] == 111 as wchar_t); // 'o'
+    try expect(dest[5] == 0 as wchar_t);   // 终止符
+}
+
+// ============================================================
+// 测试 8: wcscat - 宽字符串连接
+// ============================================================
+fn test_wcscat_basic() !void {
+    var dest: [wchar_t:20] = [72, 105, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];  // "Hi"
+    var src: [wchar_t:7] = [32, 84, 104, 101, 114, 101, 0];  // " There"
+    const result: &wchar_t = wcscat(&dest[0], &src[0]);
+    try expect(result == &dest[0]);
+    try expect(dest[0] == 72 as wchar_t);   // 'H'
+    try expect(dest[1] == 105 as wchar_t);  // 'i'
+    try expect(dest[2] == 32 as wchar_t);   // ' '
+    try expect(dest[3] == 84 as wchar_t);   // 'T'
+    try expect(dest[4] == 104 as wchar_t);  // 'h'
+    try expect(dest[5] == 101 as wchar_t);  // 'e'
+    try expect(dest[6] == 114 as wchar_t);  // 'r'
+    try expect(dest[7] == 101 as wchar_t);  // 'e'
+    try expect(dest[8] == 0 as wchar_t);    // 终止符
+}
+
+// ============================================================
+// 测试 9: wcscmp - 宽字符串比较
+// ============================================================
+fn test_wcscmp_equal() !void {
+    var s1: [wchar_t:6] = [72, 101, 108, 108, 111, 0];  // "Hello"
+    var s2: [wchar_t:6] = [72, 101, 108, 108, 111, 0];  // "Hello"
+    const result: i32 = wcscmp(&s1[0], &s2[0]);
+    try expect(result == 0);
+}
+
+fn test_wcscmp_less() !void {
+    var s1: [wchar_t:6] = [72, 101, 108, 108, 111, 0];  // "Hello"
+    var s2: [wchar_t:6] = [87, 111, 114, 108, 100, 0];  // "World"
+    const result: i32 = wcscmp(&s1[0], &s2[0]);
+    try expect(result < 0);
+}
+
+fn test_wcscmp_greater() !void {
+    var s1: [wchar_t:6] = [87, 111, 114, 108, 100, 0];  // "World"
+    var s2: [wchar_t:6] = [72, 101, 108, 108, 111, 0];  // "Hello"
+    const result: i32 = wcscmp(&s1[0], &s2[0]);
+    try expect(result > 0);
+}
+
+fn test_wcscmp_null() !void {
+    var s1: [wchar_t:6] = [72, 101, 108, 108, 111, 0];  // "Hello"
+    const result1: i32 = wcscmp(null as &wchar_t, null as &wchar_t);
+    try expect(result1 == 0);
+
+    const result2: i32 = wcscmp(null as &wchar_t, &s1[0]);
+    try expect(result2 < 0);
+
+    const result3: i32 = wcscmp(&s1[0], null as &wchar_t);
+    try expect(result3 > 0);
+}
+
+// ============================================================
+// 测试 10: iswalpha - 宽字符是否为字母
+// ============================================================
+fn test_iswalpha_uppercase() !void {
+    try expect(iswalpha(65) != 0);   // 'A'
+    try expect(iswalpha(90) != 0);   // 'Z'
+}
+
+fn test_iswalpha_lowercase() !void {
+    try expect(iswalpha(97) != 0);   // 'a'
+    try expect(iswalpha(122) != 0);  // 'z'
+}
+
+fn test_iswalpha_non_alpha() !void {
+    try expect(iswalpha(48) == 0);   // '0'
+    try expect(iswalpha(32) == 0);   // ' '
+    try expect(iswalpha(64) == 0);   // '@'
+}
+
+// ============================================================
+// 测试 11: iswdigit - 宽字符是否为数字
+// ============================================================
+fn test_iswdigit_digits() !void {
+    try expect(iswdigit(48) != 0);   // '0'
+    try expect(iswdigit(57) != 0);   // '9'
+}
+
+fn test_iswdigit_non_digit() !void {
+    try expect(iswdigit(65) == 0);   // 'A'
+    try expect(iswdigit(32) == 0);   // ' '
+    try expect(iswdigit(64) == 0);   // '@'
+}
+
+// ============================================================
+// 测试 12: iswalnum - 宽字符是否为字母或数字
+// ============================================================
+fn test_iswalnum_alpha() !void {
+    try expect(iswalnum(65) != 0);   // 'A'
+    try expect(iswalnum(122) != 0);  // 'z'
+}
+
+fn test_iswalnum_digit() !void {
+    try expect(iswalnum(48) != 0);   // '0'
+    try expect(iswalnum(57) != 0);   // '9'
+}
+
+fn test_iswalnum_non_alnum() !void {
+    try expect(iswalnum(32) == 0);   // ' '
+    try expect(iswalnum(64) == 0);   // '@'
+}
+
+// ============================================================
+// 测试 13: iswspace - 宽字符是否为空白
+// ============================================================
+fn test_iswspace_space() !void {
+    try expect(iswspace(32) != 0);   // ' '
+}
+
+fn test_iswspace_tab() !void {
+    try expect(iswspace(9) != 0);    // '\t'
+}
+
+fn test_iswspace_newline() !void {
+    try expect(iswspace(10) != 0);   // '\n'
+}
+
+fn test_iswspace_carriage_return() !void {
+    try expect(iswspace(13) != 0);   // '\r'
+}
+
+fn test_iswspace_non_space() !void {
+    try expect(iswspace(65) == 0);   // 'A'
+    try expect(iswspace(48) == 0);   // '0'
+}
+
+// ============================================================
+// 测试 14: towlower - 宽字符转小写
+// ============================================================
+fn test_towlower_uppercase() !void {
+    try expect(towlower(65) == 97);   // 'A' -> 'a'
+    try expect(towlower(90) == 122);  // 'Z' -> 'z'
+}
+
+fn test_towlower_lowercase() !void {
+    try expect(towlower(97) == 97);   // 'a' -> 'a'
+    try expect(towlower(122) == 122); // 'z' -> 'z'
+}
+
+fn test_towlower_non_alpha() !void {
+    try expect(towlower(48) == 48);   // '0' -> '0'
+    try expect(towlower(32) == 32);   // ' ' -> ' '
+}
+
+// ============================================================
+// 测试 15: towupper - 宽字符转大写
+// ============================================================
+fn test_towupper_lowercase() !void {
+    try expect(towupper(97) == 65);   // 'a' -> 'A'
+    try expect(towupper(122) == 90);  // 'z' -> 'Z'
+}
+
+fn test_towupper_uppercase() !void {
+    try expect(towupper(65) == 65);   // 'A' -> 'A'
+    try expect(towupper(90) == 90);   // 'Z' -> 'Z'
+}
+
+fn test_towupper_non_alpha() !void {
+    try expect(towupper(48) == 48);   // '0' -> '0'
+    try expect(towupper(32) == 32);   // ' ' -> ' '
+}
+
+// ============================================================
+// 主测试函数
+// ============================================================
+export fn main() i32 {
+    test_suite_begin("Wchar Tests");
+
+    // mblen 测试
+    test_mblen_ascii() catch { test_fail("test_mblen_ascii"); };
+    test_pass("test_mblen_ascii");
+    test_mblen_utf8_2bytes() catch { test_fail("test_mblen_utf8_2bytes"); };
+    test_pass("test_mblen_utf8_2bytes");
+    test_mblen_utf8_3bytes() catch { test_fail("test_mblen_utf8_3bytes"); };
+    test_pass("test_mblen_utf8_3bytes");
+    test_mblen_utf8_4bytes() catch { test_fail("test_mblen_utf8_4bytes"); };
+    test_pass("test_mblen_utf8_4bytes");
+    test_mblen_null() catch { test_fail("test_mblen_null"); };
+    test_pass("test_mblen_null");
+    test_mblen_insufficient_bytes() catch { test_fail("test_mblen_insufficient_bytes"); };
+    test_pass("test_mblen_insufficient_bytes");
+
+    // mbtowc 测试
+    test_mbtowc_ascii() catch { test_fail("test_mbtowc_ascii"); };
+    test_pass("test_mbtowc_ascii");
+    test_mbtowc_utf8_2bytes() catch { test_fail("test_mbtowc_utf8_2bytes"); };
+    test_pass("test_mbtowc_utf8_2bytes");
+    test_mbtowc_utf8_3bytes() catch { test_fail("test_mbtowc_utf8_3bytes"); };
+    test_pass("test_mbtowc_utf8_3bytes");
+    test_mbtowc_null_pwc() catch { test_fail("test_mbtowc_null_pwc"); };
+    test_pass("test_mbtowc_null_pwc");
+
+    // wctomb 测试
+    test_wctomb_ascii() catch { test_fail("test_wctomb_ascii"); };
+    test_pass("test_wctomb_ascii");
+    test_wctomb_utf8_2bytes() catch { test_fail("test_wctomb_utf8_2bytes"); };
+    test_pass("test_wctomb_utf8_2bytes");
+    test_wctomb_utf8_3bytes() catch { test_fail("test_wctomb_utf8_3bytes"); };
+    test_pass("test_wctomb_utf8_3bytes");
+    test_wctomb_null() catch { test_fail("test_wctomb_null"); };
+    test_pass("test_wctomb_null");
+
+    // mbstowcs 测试
+    test_mbstowcs_ascii() catch { test_fail("test_mbstowcs_ascii"); };
+    test_pass("test_mbstowcs_ascii");
+    test_mbstowcs_utf8() catch { test_fail("test_mbstowcs_utf8"); };
+    test_pass("test_mbstowcs_utf8");
+
+    // wcstombs 测试
+    test_wcstombs_ascii() catch { test_fail("test_wcstombs_ascii"); };
+    test_pass("test_wcstombs_ascii");
+    test_wcstombs_utf8() catch { test_fail("test_wcstombs_utf8"); };
+    test_pass("test_wcstombs_utf8");
+
+    // wcslen 测试
+    test_wcslen_empty() catch { test_fail("test_wcslen_empty"); };
+    test_pass("test_wcslen_empty");
+    test_wcslen_ascii() catch { test_fail("test_wcslen_ascii"); };
+    test_pass("test_wcslen_ascii");
+    test_wcslen_null() catch { test_fail("test_wcslen_null"); };
+    test_pass("test_wcslen_null");
+
+    // wcscpy 测试
+    test_wcscpy_basic() catch { test_fail("test_wcscpy_basic"); };
+    test_pass("test_wcscpy_basic");
+
+    // wcscat 测试
+    test_wcscat_basic() catch { test_fail("test_wcscat_basic"); };
+    test_pass("test_wcscat_basic");
+
+    // wcscmp 测试
+    test_wcscmp_equal() catch { test_fail("test_wcscmp_equal"); };
+    test_pass("test_wcscmp_equal");
+    test_wcscmp_less() catch { test_fail("test_wcscmp_less"); };
+    test_pass("test_wcscmp_less");
+    test_wcscmp_greater() catch { test_fail("test_wcscmp_greater"); };
+    test_pass("test_wcscmp_greater");
+    test_wcscmp_null() catch { test_fail("test_wcscmp_null"); };
+    test_pass("test_wcscmp_null");
+
+    // iswalpha 测试
+    test_iswalpha_uppercase() catch { test_fail("test_iswalpha_uppercase"); };
+    test_pass("test_iswalpha_uppercase");
+    test_iswalpha_lowercase() catch { test_fail("test_iswalpha_lowercase"); };
+    test_pass("test_iswalpha_lowercase");
+    test_iswalpha_non_alpha() catch { test_fail("test_iswalpha_non_alpha"); };
+    test_pass("test_iswalpha_non_alpha");
+
+    // iswdigit 测试
+    test_iswdigit_digits() catch { test_fail("test_iswdigit_digits"); };
+    test_pass("test_iswdigit_digits");
+    test_iswdigit_non_digit() catch { test_fail("test_iswdigit_non_digit"); };
+    test_pass("test_iswdigit_non_digit");
+
+    // iswalnum 测试
+    test_iswalnum_alpha() catch { test_fail("test_iswalnum_alpha"); };
+    test_pass("test_iswalnum_alpha");
+    test_iswalnum_digit() catch { test_fail("test_iswalnum_digit"); };
+    test_pass("test_iswalnum_digit");
+    test_iswalnum_non_alnum() catch { test_fail("test_iswalnum_non_alnum"); };
+    test_pass("test_iswalnum_non_alnum");
+
+    // iswspace 测试
+    test_iswspace_space() catch { test_fail("test_iswspace_space"); };
+    test_pass("test_iswspace_space");
+    test_iswspace_tab() catch { test_fail("test_iswspace_tab"); };
+    test_pass("test_iswspace_tab");
+    test_iswspace_newline() catch { test_fail("test_iswspace_newline"); };
+    test_pass("test_iswspace_newline");
+    test_iswspace_carriage_return() catch { test_fail("test_iswspace_carriage_return"); };
+    test_pass("test_iswspace_carriage_return");
+    test_iswspace_non_space() catch { test_fail("test_iswspace_non_space"); };
+    test_pass("test_iswspace_non_space");
+
+    // towlower 测试
+    test_towlower_uppercase() catch { test_fail("test_towlower_uppercase"); };
+    test_pass("test_towlower_uppercase");
+    test_towlower_lowercase() catch { test_fail("test_towlower_lowercase"); };
+    test_pass("test_towlower_lowercase");
+    test_towlower_non_alpha() catch { test_fail("test_towlower_non_alpha"); };
+    test_pass("test_towlower_non_alpha");
+
+    // towupper 测试
+    test_towupper_lowercase() catch { test_fail("test_towupper_lowercase"); };
+    test_pass("test_towupper_lowercase");
+    test_towupper_uppercase() catch { test_fail("test_towupper_uppercase"); };
+    test_pass("test_towupper_uppercase");
+    test_towupper_non_alpha() catch { test_fail("test_towupper_non_alpha"); };
+    test_pass("test_towupper_non_alpha");
+
+    return test_suite_end();
+}

@@ -1,0 +1,12 @@
+// defer 同作用域内 LIFO：后声明的先执行
+
+use std.testing.expect;
+
+test "defer lifo order" {
+    var x: i32 = 0;
+    {
+        defer { x = x + 1; }   // 第2个执行：x = 0+1 = 1
+        defer { x = x + 10; }  // 第1个执行：x = 0+10 = 10，然后上面 x = 10+1 = 11
+    }
+    try expect(x == 11);
+}

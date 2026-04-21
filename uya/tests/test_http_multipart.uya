@@ -1,0 +1,130 @@
+// test_http_multipart.uya — multipart boundary 提取与 parse_multipart
+
+use std.http.types;
+use std.http.parse.extract_multipart_boundary;
+use std.http.parse.parse_multipart;
+use std.testing.assert_eq_i32;
+
+fn slice_eq(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+test "extract_multipart_boundary_simple" {
+    const ct: &[byte] = &"multipart/form-data; boundary=abc"[0: 33];
+    const b: &[byte] = try extract_multipart_boundary(ct);
+    if !slice_eq(b, &"abc"[0: 3]) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "extract_multipart_boundary_quoted" {
+    const ct: &[byte] = &"multipart/form-data; boundary=\"x\""[0: 33];
+    const b: &[byte] = try extract_multipart_boundary(ct);
+    if !slice_eq(b, &"x"[0: 1]) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "extract_multipart_boundary_missing" {
+    const ct: &[byte] = &"text/plain"[0: 10];
+    const r: !&[byte] = extract_multipart_boundary(ct);
+    match r {
+        error.InvalidBoundary => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_multipart_one_part" {
+    const body: &[byte] = &"--abc\r\nContent-Disposition: form-data; name=\"f1\"\r\n\r\nhello\r\n--abc--\r\n"[0: 68];
+    const boundary: &[byte] = &"abc"[0: 3];
+    const mv: MultipartView = try parse_multipart(body, boundary);
+    try assert_eq_i32(mv.part_count, 1);
+    if !slice_eq(mv.parts[0].name, &"f1"[0: 2]) {
+        try assert_eq_i32(0, 1);
+    }
+    if !slice_eq(mv.parts[0].body, &"hello"[0: 5]) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "parse_multipart_boundary_len_over_200" {
+    var raw: [byte: 220] = [];
+    var i: usize = 0;
+    while i < 220 {
+        raw[i] = 'a' as byte;
+        i = i + 1;
+    }
+    const b: &[byte] = raw[0: 201];
+    var body: [byte: 8] = [];
+    body[0] = '-' as byte;
+    body[1] = '-' as byte;
+    const p: !MultipartView = parse_multipart(body[0: 2], b);
+    match p {
+        error.InvalidBoundary => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "parse_multipart_too_many_parts" {
+    var raw: [byte: 900] = [];
+    var r: usize = 0;
+    const open: &[byte] = &"--b\r\n"[0: 5];
+    var oi: usize = 0;
+    while oi < open.len {
+        raw[r] = open.ptr[oi];
+        r = r + 1;
+        oi = oi + 1;
+    }
+    const pfx: &[byte] = &"Content-Disposition: form-data; name=\""[0: 38];
+    const sfx: &[byte] = &"\"\r\n\r\nz\r\n--b\r\n"[0: 13];
+    var pi: i32 = 0;
+    while pi < 16 {
+        var hi: usize = 0;
+        while hi < pfx.len {
+            raw[r] = pfx.ptr[hi];
+            r = r + 1;
+            hi = hi + 1;
+        }
+        var nc: byte = 0 as byte;
+        if pi < 10 {
+            nc = (48 + pi) as byte;
+        } else {
+            nc = (97 + (pi - 10)) as byte;
+        }
+        raw[r] = nc;
+        r = r + 1;
+        var ti: usize = 0;
+        while ti < sfx.len {
+            raw[r] = sfx.ptr[ti];
+            r = r + 1;
+            ti = ti + 1;
+        }
+        pi = pi + 1;
+    }
+    // 16 段已写满；再追加一字节使下一轮 `while pos < body.len` 成立，从而在 `part_count >= 16` 时返回 TooManyParts
+    raw[r] = 'C' as byte;
+    r = r + 1;
+    const buf: &[byte] = raw[0: r];
+    const boundary: &[byte] = &"b"[0: 1];
+    const p: !MultipartView = parse_multipart(buf, boundary);
+    match p {
+        error.TooManyParts => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}

@@ -1,0 +1,124 @@
+// usize 类型测试程序
+use std.runtime.entry;
+// 测试 usize 类型的基本功能：变量声明、sizeof、混合运算、类型转换等
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_usize_const() !void {
+    const usize_const: usize = 0 as usize;
+    try expect(usize_const == 0 as usize);
+    
+    const usize_const2: usize = 100 as usize;
+    try expect(usize_const2 == 100 as usize);
+}
+
+fn test_usize_var() !void {
+    var usize_var: usize = 42 as usize;
+    try expect(usize_var == 42 as usize);
+    
+    usize_var = 200 as usize;
+    try expect(usize_var == 200 as usize);
+}
+
+fn test_usize_size() !void {
+    const usize_size: i32 = @size_of(usize);
+    try expect(usize_size == 4 || usize_size == 8);
+    
+    var usize_var: usize = 200 as usize;
+    const usize_var_size: i32 = @size_of(usize_var);
+    try assert_eq_i32(usize_var_size, usize_size);
+}
+
+fn test_usize_ptr_size() !void {
+    const usize_size: i32 = @size_of(usize);
+    const ptr_usize_size: i32 = @size_of(&usize);
+    const ptr_i32_size: i32 = @size_of(&i32);
+    try assert_eq_i32(ptr_usize_size, ptr_i32_size);
+    try assert_eq_i32(usize_size, ptr_usize_size);
+}
+
+fn test_usize_arithmetic() !void {
+    var i32_val: i32 = 10;
+    var usize_val: usize = 20 as usize;
+    
+    var result_usize: usize = (i32_val as usize) + usize_val;
+    try expect(result_usize == 30 as usize);
+    
+    var result_usize2: usize = usize_val - (i32_val as usize);
+    try expect(result_usize2 == 10 as usize);
+    
+    var result_usize3: usize = (i32_val as usize) * usize_val;
+    try expect(result_usize3 == 200 as usize);
+}
+
+fn test_usize_ops() !void {
+    var usize_a: usize = 15 as usize;
+    var usize_b: usize = 5 as usize;
+    var result_usize4: usize = usize_a + usize_b;
+    try expect(result_usize4 == 20 as usize);
+}
+
+fn test_usize_comparison() !void {
+    var i32_val2: i32 = 20;
+    var usize_val2: usize = 20 as usize;
+    try expect((i32_val2 as usize) == usize_val2);
+    try expect(!((i32_val2 as usize) < usize_val2));
+    try expect(!((i32_val2 as usize) > usize_val2));
+}
+
+fn test_usize_type_conversion() !void {
+    var i32_to_convert: i32 = 123;
+    var usize_from_i32: usize = i32_to_convert as usize;
+    try expect(usize_from_i32 == 123 as usize);
+    
+    var usize_to_convert: usize = 456 as usize;
+    var i32_from_usize: i32 = usize_to_convert as i32;
+    try assert_eq_i32(i32_from_usize, 456);
+}
+
+fn test_usize_align() !void {
+    const usize_size: i32 = @size_of(usize);
+    const usize_align: i32 = @align_of(usize);
+    try assert_eq_i32(usize_align, usize_size);
+    
+    var usize_var: usize = 200 as usize;
+    const usize_var_align: i32 = @align_of(usize_var);
+    try assert_eq_i32(usize_var_align, usize_align);
+}
+
+fn test_usize_pointer() !void {
+    var usize_var: usize = 200 as usize;
+    var usize_ptr: &usize = &usize_var;
+    try expect(usize_ptr != null);
+    
+    const usize_val_read: usize = *usize_ptr;
+    try expect(usize_val_read == 200 as usize);
+    
+    *usize_ptr = 300 as usize;
+    try expect(usize_var == 300 as usize);
+}
+
+fn test_usize_null_ptr() !void {
+    var null_usize_ptr: &usize = null;
+    try expect(null_usize_ptr == null);
+}
+
+export fn main() i32 {
+    test_suite_begin("Usize Tests");
+    run_test("usize const", test_usize_const);
+    run_test("usize var", test_usize_var);
+    run_test("usize size", test_usize_size);
+    run_test("usize ptr size", test_usize_ptr_size);
+    run_test("usize arithmetic", test_usize_arithmetic);
+    run_test("usize ops", test_usize_ops);
+    run_test("usize comparison", test_usize_comparison);
+    run_test("usize type conversion", test_usize_type_conversion);
+    run_test("usize align", test_usize_align);
+    run_test("usize pointer", test_usize_pointer);
+    run_test("usize null ptr", test_usize_null_ptr);
+    return test_suite_end();
+}

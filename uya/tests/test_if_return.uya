@@ -1,0 +1,9 @@
+use std.testing.expect;
+
+test "if return" {
+    var result: i32 = 1;
+    if true {
+        result = 0;
+    }
+    try expect(result == 0);
+}

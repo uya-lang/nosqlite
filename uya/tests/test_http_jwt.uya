@@ -1,0 +1,132 @@
+// test_http_jwt.uya — JWT HS256（与 Python hmac+base64url 对齐）
+
+use std.http.jwt;
+use std.testing.assert_eq_i32;
+
+fn slice_eq(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+test "jwt_sign_verify_roundtrip" {
+    const secret: &[byte] = &"secret"[0: 6];
+    const payload: &[byte] = &"{\"x\":1}"[0: 7];
+    var tok: [byte: 512] = [];
+    const tlen: usize = try jwt_sign_hs256(payload, secret, tok[0: 512]);
+    const expect: &[byte] = &"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ4IjoxfQ.9YaKvMt42O7VWuqerZa8VeoKnrcHQ8v-MhrsQDqUIZg"[0: 91];
+    if tlen != expect.len {
+        try assert_eq_i32(0, 1);
+    }
+    if !slice_eq(tok[0: tlen], expect) {
+        try assert_eq_i32(0, 1);
+    }
+    var dec: [byte: 64] = [];
+    const dlen: usize = try jwt_verify_hs256(tok[0: tlen], secret, dec[0: 64]);
+    if dlen != payload.len {
+        try assert_eq_i32(0, 1);
+    }
+    if !slice_eq(dec[0: dlen], payload) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "jwt_decode_unverified" {
+    const tok: &[byte] = &"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ4IjoxfQ.xx"[0: 50];
+    var dec: [byte: 64] = [];
+    const dlen: usize = try jwt_decode_unverified(tok, dec[0: 64]);
+    const payload: &[byte] = &"{\"x\":1}"[0: 7];
+    if dlen != 7 {
+        try assert_eq_i32(0, 1);
+    }
+    if !slice_eq(dec[0: dlen], payload) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "jwt_verify_wrong_secret" {
+    const tok: &[byte] = &"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ4IjoxfQ.9YaKvMt42O7VWuqerZa8VeoKnrcHQ8v-MhrsQDqUIZg"[0: 91];
+    const bad: &[byte] = &"wrong"[0: 5];
+    var dec: [byte: 64] = [];
+    const r: !usize = jwt_verify_hs256(tok, bad, dec[0: 64]);
+    match r {
+        error.InvalidToken => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "jwt_malformed_no_dots" {
+    const tok: &[byte] = &"nodots"[0: 6];
+    var dec: [byte: 32] = [];
+    const r: !usize = jwt_decode_unverified(tok, dec[0: 32]);
+    match r {
+        error.InvalidToken => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "jwt_payload_exp_missing_not_expired" {
+    const p: &[byte] = &"{\"x\":1}"[0: 7];
+    const is_exp: bool = try jwt_payload_is_expired(p, 2000000000);
+    if is_exp {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "jwt_payload_exp_future_not_expired" {
+    const p: &[byte] = &"{\"exp\":2000000000}"[0: 18];
+    const is_exp: bool = try jwt_payload_is_expired(p, 1000);
+    if is_exp {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "jwt_payload_exp_past_is_expired" {
+    const p: &[byte] = &"{\"exp\":1000}"[0: 12];
+    const is_exp: bool = try jwt_payload_is_expired(p, 2000000000);
+    if !is_exp {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "jwt_payload_exp_at_boundary_expired" {
+    const p: &[byte] = &"{\"exp\":1000}"[0: 12];
+    const is_exp: bool = try jwt_payload_is_expired(p, 1000);
+    if !is_exp {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "jwt_payload_exp_wrong_type" {
+    const p: &[byte] = &"{\"exp\":\"x\"}"[0: 11];
+    const r: !bool = jwt_payload_is_expired(p, 0);
+    match r {
+        error.InvalidToken => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}
+
+test "jwt_payload_exp_not_object" {
+    const p: &[byte] = &"[1]"[0: 3];
+    const r: !bool = jwt_payload_is_expired(p, 0);
+    match r {
+        error.InvalidToken => {}
+        else => {
+            try assert_eq_i32(0, 1);
+        }
+    }
+}

@@ -1,0 +1,23 @@
+// 测试is_positive和is_even函数
+
+use std.testing.expect;
+
+fn is_positive(n: i32) bool {
+    return n > 0;
+}
+
+fn is_even(n: i32) bool {
+    return (n % 2) == 0;
+}
+
+test "is positive" {
+    const x: i32 = 10;
+    const pos: bool = is_positive(x);
+    try expect(pos);
+}
+
+test "is even" {
+    const x: i32 = 10;
+    const even: bool = is_even(x);
+    try expect(even);
+}

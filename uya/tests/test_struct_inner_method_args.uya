@@ -1,0 +1,27 @@
+// 结构体内定义方法（带参数）
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Vec2 {
+  x: f32,
+  y: f32,
+  fn scale(self: &Self, factor: f32) f32 {
+    return self.x * factor + self.y * factor;
+  }
+}
+
+fn test_inner_method_args() !void {
+  const v: Vec2 = Vec2{ x: 1.0, y: 2.0 };
+  const s: f32 = v.scale(10.0);
+  try expect(s >= 29.9 && s <= 30.1);
+}
+
+export fn main() i32 {
+  test_suite_begin("Struct Inner Method Args Tests");
+  run_test("inner method args", test_inner_method_args);
+  return test_suite_end();
+}

@@ -1,0 +1,65 @@
+// 测试 std.yaml Flow 编码：数组、对象、无引号 key、parse→encode 往返
+use std.runtime.entry;
+use std.yaml.value.YamlValue;
+use std.yaml.value.YamlStrView;
+use std.yaml.value.YamlArray;
+use std.yaml.value.YamlObject;
+use std.yaml.value.YamlKeyValue;
+use std.yaml.parser.parse;
+use std.yaml.encoder.yaml_encode_to;
+use std.yaml.encoder.YamlEncodeStyle;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+fn buf_prefix_eq(ptr: &byte, n: usize, e0: byte, e1: byte, e2: byte, e3: byte, e4: byte) bool {
+    if n < 5 { return false; }
+    if ptr[0] != e0 { return false; }
+    if ptr[1] != e1 { return false; }
+    if ptr[2] != e2 { return false; }
+    if ptr[3] != e3 { return false; }
+    if ptr[4] != e4 { return false; }
+    return true;
+}
+
+export fn main() i32 {
+    var arena_buf: [byte: 8192] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 8192);
+
+    var out: [byte: 128] = [];
+
+    var items: [YamlValue: 2] = [];
+    items[0] = YamlValue.int_val(1);
+    items[1] = YamlValue.int_val(2);
+    const arr_v: YamlValue = YamlValue.y_arr(YamlArray{ items: &items[0], len: 2 });
+    const alen: usize = yaml_encode_to(&arr_v, &out[0], 128, YamlEncodeStyle.Flow) catch { return 1; };
+    if alen != 5 { return 2; }
+    if out[0] != 91 || out[1] != 49 || out[2] != 44 || out[3] != 50 || out[4] != 93 { return 3; }
+
+    var kb: [byte: 2] = [];
+    kb[0] = 107;
+    var pairs: [YamlKeyValue: 1] = [];
+    pairs[0] = YamlKeyValue{ key: YamlStrView{ ptr: &kb[0], len: 1 }, value: YamlValue.bool_val(true) };
+    const obj_v: YamlValue = YamlValue.y_obj(YamlObject{ pairs: &pairs[0], len: 1 });
+    const olen: usize = yaml_encode_to(&obj_v, &out[0], 128, YamlEncodeStyle.Flow) catch { return 4; };
+    if olen != 8 { return 5; }
+    if !buf_prefix_eq(&out[0], olen, 123, 107, 58, 116, 114) { return 6; }
+    if out[5] != 117 || out[6] != 101 || out[7] != 125 { return 7; }
+
+    var src: [byte: 16] = [];
+    src[0] = 123;
+    src[1] = 120;
+    src[2] = 58;
+    src[3] = 55;
+    src[4] = 125;
+    const parsed: YamlValue = parse(&a, &src[0], 5) catch { return 8; };
+    const rlen: usize = yaml_encode_to(&parsed, &out[0], 128, YamlEncodeStyle.Flow) catch { return 9; };
+    if rlen != 5 { return 10; }
+    if out[0] != src[0] { return 11; }
+    if out[1] != src[1] { return 11; }
+    if out[2] != src[2] { return 11; }
+    if out[3] != src[3] { return 11; }
+    if out[4] != src[4] { return 11; }
+
+    return 0;
+}

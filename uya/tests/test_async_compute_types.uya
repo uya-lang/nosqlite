@@ -1,0 +1,218 @@
+// test_async_compute_types.uya - 测试 async_compute 新增类型
+use std.thread;
+use std.async;
+use std.async_event;
+use std.async_scheduler;
+use std.testing.assert_eq_i64;
+use std.testing.assert_eq_i32;
+use std.testing.assert_true;
+
+fn thread_test_epoll() !LinuxEpoll {
+    return linux_epoll_create(0);
+}
+
+fn double_i64(v: i64) i64 {
+    return v * (2 as i64);
+}
+fn double_u64(v: u64) u64 {
+    return v * (2 as u64);
+}
+fn double_i16(v: i16) i16 {
+    return v * (2 as i16);
+}
+fn double_u16(v: u16) u16 {
+    return v * (2 as u16);
+}
+fn double_i8(v: i8) i8 {
+    return v * (2 as i8);
+}
+fn double_u8(v: u8) u8 {
+    return v * (2 as u8);
+}
+fn bool_not(v: bool) bool {
+    return !v;
+}
+
+fn double_f32(v: f32) f32 {
+    return v * 2.0f32;
+}
+
+fn double_f64(v: f64) f64 {
+    return v * 2.0;
+}
+
+test "async_compute_specific_i64" {
+    var pool: ThreadPool = thread_pool_new(2);
+    defer {
+        thread_pool_shutdown(&pool);
+    }
+    var s: Scheduler = scheduler_new();
+    var loop_impl: LinuxEpoll = try thread_test_epoll();
+    defer {
+        _ = sys_close(loop_impl.epfd);
+    }
+    const loop: EventLoop = loop_impl;
+    const boxed: Future<!i64> = async_compute<i64>(&pool, &double_i64 as &void, 21 as i64);
+    const result: i64 = try scheduler_run_with_event_loop<i64>(&s, loop, boxed, 200);
+    try assert_eq_i64(result, 42 as i64);
+}
+
+test "async_compute_specific_u64" {
+    var pool: ThreadPool = thread_pool_new(2);
+    defer {
+        thread_pool_shutdown(&pool);
+    }
+    var s: Scheduler = scheduler_new();
+    var loop_impl: LinuxEpoll = try thread_test_epoll();
+    defer {
+        _ = sys_close(loop_impl.epfd);
+    }
+    const loop: EventLoop = loop_impl;
+    const boxed: Future<!u64> = async_compute<u64>(&pool, &double_u64 as &void, 21 as u64);
+    const result: u64 = try scheduler_run_with_event_loop<u64>(&s, loop, boxed, 200);
+    try assert_eq_i32(result as i32, 42 as i32);
+}
+
+test "async_compute_specific_i16" {
+    var pool: ThreadPool = thread_pool_new(2);
+    defer {
+        thread_pool_shutdown(&pool);
+    }
+    var s: Scheduler = scheduler_new();
+    var loop_impl: LinuxEpoll = try thread_test_epoll();
+    defer {
+        _ = sys_close(loop_impl.epfd);
+    }
+    const loop: EventLoop = loop_impl;
+    const boxed: Future<!i16> = async_compute<i16>(&pool, &double_i16 as &void, 21 as i16);
+    const result: i16 = try scheduler_run_with_event_loop<i16>(&s, loop, boxed, 200);
+    try assert_eq_i32(result as i32, 42 as i32);
+}
+
+test "async_compute_specific_u16" {
+    var pool: ThreadPool = thread_pool_new(2);
+    defer {
+        thread_pool_shutdown(&pool);
+    }
+    var s: Scheduler = scheduler_new();
+    var loop_impl: LinuxEpoll = try thread_test_epoll();
+    defer {
+        _ = sys_close(loop_impl.epfd);
+    }
+    const loop: EventLoop = loop_impl;
+    const boxed: Future<!u16> = async_compute<u16>(&pool, &double_u16 as &void, 21 as u16);
+    const result: u16 = try scheduler_run_with_event_loop<u16>(&s, loop, boxed, 200);
+    try assert_eq_i32(result as i32, 42 as i32);
+}
+
+test "async_compute_specific_i8" {
+    var pool: ThreadPool = thread_pool_new(2);
+    defer {
+        thread_pool_shutdown(&pool);
+    }
+    var s: Scheduler = scheduler_new();
+    var loop_impl: LinuxEpoll = try thread_test_epoll();
+    defer {
+        _ = sys_close(loop_impl.epfd);
+    }
+    const loop: EventLoop = loop_impl;
+    const boxed: Future<!i8> = async_compute<i8>(&pool, &double_i8 as &void, 21 as i8);
+    const result: i8 = try scheduler_run_with_event_loop<i8>(&s, loop, boxed, 200);
+    try assert_eq_i32(result as i32, 42 as i32);
+}
+
+test "async_compute_specific_u8" {
+    var pool: ThreadPool = thread_pool_new(2);
+    defer {
+        thread_pool_shutdown(&pool);
+    }
+    var s: Scheduler = scheduler_new();
+    var loop_impl: LinuxEpoll = try thread_test_epoll();
+    defer {
+        _ = sys_close(loop_impl.epfd);
+    }
+    const loop: EventLoop = loop_impl;
+    const boxed: Future<!u8> = async_compute<u8>(&pool, &double_u8 as &void, 21 as u8);
+    const result: u8 = try scheduler_run_with_event_loop<u8>(&s, loop, boxed, 200);
+    try assert_eq_i32(result as i32, 42 as i32);
+}
+
+test "async_compute_specific_bool" {
+    var pool: ThreadPool = thread_pool_new(2);
+    defer {
+        thread_pool_shutdown(&pool);
+    }
+    var s: Scheduler = scheduler_new();
+    var loop_impl: LinuxEpoll = try thread_test_epoll();
+    defer {
+        _ = sys_close(loop_impl.epfd);
+    }
+    const loop: EventLoop = loop_impl;
+    const boxed: Future<!bool> = async_compute<bool>(&pool, &bool_not as &void, false);
+    const result: bool = try scheduler_run_with_event_loop<bool>(&s, loop, boxed, 200);
+    try assert_eq_i32(result as i32, 1 as i32);
+}
+
+test "async_compute_specific_f32" {
+    var pool: ThreadPool = thread_pool_new(2);
+    defer {
+        thread_pool_shutdown(&pool);
+    }
+    var s: Scheduler = scheduler_new();
+    var loop_impl: LinuxEpoll = try thread_test_epoll();
+    defer {
+        _ = sys_close(loop_impl.epfd);
+    }
+    const loop: EventLoop = loop_impl;
+    const boxed: Future<!f32> = async_compute<f32>(&pool, &double_f32 as &void, 21.0f32);
+    const result: f32 = try scheduler_run_with_event_loop<f32>(&s, loop, boxed, 200);
+    try assert_true(result == 42.0f32);
+}
+
+test "async_compute_specific_f64" {
+    var pool: ThreadPool = thread_pool_new(2);
+    defer {
+        thread_pool_shutdown(&pool);
+    }
+    var s: Scheduler = scheduler_new();
+    var loop_impl: LinuxEpoll = try thread_test_epoll();
+    defer {
+        _ = sys_close(loop_impl.epfd);
+    }
+    const loop: EventLoop = loop_impl;
+    const boxed: Future<!f64> = async_compute<f64>(&pool, &double_f64 as &void, 21.0);
+    const result: f64 = try scheduler_run_with_event_loop<f64>(&s, loop, boxed, 200);
+    try assert_true(result == 42.0);
+}
+
+test "async_compute_generic_f32" {
+    var pool: ThreadPool = thread_pool_new(2);
+    defer {
+        thread_pool_shutdown(&pool);
+    }
+    var s: Scheduler = scheduler_new();
+    var loop_impl: LinuxEpoll = try thread_test_epoll();
+    defer {
+        _ = sys_close(loop_impl.epfd);
+    }
+    const loop: EventLoop = loop_impl;
+    const f: Future<!f32> = async_compute<f32>(&pool, &double_f32 as &void, 10.0f32);
+    const result: f32 = try scheduler_run_with_event_loop<f32>(&s, loop, f, 200);
+    try assert_true(result == 20.0f32);
+}
+
+test "async_compute_generic_f64" {
+    var pool: ThreadPool = thread_pool_new(2);
+    defer {
+        thread_pool_shutdown(&pool);
+    }
+    var s: Scheduler = scheduler_new();
+    var loop_impl: LinuxEpoll = try thread_test_epoll();
+    defer {
+        _ = sys_close(loop_impl.epfd);
+    }
+    const loop: EventLoop = loop_impl;
+    const f: Future<!f64> = async_compute<f64>(&pool, &double_f64 as &void, 10.0);
+    const result: f64 = try scheduler_run_with_event_loop<f64>(&s, loop, f, 200);
+    try assert_true(result == 20.0);
+}

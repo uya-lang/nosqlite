@@ -1,0 +1,8 @@
+// 测试程序：验证指针类型数组访问
+
+test "pointer array access" {
+    var buffer: [byte: 100] = [];
+    const buffer_ptr: &byte = &buffer[0] as &byte;
+    const temp: byte = buffer_ptr[0];
+    // 编译通过即测试通过
+}

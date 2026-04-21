@@ -1,0 +1,64 @@
+// test_bitwise.uya - 位运算符测试
+// 使用 lib/std/testing.uya 测试框架
+
+use std.testing.assert;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+test "bit_and" {
+    const a: i32 = 240;
+    const b: i32 = 15;
+    try assert((a & b) == 0, "240 & 15 should be 0");
+    try assert((a & a) == 240, "240 & 240 should be 240");
+}
+
+test "bit_or" {
+    const a: i32 = 240;
+    const b: i32 = 15;
+    try assert((a | b) == 255, "240 | 15 should be 255");
+}
+
+test "bit_xor" {
+    const a: i32 = 255;
+    const b: i32 = 240;
+    try assert((a ^ b) == 15, "255 ^ 240 should be 15");
+    try assert((a ^ a) == 0, "255 ^ 255 should be 0");
+}
+
+test "bit_not" {
+    const a: i32 = 0;
+    try assert((~a) == -1, "~0 should be -1");
+    const b: i32 = -1;
+    try assert((~b) == 0, "~-1 should be 0");
+    const c: i32 = 305419896;
+    try assert((~c) == -305419897, "~305419896 should be -305419897");
+}
+
+test "shift_left" {
+    const a: i32 = 1;
+    try assert((a << 0) == 1, "1 << 0 should be 1");
+    try assert((a << 4) == 16, "1 << 4 should be 16");
+    const b: i32 = 2147483647;
+    try assert((b << 1) == -2, "2147483647 << 1 should be -2");
+}
+
+test "shift_right" {
+    const a: i32 = 16;
+    try assert((a >> 4) == 1, "16 >> 4 should be 1");
+    const b: i32 = -1;
+    try assert((b >> 8) == -1, "-1 >> 8 should be -1");
+    const c: i32 = -16;
+    try assert((c >> 2) == -4, "-16 >> 2 should be -4");
+}
+
+test "precedence" {
+    // 1 | 2 & 4 = 1 | (2 & 4) = 1 | 0 = 1
+    try assert((1 | 2 & 4) == 1, "1 | 2 & 4 should be 1");
+    // (1 | 2) & 4 = 3 & 4 = 0
+    const a: i32 = (1 | 2) & 4;
+    try assert(a == 0, "(1 | 2) & 4 should be 0");
+    // 1 << 2 + 1 = 1 << 3 = 8（+ 优先于 <<）
+    try assert((1 << 2 + 1) == 8, "1 << 2 + 1 should be 8");
+}

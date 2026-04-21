@@ -1,0 +1,96 @@
+use std.async_event;
+use std.testing.assert_eq_i32;
+
+error PendingNotExpected;
+
+interface FallibleCounter {
+    fn next(self: &Self) !i32;
+}
+
+struct Counter : FallibleCounter {
+    value: i32,
+
+    fn next(self: &Self) !i32 {
+        return self.value;
+    }
+}
+
+struct DummyEventLoop : EventLoop {
+    fn register(self: &Self, fd: i32, interest: EventKind, waker: &Waker) !void {
+        _ = self;
+        _ = fd;
+        _ = interest;
+        _ = waker;
+    }
+
+    fn deregister(self: &Self, fd: i32) !void {
+        _ = self;
+        _ = fd;
+    }
+
+    fn poll(self: &Self, timeout_ms: i32) !i32 {
+        _ = self;
+        return timeout_ms + 1;
+    }
+}
+
+struct ImmediateReady : Future<!i32> {
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        _ = self;
+        _ = waker;
+        return Poll<!i32>.Ready(ok<i32>(7));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+fn call_iface(counter: FallibleCounter) !i32 {
+    const value: i32 = try counter.next();
+    return value + 1;
+}
+
+fn call_iface_generic<T: FallibleCounter>(counter: &T) !i32 {
+    const value: i32 = try counter.next();
+    return value + 2;
+}
+
+fn call_event_loop_generic<T: EventLoop>(loop: &T, timeout_ms: i32) !i32 {
+    const polled: i32 = try loop.poll(timeout_ms);
+    return polled + 3;
+}
+
+fn call_event_loop_direct(loop: EventLoop) !i32 {
+    const value: i32 = try loop.poll(5);
+    return value;
+}
+
+fn call_future_direct(f: Future<!i32>) !i32 {
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = f.poll(&w);
+    match p {
+        .Ready(value) => { return value; },
+        .Pending(_) => { return error.PendingNotExpected; },
+    };
+    return error.PendingNotExpected;
+}
+
+test "interface_method_return_error_union" {
+    const counter: Counter = Counter{ value: 40 };
+    const direct: i32 = try call_iface(counter);
+    try assert_eq_i32(direct, 41);
+
+    const generic_counter: i32 = try call_iface_generic<Counter>(&counter);
+    try assert_eq_i32(generic_counter, 42);
+
+    const loop: DummyEventLoop = DummyEventLoop{};
+    const generic_loop: i32 = try call_event_loop_generic<DummyEventLoop>(&loop, 10);
+    try assert_eq_i32(generic_loop, 14);
+
+    const direct_loop: i32 = try call_event_loop_direct(DummyEventLoop{});
+    try assert_eq_i32(direct_loop, 6);
+
+    const future_value: i32 = try call_future_direct(ImmediateReady{});
+    try assert_eq_i32(future_value, 7);
+}

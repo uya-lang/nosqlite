@@ -1,0 +1,13 @@
+// 负例：@vector.select 的掩码通道数须与向量一致
+type V2i = @vector(i32, 2);
+type V4i = @vector(i32, 4);
+
+export fn main() i32 {
+    const a: V4i = @vector.splat(1);
+    const b: V4i = @vector.splat(2);
+    const x: V2i = @vector.splat(1);
+    const y: V2i = @vector.splat(2);
+    const m2: @mask(2) = x < y;
+    _ = @vector.select(m2, a, b);
+    return 0;
+}

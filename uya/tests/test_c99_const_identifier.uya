@@ -1,0 +1,61 @@
+// 测试 C99 后端常量标识符支持
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+const MAX_SIZE: i32 = 64;
+const SMALL_SIZE: i32 = 8;
+const SIZE_10: i32 = 10;
+const SIZE_5: i32 = 5;
+const TOTAL_SIZE: i32 = SIZE_10 + SIZE_5;
+const BASE: i32 = 100;
+const OFFSET: i32 = BASE;
+const FINAL_SIZE: i32 = OFFSET + 20;
+const NESTED_A: i32 = 50;
+const NESTED_B: i32 = NESTED_A;
+const NESTED_C: i32 = NESTED_B + 10;
+
+fn test_basic_const_array() !void {
+    var arr: [i32: MAX_SIZE] = [];
+    try assert_eq_i32(@len(arr), 64);
+}
+
+fn test_const_expr_array() !void {
+    var arr: [i32: TOTAL_SIZE] = [];
+    try assert_eq_i32(@len(arr), 15);
+}
+
+fn test_const_chain_array() !void {
+    var arr: [i32: FINAL_SIZE] = [];
+    try assert_eq_i32(@len(arr), 120);
+}
+
+fn test_multiple_const_arrays() !void {
+    var arr1: [i32: MAX_SIZE] = [];
+    var arr2: [i32: SMALL_SIZE] = [];
+    var arr3: [i32: TOTAL_SIZE] = [];
+    
+    try assert_eq_i32(@len(arr1), 64);
+    try assert_eq_i32(@len(arr2), 8);
+    try assert_eq_i32(@len(arr3), 15);
+}
+
+fn test_nested_const() !void {
+    var arr: [i32: NESTED_C] = [];
+    try assert_eq_i32(@len(arr), 60);
+}
+
+export fn main() i32 {
+    test_suite_begin("C99 Const Identifier Tests");
+    
+    run_test("basic const array", test_basic_const_array);
+    run_test("const expr array", test_const_expr_array);
+    run_test("const chain array", test_const_chain_array);
+    run_test("multiple const arrays", test_multiple_const_arrays);
+    run_test("nested const", test_nested_const);
+    
+    return test_suite_end();
+}

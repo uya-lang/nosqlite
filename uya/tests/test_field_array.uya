@@ -1,0 +1,24 @@
+// 测试程序：验证字段访问后跟数组访问
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Test {
+    buffer: &byte,
+    size: i32,
+}
+
+fn test_field_array_access() !void {
+    var test1: Test = Test{ buffer: null, size: 100 };
+    const size: i32 = test1.size;
+    try assert_eq_i32(size, 100);
+}
+
+export fn main() i32 {
+    test_suite_begin("Field Array Tests");
+    run_test("field array access", test_field_array_access);
+    return test_suite_end();
+}

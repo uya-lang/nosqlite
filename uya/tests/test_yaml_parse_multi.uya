@@ -1,0 +1,81 @@
+// 多文档：--- 分隔与行首可选 ---
+use std.runtime.entry;
+use std.yaml.value.YamlValue;
+use std.yaml.parser.parse_multi;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.mem.arena.arena_reset;
+
+export fn main() i32 {
+    var arena_buf: [byte: 16384] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 16384);
+
+    var buf: [byte: 128] = [];
+    // a: 1\n---\nb: 2\n
+    buf[0] = 97;
+    buf[1] = 58;
+    buf[2] = 32;
+    buf[3] = 49;
+    buf[4] = 10;
+    buf[5] = 45;
+    buf[6] = 45;
+    buf[7] = 45;
+    buf[8] = 10;
+    buf[9] = 98;
+    buf[10] = 58;
+    buf[11] = 32;
+    buf[12] = 50;
+    buf[13] = 10;
+    const docs: &[YamlValue] = parse_multi(&a, &buf[0], 14) catch { return 1; };
+    if docs.len != 2 { return 2; }
+    const d0: YamlValue = docs[0];
+    match d0 {
+        .y_obj(o0) => {
+            if o0.len != 1 { return 3; }
+            match o0.pairs[0].value {
+                .int_val(x) => { if x != 1 { return 4; } },
+                else => { return 5; },
+            }
+        },
+        else => { return 6; },
+    }
+    const d1: YamlValue = docs[1];
+    match d1 {
+        .y_obj(o1) => {
+            if o1.len != 1 { return 7; }
+            match o1.pairs[0].value {
+                .int_val(y) => { if y != 2 { return 8; } },
+                else => { return 9; },
+            }
+        },
+        else => { return 10; },
+    }
+
+    // ---\nx: 3\n
+    buf[0] = 45;
+    buf[1] = 45;
+    buf[2] = 45;
+    buf[3] = 10;
+    buf[4] = 120;
+    buf[5] = 58;
+    buf[6] = 32;
+    buf[7] = 51;
+    buf[8] = 10;
+    arena_reset(&a);
+    const docs2: &[YamlValue] = parse_multi(&a, &buf[0], 9) catch { return 11; };
+    if docs2.len != 1 { return 12; }
+    const dx: YamlValue = docs2[0];
+    match dx {
+        .y_obj(ox) => {
+            if ox.len != 1 { return 13; }
+            match ox.pairs[0].value {
+                .int_val(z) => { if z != 3 { return 14; } },
+                else => { return 15; },
+            }
+        },
+        else => { return 16; },
+    }
+
+    return 0;
+}

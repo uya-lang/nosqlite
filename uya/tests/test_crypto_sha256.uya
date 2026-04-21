@@ -1,0 +1,42 @@
+// test_crypto_sha256.uya — SHA-256 空串与短消息向量
+
+use std.crypto.sha256;
+use std.testing.assert_eq_i32;
+
+fn hex_eq(digest: &[byte], expect_ascii: &[byte]) bool {
+    const hex: &[byte] = &"0123456789abcdef"[0: 16];
+    var i: usize = 0;
+    while i < 32 {
+        const hi: usize = (digest.ptr[i] >> 4) as usize;
+        const lo: usize = (digest.ptr[i] & 15) as usize;
+        if expect_ascii.ptr[i * 2] != hex.ptr[hi] {
+            return false;
+        }
+        if expect_ascii.ptr[i * 2 + 1] != hex.ptr[lo] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+test "sha256_empty" {
+    var z: [byte: 4] = [];
+    const empty: &[byte] = z[0: 0];
+    var d: [byte: 32] = [];
+    sha256_digest(empty, d[0: 32]);
+    const exp: &[byte] = &"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"[0: 64];
+    if !hex_eq(d[0: 32], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "sha256_abc" {
+    var d: [byte: 32] = [];
+    const data: &[byte] = &"abc"[0: 3];
+    sha256_digest(data, d[0: 32]);
+    const exp: &[byte] = &"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"[0: 64];
+    if !hex_eq(d[0: 32], exp) {
+        try assert_eq_i32(0, 1);
+    }
+}

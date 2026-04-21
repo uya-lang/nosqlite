@@ -1,0 +1,161 @@
+// test_string_layer.uya - mem 层字符串操作测试
+// 测试 lib/mem/mem.uya 的纯字符串操作函数
+
+use mem.mem_strlen;
+use mem.mem_strnlen;
+use mem.mem_strcmp;
+use mem.mem_strncmp;
+use mem.mem_strcpy;
+use mem.mem_strncpy;
+use mem.mem_strcat;
+use mem.mem_strncat;
+use mem.mem_strchr;
+use mem.mem_strrchr;
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+test "strlen" {
+    const s1: *byte = "hello";
+    const len1: usize = mem_strlen(s1);
+    try expect(len1 == 5);
+    
+    const s2: *byte = "";
+    const len2: usize = mem_strlen(s2);
+    try expect(len2 == 0);
+}
+
+test "strnlen" {
+    const s1: *byte = "hello";
+    const len1: usize = mem_strnlen(s1, 10);
+    try expect(len1 == 5);
+    
+    const len2: usize = mem_strnlen(s1, 3);
+    try expect(len2 == 3);
+    
+    const s2: *byte = "";
+    const len3: usize = mem_strnlen(s2, 10);
+    try expect(len3 == 0);
+}
+
+test "strcmp" {
+    const s1: *byte = "hello";
+    const s2: *byte = "hello";
+    const cmp1: i32 = mem_strcmp(s1, s2);
+    try expect(cmp1 == 0);
+    
+    const s3: *byte = "hello";
+    const s4: *byte = "world";
+    const cmp2: i32 = mem_strcmp(s3, s4);
+    try expect(cmp2 < 0);
+    
+    const cmp3: i32 = mem_strcmp(s4, s3);
+    try expect(cmp3 > 0);
+}
+
+test "strncmp" {
+    const s1: *byte = "hello";
+    const s2: *byte = "hello world";
+    const cmp1: i32 = mem_strncmp(s1, s2, 5);
+    try expect(cmp1 == 0);
+    
+    const s3: *byte = "hello";
+    const s4: *byte = "help";
+    const cmp2: i32 = mem_strncmp(s3, s4, 4);
+    try expect(cmp2 < 0);
+}
+
+test "strcpy" {
+    var dest: [byte: 10] = [];
+    const src: *byte = "hello";
+    
+    const result: &byte = mem_strcpy(&dest[0], src);
+    try expect(result == &dest[0]);
+    
+    var i: usize = 0;
+    while i < 5 {
+        try expect(dest[i] == src[i]);
+        i = i + 1;
+    }
+    try expect(dest[5] == 0);
+}
+
+test "strncpy" {
+    var dest: [byte: 10] = [];
+    const src: *byte = "hello";
+    
+    const result: &byte = mem_strncpy(&dest[0], src, 3);
+    try expect(result == &dest[0]);
+    
+    try expect(dest[0] == 'h');
+    try expect(dest[1] == 'e');
+    try expect(dest[2] == 'l');
+}
+
+test "strcat" {
+    var dest: [byte: 20] = [];
+    dest[0] = 'h';
+    dest[1] = 'i';
+    dest[2] = 0;
+    
+    const src: *byte = " world";
+    const result: &byte = mem_strcat(&dest[0], src);
+    try expect(result == &dest[0]);
+    
+    try expect(dest[0] == 'h');
+    try expect(dest[1] == 'i');
+    try expect(dest[2] == ' ');
+    try expect(dest[3] == 'w');
+}
+
+test "strncat" {
+    var dest: [byte: 20] = [];
+    dest[0] = 'h';
+    dest[1] = 'i';
+    dest[2] = 0;
+    
+    const src: *byte = " world";
+    const result: &byte = mem_strncat(&dest[0], src, 4);
+    try expect(result == &dest[0]);
+    
+    try expect(dest[0] == 'h');
+    try expect(dest[1] == 'i');
+    try expect(dest[2] == ' ');
+    try expect(dest[3] == 'w');
+    try expect(dest[4] == 'o');
+    try expect(dest[5] == 'r');
+    try expect(dest[6] == 0);
+}
+
+test "strchr" {
+    const s: *byte = "hello world";
+    
+    const result1: &const byte = mem_strchr(s, 'o');
+    try expect(result1 != null);
+    try expect(result1[0] == 'o');
+    
+    const result2: &const byte = mem_strchr(s, 'x');
+    try expect(result2 == null);
+    
+    const result3: &const byte = mem_strchr(s, 0);
+    try expect(result3 != null);
+    try expect(result3[0] == 0);
+}
+
+test "strrchr" {
+    const s: *byte = "hello world";
+    
+    const result1: &const byte = mem_strrchr(s, 'o');
+    try expect(result1 != null);
+    try expect(result1[0] == 'o');
+    
+    const result2: &const byte = mem_strrchr(s, 'x');
+    try expect(result2 == null);
+    
+    const result3: &const byte = mem_strrchr(s, 0);
+    try expect(result3 != null);
+    try expect(result3[0] == 0);
+}

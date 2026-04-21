@@ -1,0 +1,130 @@
+// std.protobuf Phase 1：varint、zigzag、tag、fixed32/64、float 位模式
+use std.runtime.entry;
+use std.protobuf.encode.PbWriter;
+use std.protobuf.encode.pb_w_fixed32_u32;
+use std.protobuf.encode.pb_w_fixed64_u64;
+use std.protobuf.encode.pb_w_tag;
+use std.protobuf.encode.pb_w_varint_u64;
+use std.protobuf.encode.pb_writer;
+use std.protobuf.impl.pb_bits_to_f32;
+use std.protobuf.impl.pb_bits_to_f64;
+use std.protobuf.impl.pb_f32_to_bits;
+use std.protobuf.impl.pb_f64_to_bits;
+use std.protobuf.wire.PB_WIRE_I32;
+use std.protobuf.wire.PB_WIRE_I64;
+use std.protobuf.wire.PB_WIRE_VARINT;
+use std.protobuf.wire.PbCursor;
+use std.protobuf.wire.pb_cursor;
+use std.protobuf.wire.pb_make_tag_key;
+use std.protobuf.wire.pb_read_fixed32_u32;
+use std.protobuf.wire.pb_read_fixed64_u64;
+use std.protobuf.wire.pb_read_varint_u64;
+use std.protobuf.wire.pb_tag_field_number;
+use std.protobuf.wire.pb_tag_wire_type;
+use std.protobuf.wire.pb_validate_field_number;
+use std.protobuf.wire.pb_zigzag_decode_i32;
+use std.protobuf.wire.pb_zigzag_decode_i64;
+use std.protobuf.wire.pb_zigzag_encode_i32;
+use std.protobuf.wire.pb_zigzag_encode_i64;
+
+export fn main() i32 {
+    var buf: [byte: 32] = [];
+    var w: PbWriter = pb_writer(&buf[0], 32);
+    pb_w_varint_u64(&w, 0 as u64) catch { return 1; };
+    if w.used != 1 || buf[0] != 0 {
+        return 2;
+    }
+
+    w.used = 0;
+    pb_w_varint_u64(&w, 300 as u64) catch { return 3; };
+    if w.used != 2 || buf[0] != 172 || buf[1] != 2 {
+        return 4;
+    }
+
+    var c: PbCursor = pb_cursor(&buf[0], w.used);
+    const v300: u64 = pb_read_varint_u64(&c) catch { return 5; };
+    if v300 != 300 as u64 || c.pos != w.used {
+        return 6;
+    }
+
+    if pb_zigzag_encode_i32(0) != 0 {
+        return 7;
+    }
+    if pb_zigzag_decode_i32(1) != -1 {
+        return 8;
+    }
+    if pb_zigzag_encode_i64(0 as i64) != 0 as u64 {
+        return 9;
+    }
+    if pb_zigzag_decode_i64(1 as u64) != -1 as i64 {
+        return 10;
+    }
+
+    w.used = 0;
+    pb_w_tag(&w, 1, PB_WIRE_VARINT) catch { return 11; };
+    if w.used != 1 || buf[0] != 8 {
+        return 12;
+    }
+    c = pb_cursor(&buf[0], w.used);
+    const k: u64 = pb_read_varint_u64(&c) catch { return 13; };
+    if pb_tag_field_number(k) != 1 || pb_tag_wire_type(k) != PB_WIRE_VARINT {
+        return 14;
+    }
+    pb_validate_field_number(1) catch { return 15; };
+
+    w.used = 0;
+    pb_w_tag(&w, 2, PB_WIRE_I32) catch { return 16; };
+    pb_w_fixed32_u32(&w, 0x01020304 as u32) catch { return 17; };
+    c = pb_cursor(&buf[0], w.used);
+    const k2: u64 = pb_read_varint_u64(&c) catch { return 18; };
+    if pb_tag_field_number(k2) != 2 || pb_tag_wire_type(k2) != PB_WIRE_I32 {
+        return 19;
+    }
+    const fx: u32 = pb_read_fixed32_u32(&c) catch { return 20; };
+    if fx != 0x01020304 as u32 {
+        return 21;
+    }
+
+    w.used = 0;
+    pb_w_tag(&w, 3, PB_WIRE_I64) catch { return 22; };
+    pb_w_fixed64_u64(&w, 0x0807060504030201 as u64) catch { return 23; };
+    c = pb_cursor(&buf[0], w.used);
+    const k3: u64 = pb_read_varint_u64(&c) catch { return 24; };
+    if pb_tag_field_number(k3) != 3 || pb_tag_wire_type(k3) != PB_WIRE_I64 {
+        return 25;
+    }
+    const fy: u64 = pb_read_fixed64_u64(&c) catch { return 26; };
+    if fy != 0x0807060504030201 as u64 {
+        return 27;
+    }
+
+    const one_bits: u32 = pb_f32_to_bits(1.0);
+    w.used = 0;
+    pb_w_fixed32_u32(&w, one_bits) catch { return 28; };
+    c = pb_cursor(&buf[0], 4);
+    const bits_r: u32 = pb_read_fixed32_u32(&c) catch { return 29; };
+    if pb_bits_to_f32(bits_r) != 1.0 {
+        return 30;
+    }
+
+    const pi_bits: u64 = pb_f64_to_bits(3.141592653589793);
+    w.used = 0;
+    pb_w_fixed64_u64(&w, pi_bits) catch { return 31; };
+    c = pb_cursor(&buf[0], 8);
+    const bits_rd: u64 = pb_read_fixed64_u64(&c) catch { return 32; };
+    if pb_bits_to_f64(bits_rd) != 3.141592653589793 {
+        return 33;
+    }
+
+    if pb_make_tag_key(1, PB_WIRE_VARINT) != 8 as u64 {
+        return 34;
+    }
+    if pb_bits_to_f32(0 as u32) != 0.0 {
+        return 35;
+    }
+    if pb_bits_to_f64(0 as u64) != 0.0 {
+        return 36;
+    }
+
+    return 0;
+}

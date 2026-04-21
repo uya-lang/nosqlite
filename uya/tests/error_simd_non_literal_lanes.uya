@@ -1,0 +1,9 @@
+// SIMD 向量 lane 数第一阶段仅允许字面量
+// 预期编译失败
+
+const LANES: i32 = 4;
+type BadVec = @vector(i32, LANES);
+
+export fn main() i32 {
+    return 0;
+}

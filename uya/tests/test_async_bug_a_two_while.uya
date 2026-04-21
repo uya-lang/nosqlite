@@ -1,0 +1,33 @@
+// Bug A: 两个连续 while+@await 循环，第一个结束后第二个的状态转移
+// 模拟：先写 header (N 字节)，再写 body (M 字节)
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+@async_fn fn async_two_while_write(w: &MemAsyncWriter) Future<!usize> {
+    // 第一段写: 模拟 header (3 字节, 每次写 1-2 字节)
+    var hdr: [byte: 3] = [72, 68, 82];  // "HDR"
+    var woff: usize = 0;
+    while woff < 3 {
+        const wn: usize = try @await w.write(&hdr[0] as &const byte, 3 - woff);
+        woff = woff + wn;
+    }
+
+    // 第二段写: 模拟 body (4 字节)
+    var body: [byte: 4] = [66, 79, 68, 89];  // "BODY"
+    var boff: usize = 0;
+    while boff < 4 {
+        const bn: usize = try @await w.write(&body[0] as &const byte, 4 - boff);
+        boff = boff + bn;
+    }
+
+    return woff + boff;  // 应为 7
+}
+
+test "bug_a_two_consecutive_while_await" {
+    var w: MemAsyncWriter = mem_async_writer_new();
+    const f: Future<!usize> = async_two_while_write(&w);
+    const result: !usize = block_on<usize>(f);
+    const total: usize = result catch { 0 as usize; };
+    try assert_eq_i32(total as i32, 7);
+}

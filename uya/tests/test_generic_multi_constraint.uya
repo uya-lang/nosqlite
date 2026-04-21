@@ -1,0 +1,57 @@
+// 测试多约束泛型语法 <T: Ord + Clone>
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn max_clone<T: Ord + Clone>(a: T, b: T) T {
+    if a > b {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+fn min_ord<T: Ord>(a: T, b: T) T {
+    if a < b {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+struct Container<T: Default + Clone> {
+    value: T,
+}
+
+fn test_multi_constraint_fn() !void {
+    const result1: i32 = max_clone<i32>(10, 20);
+    try assert_eq_i32(result1, 20);
+}
+
+fn test_single_constraint_fn() !void {
+    const result2: i32 = min_ord<i32>(10, 20);
+    try assert_eq_i32(result2, 10);
+}
+
+fn test_multi_constraint_inference() !void {
+    const result3: i32 = max_clone(100, 50);
+    try assert_eq_i32(result3, 100);
+}
+
+fn test_multi_constraint_struct() !void {
+    const c: Container<i32> = Container<i32>{ value: 42 };
+    try assert_eq_i32(c.value, 42);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Multi Constraint Tests");
+    run_test("multi constraint fn", test_multi_constraint_fn);
+    run_test("single constraint fn", test_single_constraint_fn);
+    run_test("multi constraint inference", test_multi_constraint_inference);
+    run_test("multi constraint struct", test_multi_constraint_struct);
+    return test_suite_end();
+}

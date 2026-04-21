@@ -1,0 +1,18 @@
+// 测试：不带泛型的方法调用是否正常
+use std.runtime.entry;
+
+struct Container {
+    value: i32,
+}
+
+Container {
+    fn get(self: &Self) i32 {
+        return self.value;
+    }
+}
+
+export fn main() i32 {
+    var c: Container = Container{ value: 42 };
+    const v: i32 = c.get();
+    return 0;
+}

@@ -1,0 +1,13 @@
+// FlowAnchors 与 Flow 同路径，占位不报错
+use std.runtime.entry;
+use std.yaml.value.YamlValue;
+use std.yaml.encoder.yaml_encode_to;
+use std.yaml.encoder.YamlEncodeStyle;
+
+export fn main() i32 {
+    var buf: [byte: 32] = [];
+    const vn: YamlValue = YamlValue.yaml_null();
+    const n: usize = yaml_encode_to(&vn, &buf[0], 32, YamlEncodeStyle.FlowAnchors) catch { return 1; };
+    if n != 4 { return 2; }
+    return 0;
+}

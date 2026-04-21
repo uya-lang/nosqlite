@@ -1,0 +1,22 @@
+// SIMD：源码中不出现 @mask 类型别名，仅在 if @vector.all(向量 == splat) 中使用比较；
+// 依赖 codegen 在 emit_pending_simd_structs 前从二元比较预注册 uya_simd_mask_N。
+type Vec4i32 = @vector(i32, 4);
+
+fn check_inline(x: Vec4i32, expect: i32) i32 {
+    if @vector.all(x == @vector.splat(expect)) == false {
+        return 1;
+    }
+    return 0;
+}
+
+export fn main() i32 {
+    const v: Vec4i32 = @vector.splat(10) + @vector.splat(20);
+    if @vector.all(v == @vector.splat(30)) == false {
+        return 2;
+    }
+    const r: i32 = check_inline(v, 30);
+    if r != 0 {
+        return 3;
+    }
+    return 0;
+}

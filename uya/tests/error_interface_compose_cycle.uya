@@ -1,0 +1,16 @@
+// 预期编译失败：接口组合存在循环依赖
+
+interface IA {
+    IB;  // IA 组合 IB
+    fn method_a(self: &Self) i32;
+}
+
+interface IB {
+    IA;  // IB 组合 IA，形成循环
+    fn method_b(self: &Self) i32;
+}
+
+fn main() i32 {
+    return 0;
+}
+

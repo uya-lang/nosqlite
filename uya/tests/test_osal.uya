@@ -1,0 +1,165 @@
+// test_osal.uya - osal 层操作系统抽象测试
+
+use osal.os_getpid;
+use osal.os_getppid;
+use osal.os_gettid;
+use osal.os_getcwd;
+use osal.os_mkdir;
+use osal.os_rmdir;
+use osal.os_access;
+use osal.os_unlink;
+use osal.os_dup;
+use osal.os_dup2;
+use osal.os_getuid;
+use osal.os_getgid;
+use osal.os_geteuid;
+use osal.os_getegid;
+use osal.os_gettimeofday;
+use osal.os_getrlimit;
+use osal.os_sleep;
+use osal.File;
+use osal.os_open;
+use osal.os_close;
+use osal.os_write;
+use osal.os_read;
+use osal.os_seek;
+use osal.TimeVal;
+use osal.RLimit;
+use std.testing.expect;
+
+const TEST_FILE: *const byte = "/tmp/uya_osal_test_file.txt" as *const byte;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+test "os_getpid" {
+    const pid: i32 = try os_getpid();
+    try expect(pid > 0);
+}
+
+test "os_getppid" {
+    const ppid: i32 = try os_getppid();
+    try expect(ppid > 0);
+}
+
+test "os_gettid" {
+    const tid: i32 = try os_gettid();
+    try expect(tid > 0);
+}
+
+test "os_mkdir_rmdir" {
+    const test_dir: *const byte = "/tmp/uya_osal_test_dir" as *const byte;
+    try os_mkdir(test_dir, 0o755);
+    try os_rmdir(test_dir);
+}
+
+test "os_mkdir_rmdir2" {
+    const test_dir: *const byte = "/tmp/uya_osal_test_dir2" as *const byte;
+    try os_mkdir(test_dir, 0o755);
+    try os_rmdir(test_dir);
+}
+
+test "os_access" {
+    const test_path: *const byte = "/tmp/uya_osal_test_access" as *const byte;
+    try os_mkdir(test_path, 0o755);
+    try os_access(test_path, 0);
+    try os_rmdir(test_path);
+}
+
+test "os_dup" {
+    var stdin_fd: i32 = 0;
+    const new_fd: i32 = try os_dup(stdin_fd);
+    try expect(new_fd > 0);
+}
+
+test "os_dup2" {
+    var stdin_fd: i32 = 0;
+    var saved_stdin: i32 = try os_dup(stdin_fd);
+    const new_fd: i32 = try os_dup2(stdin_fd, 10);
+    try expect(new_fd == 10);
+    _ = try os_dup2(saved_stdin, 0);
+}
+
+test "os_getuid" {
+    const uid: u32 = try os_getuid();
+    try expect(uid >= 0);
+}
+
+test "os_getgid" {
+    const gid: u32 = try os_getgid();
+    try expect(gid >= 0);
+}
+
+test "os_geteuid" {
+    const euid: u32 = try os_geteuid();
+    try expect(euid >= 0);
+}
+
+test "os_getegid" {
+    const egid: u32 = try os_getegid();
+    try expect(egid >= 0);
+}
+
+test "os_gettimeofday" {
+    var tv: TimeVal = TimeVal {};
+    try os_gettimeofday(&tv, @ptr_from_usize(0) as &void);
+    try expect(tv.tv_sec > 0);
+}
+
+test "os_getrlimit" {
+    var rlim: RLimit = RLimit {};
+    try os_getrlimit(3, &rlim);
+    try expect(rlim.rlim_cur > 0);
+}
+
+test "os_open_write_read_close" {
+    const test_data: *const byte = "Hello, Uya!" as *const byte;
+    var write_file: File = File { fd: 0, owns_fd: false };
+    const write_fd: i32 = try os_open(TEST_FILE, 65, 0o644);
+    write_file.fd = write_fd;
+    write_file.owns_fd = true;
+    var bytes_written: usize = 0;
+    bytes_written = try os_write(&write_file, test_data, 12);
+    try expect(bytes_written == 12);
+    try os_close(&write_file);
+    var read_file: File = File { fd: 0, owns_fd: false };
+    const read_fd: i32 = try os_open(TEST_FILE, 0, 0);
+    read_file.fd = read_fd;
+    read_file.owns_fd = true;
+    var bytes_read: usize = 0;
+    var read_buf: [byte: 100] = [];
+    bytes_read = try os_read(&read_file, &read_buf[0], 100);
+    try expect(bytes_read == 12);
+    try os_close(&read_file);
+    try os_unlink(TEST_FILE);
+}
+
+test "os_seek" {
+    const test_data: *const byte = "Hello, Uya!" as *const byte;
+    var write_file: File = File { fd: 0, owns_fd: false };
+    const write_fd: i32 = try os_open(TEST_FILE, 65, 0o644);
+    write_file.fd = write_fd;
+    write_file.owns_fd = true;
+    _ = try os_write(&write_file, test_data, 12);
+    try os_close(&write_file);
+    var read_file: File = File { fd: 0, owns_fd: false };
+    const read_fd: i32 = try os_open(TEST_FILE, 0, 0);
+    read_file.fd = read_fd;
+    read_file.owns_fd = true;
+    _ = try os_seek(&read_file, 7, 0);
+    var bytes_read: usize = 0;
+    var read_buf: [byte: 10] = [];
+    bytes_read = try os_read(&read_file, &read_buf[0], 10);
+    try expect(bytes_read == 5);
+    try os_close(&read_file);
+    try os_unlink(TEST_FILE);
+}
+
+test "os_sleep" {
+    try os_sleep(0, 100000000);
+}
+
+
+
+

@@ -1,0 +1,35 @@
+// SIMD：结构体字段含向量/掩码时的初始化、访问与按值传递（移动）
+type Vec4i32 = @vector(i32, 4);
+type Mask4 = @mask(4);
+
+struct SimdBox {
+    data: Vec4i32,
+    flags: Mask4,
+}
+
+fn consume_box(b: SimdBox) i32 {
+    if @vector.all(b.flags) == false {
+        return 5;
+    }
+    // splat 目标类型由对侧向量表达式推断（checker：向量二元运算对侧绑定）
+    const ok: Mask4 = b.data == @vector.splat(3);
+    if @vector.all(ok) == false {
+        return 6;
+    }
+    return 0;
+}
+
+export fn main() i32 {
+    const a: Vec4i32 = @vector.splat(1);
+    const b: Vec4i32 = @vector.splat(2);
+    const sum: Vec4i32 = a + b;
+    const m: Mask4 = sum == @vector.splat(3);
+    var box: SimdBox = SimdBox{ data: sum, flags: m };
+    if @vector.all(box.flags) == false {
+        return 1;
+    }
+    if consume_box(box) != 0 {
+        return 2;
+    }
+    return 0;
+}

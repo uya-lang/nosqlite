@@ -1,0 +1,19 @@
+// 枚举显式赋值测试程序
+
+use std.testing.expect;
+
+enum HttpStatus {
+    OK = 200,
+    NOT_FOUND = 404,
+    SERVER_ERROR = 500,
+}
+
+test "enum explicit value" {
+    const status1: HttpStatus = HttpStatus.OK;
+    const status2: HttpStatus = HttpStatus.NOT_FOUND;
+    const status3: HttpStatus = HttpStatus.SERVER_ERROR;
+    
+    try expect(status1 == HttpStatus.OK);
+    try expect(status2 == HttpStatus.NOT_FOUND);
+    try expect(status3 == HttpStatus.SERVER_ERROR);
+}

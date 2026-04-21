@@ -1,0 +1,46 @@
+// 递归函数测试 - 幂运算
+use std.runtime.entry;
+// 测试递归计算 a 的 n 次方
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn power(base: i32, exp: i32) i32 {
+    if exp <= 0 {
+        return 1;
+    } else {
+        return base * power(base, exp - 1);
+    }
+}
+
+fn test_power_zero() !void {
+    try assert_eq_i32(power(2, 0), 1);
+}
+
+fn test_power_one() !void {
+    try assert_eq_i32(power(2, 1), 2);
+}
+
+fn test_power_2_5() !void {
+    try assert_eq_i32(power(2, 5), 32);
+}
+
+fn test_power_3_4() !void {
+    try assert_eq_i32(power(3, 4), 81);
+}
+
+fn test_power_5_3() !void {
+    try assert_eq_i32(power(5, 3), 125);
+}
+
+export fn main() i32 {
+    test_suite_begin("Recursive Power Tests");
+    run_test("power zero", test_power_zero);
+    run_test("power one", test_power_one);
+    run_test("power 2^5", test_power_2_5);
+    run_test("power 3^4", test_power_3_4);
+    run_test("power 5^3", test_power_5_3);
+    return test_suite_end();
+}

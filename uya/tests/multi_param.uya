@@ -1,0 +1,33 @@
+// 多参数函数测试
+use std.runtime.entry;
+// 测试具有多个参数的函数
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn add_four(a: i32, b: i32, c: i32, d: i32) i32 {
+    return a + b + c + d;
+}
+
+fn multiply(a: i32, b: i32, c: i32) i32 {
+    return a * b * c;
+}
+
+fn test_add_four() !void {
+    const result: i32 = add_four(1, 2, 3, 4);
+    try assert_eq_i32(result, 10);
+}
+
+fn test_multiply() !void {
+    const result: i32 = multiply(2, 3, 4);
+    try assert_eq_i32(result, 24);
+}
+
+export fn main() i32 {
+    test_suite_begin("Multi Param Tests");
+    run_test("add four", test_add_four);
+    run_test("multiply", test_multiply);
+    return test_suite_end();
+}

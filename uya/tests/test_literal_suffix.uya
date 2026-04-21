@@ -1,0 +1,40 @@
+// 测试整数字面量和浮点字面量的类型后缀
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+test "integer_literal_suffix_i8" {
+    const x: i8 = 100i8;
+    try assert_eq_i32(x, 100);
+}
+
+test "integer_literal_suffix_i32" {
+    const x: i32 = 100000i32;
+    try assert_eq_i32(x, 100000);
+}
+
+test "integer_literal_suffix_u8" {
+    const x: u8 = 255u8;
+    try expect(x == 255);
+}
+
+test "float_literal_suffix_f32" {
+    const x: f32 = 1.5f32;
+    try expect(x == 1.5);
+}
+
+test "float_literal_suffix_f64" {
+    const x: f64 = 3.14f64;
+    try expect(x == 3.14);
+}
+
+test "hex_literal_with_suffix" {
+    const x: i32 = 0xFFi32;
+    try assert_eq_i32(x, 255);
+}
+
+test "no_suffix_default_types" {
+    const i: i32 = 100;  // 默认 i32
+    const f: f64 = 3.14;  // 默认 f64
+    try assert_eq_i32(i, 100);
+    try expect(f == 3.14);
+}

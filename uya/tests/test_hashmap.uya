@@ -1,0 +1,158 @@
+// test_hashmap.uya - HashMap 测试（HashMapChainBuf 桶内链 + 动态扩容桶数）
+
+use std.testing;
+
+use std.mem.allocator.IAllocator;
+use std.mem.allocator.MallocAllocator;
+use std.mem.allocator.get_allocator;
+
+use std.collections.hashmap.HashMap;
+use std.collections.hashmap.hashmap_new;
+use std.collections.vec.Vec;
+use std.collections.vec.vec_new;
+
+var g_test_dealloc_count: i32 = 0;
+
+struct CountingMallocWrapper : IAllocator {
+    inner: &MallocAllocator,
+
+    fn alloc(self: &Self, size: usize) !&byte {
+        return self.inner.alloc(size);
+    },
+
+    fn dealloc(self: &Self, ptr: &byte) void {
+        g_test_dealloc_count = g_test_dealloc_count + 1;
+        self.inner.dealloc(ptr);
+    },
+
+    fn realloc(self: &Self, ptr: &byte, new_size: usize) !&byte {
+        return self.inner.realloc(ptr, new_size);
+    },
+}
+
+test "hashmap_put_null_key_fails" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var map: HashMap = hashmap_new(w);
+    var null_key: &byte = null;
+    var saw_err: bool = false;
+    _ = map.put(null_key, 1) catch {
+        saw_err = true;
+    };
+    try assert_true(saw_err);
+}
+
+test "hashmap_basic" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var map: HashMap = hashmap_new(w);
+    try map.put("one", 1);
+    var v1: i32 = try map.get("one");
+    try assert_eq_i32(v1, 1);
+}
+
+test "hashmap_drop_triggers_dealloc" {
+    g_test_dealloc_count = 0;
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    {
+        var map: HashMap = hashmap_new(w);
+        try map.put("a", 1);
+        try map.put("b", 2);
+        try map.put("c", 3);
+    }
+    // 外层桶 slab + 若干链缓冲；含 realloc 时 dealloc 次数不固定，只保证发生过释放
+    try assert_true(g_test_dealloc_count >= 1);
+}
+
+test "hashmap_drop_empty_zero_dealloc" {
+    g_test_dealloc_count = 0;
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    {
+        var _map: HashMap = hashmap_new(w);
+    }
+    try assert_eq_i32(g_test_dealloc_count, 0);
+}
+
+test "hashmap_collision_same_bucket" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var map: HashMap = hashmap_new(w);
+    // 故意同键多次 put 走更新分支
+    try map.put("same", 1);
+    try map.put("same", 2);
+    try assert_eq_i32(try map.get("same"), 2);
+    try assert_eq_i32(map.len(), 1);
+}
+
+test "hashmap_resize_many_keys" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var map: HashMap = hashmap_new(w);
+    try map.put("k00", 0);
+    try map.put("k01", 1);
+    try map.put("k02", 2);
+    try map.put("k03", 3);
+    try map.put("k04", 4);
+    try map.put("k05", 5);
+    try map.put("k06", 6);
+    try map.put("k07", 7);
+    try map.put("k08", 8);
+    try map.put("k09", 9);
+    try map.put("k10", 10);
+    try map.put("k11", 11);
+    try map.put("k12", 12);
+    try map.put("k13", 13);
+    try map.put("k14", 14);
+    try map.put("k15", 15);
+    try assert_eq_i32(map.len(), 16);
+    try assert_eq_i32(try map.get("k15"), 15);
+    try assert_eq_i32(try map.get("k00"), 0);
+}
+
+test "hashmap_values_vec_contains" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var map: HashMap = hashmap_new(w);
+    try map.put("a", 1);
+    try map.put("b", 2);
+
+    var vals: Vec<i32> = vec_new<i32>(w);
+    try map.values_vec(&vals);
+    try assert_eq_i32(vals.len() as i32, 2);
+
+    var found1: bool = false;
+    var found2: bool = false;
+    var i: usize = 0;
+    while i < vals.len() {
+        const r: !i32 = vals.get(i);
+        var v: i32 = try r;
+        if v == 1 { found1 = true; }
+        if v == 2 { found2 = true; }
+        i = i + 1;
+    }
+    // 先检查 2，再检查 1，便于快速定位返回内容偏差
+    try assert_true(found2);
+    try assert_true(found1);
+}
+
+test "hashmap_keys_vec_contains" {
+    var w: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    var map: HashMap = hashmap_new(w);
+    try map.put("a", 1);
+    try map.put("b", 2);
+
+    var keys: Vec<usize> = vec_new<usize>(w);
+    try map.keys_vec(&keys);
+    try assert_eq_i32(keys.len() as i32, 2);
+
+    const a_bits: usize = @usize_from_ptr(("a" as &byte) as &void);
+    const b_bits: usize = @usize_from_ptr(("b" as &byte) as &void);
+
+    var found_a: bool = false;
+    var found_b: bool = false;
+    var i: usize = 0;
+    while i < keys.len() {
+        const r: !usize = keys.get(i);
+        const k_bits: usize = try r;
+        if k_bits == a_bits { found_a = true; }
+        if k_bits == b_bits { found_b = true; }
+        i = i + 1;
+    }
+    try assert_true(found_a);
+    try assert_true(found_b);
+}

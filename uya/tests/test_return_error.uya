@@ -1,0 +1,16 @@
+// main() !i32 中 try 传播错误时，bridge 将 error_id 作为退出码
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+error X;
+
+fn f() !i32 {
+    return error.X;
+}
+
+test "test_return_error" {
+    const v: i32 = f() catch { 0; };
+    try assert_eq_i32(v, 0);
+}

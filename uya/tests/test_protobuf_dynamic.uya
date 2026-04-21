@@ -1,0 +1,70 @@
+// std.protobuf Phase 4：decode_dynamic + PbMessage / PbField / PbValue
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.protobuf.demo.DemoUser;
+use std.protobuf.demo.PbStrView;
+use std.protobuf.dynamic.PbMessage;
+use std.protobuf.dynamic.PbValue;
+use std.protobuf.dynamic.PbValueKind_len;
+use std.protobuf.dynamic.PbValueKind_varint;
+use std.protobuf.dynamic.decode_dynamic;
+use std.protobuf.dynamic.pb_message_find_field;
+use std.protobuf.encode.encode_demo_user_to;
+
+export fn main() i32 {
+    var arena_buf: [byte: 2048] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 2048);
+
+    var nm: [byte: 4] = [ 120, 121, 122, 0 ];
+    const du: DemoUser = DemoUser{
+        id: -7 as i64,
+        name: PbStrView{ ptr: &nm[0], len: 3 },
+        active: false,
+    };
+    var out: [byte: 64] = [];
+    const n: usize = encode_demo_user_to(&du, &out[0], 64) catch {
+        return 1;
+    };
+
+    const msg: PbMessage = decode_dynamic(&a, &out[0], n) catch {
+        return 2;
+    };
+    if msg.len != 3 {
+        return 3;
+    }
+    const v1: PbValue = pb_message_find_field(&msg, 1) catch {
+        return 4;
+    };
+    if v1.kind != PbValueKind_varint {
+        return 5;
+    }
+    const want_id: u64 = (-7 as i64) as u64;
+    if v1.u64_v != want_id {
+        return 6;
+    }
+    const v2: PbValue = pb_message_find_field(&msg, 2) catch {
+        return 7;
+    };
+    if v2.kind != PbValueKind_len || v2.len_len != 3 {
+        return 8;
+    }
+    if v2.len_ptr[0] != 120 || v2.len_ptr[1] != 121 || v2.len_ptr[2] != 122 {
+        return 9;
+    }
+    const v3: PbValue = pb_message_find_field(&msg, 3) catch {
+        return 10;
+    };
+    if v3.kind != PbValueKind_varint || v3.u64_v != 0 as u64 {
+        return 11;
+    }
+
+    var bad: [byte: 2] = [];
+    bad[0] = 15;
+    bad[1] = 0;
+    decode_dynamic(&a, &bad[0], 2) catch {
+        return 0;
+    };
+    return 12;
+}

@@ -1,0 +1,14 @@
+// error_async_frame_pool_empty_array_init.uya
+//
+// 预期：编译失败。`[]` 只能初始化数组或切片，不能初始化 AsyncFramePool 这种结构体类型。
+
+use std.async_frame.AsyncFramePool;
+
+fn bad_pool_init() i32 {
+    var pool: AsyncFramePool = [];
+    _ = pool;
+    return 0;
+}
+
+test "expect_compile_fail" {
+}

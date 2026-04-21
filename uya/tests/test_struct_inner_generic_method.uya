@@ -1,0 +1,25 @@
+// 测试结构体内部定义泛型方法（非方法块语法）
+use std.runtime.entry;
+// 验证非泛型结构体内部定义的泛型方法能正确单态化
+
+// 非泛型结构体，内部定义泛型方法
+struct Container {
+    value: i32,
+    
+    // 泛型方法定义在结构体内部
+    fn get<T>(self: &Self) T {
+        return self.value as T;
+    }
+}
+
+export fn main() i32 {
+    var c: Container = Container{ value: 42 };
+    
+    // 泛型方法调用
+    const v: i32 = c.get<i32>();
+    
+    if v == 42 {
+        return 0;
+    }
+    return 1;
+}

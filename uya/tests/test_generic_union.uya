@@ -1,0 +1,29 @@
+// test_generic_union.uya - 泛型 union 语法与单态化（TDD 先红后绿）
+// 目标：union Foo<T> { a: T, b: i32 } 及 Foo<i32> 使用
+
+use std.testing.assert_eq_i32;
+
+union Foo<T> {
+    a: T,
+    b: i32,
+}
+
+test "generic_union_mono_create" {
+    const v: Foo<i32> = Foo<i32>.a(42);
+    var result: i32 = 0;
+    match v {
+        .a(x) => { result = x; },
+        .b(_) => { result = 0 - 1; },
+    };
+    try assert_eq_i32(result, 42);
+}
+
+test "generic_union_mono_b" {
+    const v: Foo<i32> = Foo<i32>.b(100);
+    var result: i32 = 0;
+    match v {
+        .a(_) => { result = 0 - 1; },
+        .b(x) => { result = x; },
+    };
+    try assert_eq_i32(result, 100);
+}

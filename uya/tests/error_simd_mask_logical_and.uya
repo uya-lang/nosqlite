@@ -1,0 +1,11 @@
+// SIMD 第一阶段不支持 @mask 的 &&
+type Vec4i32 = @vector(i32, 4);
+type Mask4 = @mask(4);
+
+export fn main() i32 {
+    const v: Vec4i32 = @vector.splat(1);
+    const m1: Mask4 = v == v;
+    const m2: Mask4 = v == @vector.splat(0);
+    const x: Mask4 = m1 && m2;
+    return 0;
+}

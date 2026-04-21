@@ -1,0 +1,12 @@
+// ERROR TEST: microapp 模式禁止整数字面量转指针 (E4003)
+// 编译命令: ./bin/uya tests/error_microapp_mode_addr.uya --c99 --app microapp
+// 预期: 编译失败，报错 E4003
+
+fn read_mmio() u32 {
+    const reg: *u32 = 0x40000000 as *u32;
+    return reg[0];
+}
+
+export fn main() i32 {
+    return 0;
+}

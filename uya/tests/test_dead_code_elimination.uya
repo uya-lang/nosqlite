@@ -1,0 +1,82 @@
+// tests/test_dead_code_elimination.uya
+// 测试死代码消除优化
+
+use std.testing.assert_eq_i32;
+
+test "true_condition" {
+    var executed: i32 = 0;
+    
+    if true {
+        executed = 1;
+    } else {
+        executed = 2;  // 死代码，应该被移除
+    }
+    
+    try assert_eq_i32(executed, 1);
+}
+
+test "false_condition" {
+    var executed: i32 = 0;
+    
+    if false {
+        executed = 1;  // 死代码，应该被移除
+    } else {
+        executed = 2;
+    }
+    
+    try assert_eq_i32(executed, 2);
+}
+
+test "const_condition" {
+    const debug: bool = false;
+    var log_count: i32 = 0;
+    
+    if debug {
+        log_count = 1;  // 死代码，应该被移除
+    }
+    
+    try assert_eq_i32(log_count, 0);
+}
+
+test "nested_condition" {
+    const flag: bool = true;
+    var result: i32 = 0;
+    
+    if flag {
+        if true {
+            result = 1;
+        } else {
+            result = 2;  // 死代码
+        }
+    } else {
+        result = 3;  // 死代码
+    }
+    
+    try assert_eq_i32(result, 1);
+}
+
+test "elseif_chain" {
+    const mode: i32 = 2;
+    var result: i32 = 0;
+    
+    if mode == 1 {
+        result = 1;
+    } else if mode == 2 {
+        result = 2;
+    } else {
+        result = 3;
+    }
+    
+    try assert_eq_i32(result, 2);
+}
+
+test "comparison_condition" {
+    const x: i32 = 10;
+    var executed: i32 = 0;
+    
+    if x > 5 {
+        executed = 1;
+    }
+    
+    try assert_eq_i32(executed, 1);
+}

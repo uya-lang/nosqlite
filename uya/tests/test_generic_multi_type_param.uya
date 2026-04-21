@@ -1,0 +1,38 @@
+// 测试泛型函数 - 多类型参数
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn make_pair<A, B>(a: A, b: B) i32 {
+    return 0;
+}
+
+fn triple<X, Y, Z>(x: X, y: Y, z: Z) i32 {
+    return 0;
+}
+
+fn test_two_type_params() !void {
+    const r1: i32 = make_pair<i32, f64>(42, 3.14);
+    try assert_eq_i32(r1, 0);
+}
+
+fn test_three_type_params() !void {
+    const r2: i32 = triple<i32, f64, bool>(1, 2.0, true);
+    try assert_eq_i32(r2, 0);
+}
+
+fn test_same_type_params() !void {
+    const r3: i32 = make_pair<i32, i32>(10, 20);
+    try assert_eq_i32(r3, 0);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Multi Type Param Tests");
+    run_test("two type params", test_two_type_params);
+    run_test("three type params", test_three_type_params);
+    run_test("same type params", test_same_type_params);
+    return test_suite_end();
+}

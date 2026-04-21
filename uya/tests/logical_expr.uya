@@ -1,0 +1,37 @@
+// 逻辑表达式测试
+use std.runtime.entry;
+// 测试逻辑运算符（&&, ||）
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_logical_and() !void {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    
+    try expect(a < b && b > a);
+}
+
+fn test_logical_or() !void {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    
+    try expect(a > b || b > a);
+}
+
+fn test_logical_combined() !void {
+    const a: i32 = 10;
+    const b: i32 = 20;
+    
+    try expect((a < b) && (b > a) && (a + b == 30));
+}
+
+export fn main() i32 {
+    test_suite_begin("Logical Expr Tests");
+    run_test("logical and", test_logical_and);
+    run_test("logical or", test_logical_or);
+    run_test("logical combined", test_logical_combined);
+    return test_suite_end();
+}

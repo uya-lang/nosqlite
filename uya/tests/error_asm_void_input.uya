@@ -1,0 +1,12 @@
+// error_asm_void_input.uya - @asm void 输入错误测试
+// 期望编译错误：@asm 输入表达式类型无效
+
+fn void_func() void {}
+
+fn main() i32 {
+    var result: i32 = 0;
+    @asm {
+        "mov %0, %1" (void_func(), -> result);
+    }
+    return 0;
+}

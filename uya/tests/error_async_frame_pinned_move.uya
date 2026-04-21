@@ -1,0 +1,21 @@
+// error_async_frame_pinned_move.uya
+//
+// 预期：编译失败。@frame 类型是 pinned 的，禁止按值移动、赋值和返回。
+
+use std.async;
+
+@async_fn
+fn inner_async() Future<!i32> {
+    return 1;
+}
+
+@async_fn
+fn producer() Future<!i32> {
+    var a: @frame(inner_async);
+    var b: @frame(inner_async);
+    b = a;  // 错误：不能对 pinned 类型进行整体赋值
+    return 0;
+}
+
+test "expect_compile_fail" {
+}

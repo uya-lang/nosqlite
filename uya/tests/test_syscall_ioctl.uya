@@ -1,0 +1,68 @@
+// test_syscall_ioctl.uya - syscall 层设备控制测试
+// 测试 sys_ioctl, sys_fcntl
+
+use libc.sys_ioctl;
+use libc.sys_fcntl;
+use libc.sys_open;
+use libc.sys_close;
+use libc.O_RDWR;
+use std.testing.expect;
+
+// ============================================================
+// 结构体定义
+// ============================================================
+
+// winsize 结构体（用于 ioctl TIOCGWINSZ）
+export struct winsize {
+    ws_row: u16,
+    ws_col: u16,
+    ws_xpixel: u16,
+    ws_ypixel: u16,
+}
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+test "sys_ioctl_on_terminal" {
+    // 测试在标准输入上执行 ioctl（获取窗口大小）
+    // TIOCGWINSZ 是获取终端窗口大小的 ioctl 命令
+    // 在 Linux x86_64 上，TIOCGWINSZ = 0x5413
+    const TIOCGWINSZ: i64 = 0x5413;
+    
+    var ws: winsize = winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0
+    };
+    
+    // 在标准输入上执行 ioctl；若当前环境不是终端，失败也是预期行为。
+    const result: i32 = sys_ioctl(0, TIOCGWINSZ, &ws as i64) catch {
+        try expect(true);
+        return;
+    };
+    try expect(result == 0);
+}
+
+test "sys_fcntl_getfl" {
+    // 测试获取文件描述符标志
+    // F_GETFL = 3 (获取文件描述符标志)
+    const F_GETFL: i32 = 3;
+    
+    // 在标准输入上执行 fcntl
+    const flags: i32 = try sys_fcntl(0, F_GETFL, 0);
+    // 标志应该 >= 0
+    try expect(flags >= 0);
+}
+
+test "sys_fcntl_getfd" {
+    // 测试获取文件描述符标志
+    // F_GETFD = 1 (获取文件描述符标志)
+    const F_GETFD: i32 = 1;
+    
+    // 在标准输入上执行 fcntl
+    const flags: i32 = try sys_fcntl(0, F_GETFD, 0);
+    // 标志应该是 0 或 FD_CLOEXEC (1)
+    try expect(flags == 0 || flags == 1);
+}

@@ -1,0 +1,10 @@
+// ERROR TEST: microapp 模式禁止直接调用宿主 libc API (E4004)
+// 编译命令: ./bin/uya tests/error_microapp_mode_host_api_libc.uya --c99 --app microapp
+// 预期: 编译失败，报错 E4004
+
+use libc.write_stdout_bytes;
+
+export fn main() i32 {
+    _ = write_stdout_bytes("bad\n", 4);
+    return 0;
+}

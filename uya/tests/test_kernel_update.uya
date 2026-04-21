@@ -1,0 +1,275 @@
+// Tests for dual-slot hot update and crash recovery
+
+use kernel.errors;
+use kernel.image;
+use kernel.update;
+use kernel.recovery;
+use std.testing.assert_eq_i32;
+use std.crypto.sha256;
+use std.crypto.crc32.crc32_compute;
+
+// ── Helper: build valid test image (same as test_kernel_image) ──
+
+fn w32(buf: &[byte], off: usize, val: u32) void {
+    buf.ptr[off] = (val & 255u32) as byte;
+    buf.ptr[off + 1] = ((val >> 8) & 255u32) as byte;
+    buf.ptr[off + 2] = ((val >> 16) & 255u32) as byte;
+    buf.ptr[off + 3] = ((val >> 24) & 255u32) as byte;
+}
+
+fn w16(buf: &[byte], off: usize, val: u16) void {
+    buf.ptr[off] = (val & 255u16) as byte;
+    buf.ptr[off + 1] = ((val >> 8) & 255u16) as byte;
+}
+
+fn build_image(buf: &[byte], code_byte: byte) void {
+    const total: u32 = IMAGE_HEADER_SIZE + 4u32;
+    var i: usize = 0;
+    while i < total as usize && i < buf.len {
+        buf.ptr[i] = 0;
+        i = i + 1;
+    }
+    w32(buf, 0, IMAGE_MAGIC);
+    w16(buf, 4, 2);
+    w16(buf, 6, 1);
+    w32(buf, 8, total);
+    w32(buf, 12, 0);
+    w32(buf, 16, 4);
+    w32(buf, 20, 0);
+    w32(buf, 24, 0);
+    w32(buf, 96, 0);
+    w32(buf, 100, 0);
+    w32(buf, 104, 0);
+    w32(buf, 108, IMAGE_HEADER_SIZE);
+    w32(buf, 112, IMAGE_HEADER_SIZE + 4u32);
+    w32(buf, 116, IMAGE_HEADER_SIZE + 4u32);
+    w32(buf, 120, IMAGE_HEADER_SIZE + 4u32);
+    w32(buf, 124, 0);
+    w32(buf, 128, 0);
+    buf.ptr[64] = 1;  // build_mode=container
+    buf.ptr[65] = image_target_arch_to_byte(ImageTargetArch.ita_rv32);
+    buf.ptr[132] = image_bridge_kind_to_byte(ImageBridgeKind.ibk_trap);
+    w32(buf, 136, IMAGE_HEADER_SIZE);
+    w32(buf, 140, IMAGE_HEADER_SIZE);
+    w32(buf, 144, IMAGE_HEADER_SIZE + 4u32);
+    w32(buf, 148, IMAGE_HEADER_SIZE + 4u32);
+    w32(buf, 60, 0);
+    // Code: ecall with a distinguishing byte at offset 97
+    w32(buf, IMAGE_HEADER_SIZE as usize, 115);  // ecall
+    buf.ptr[IMAGE_HEADER_SIZE as usize + 1usize] = code_byte;  // marker (still ecall since byte1 is don't-care for ecall)
+
+    // Actually ecall is exactly 0x00000073, byte[1]=code_byte breaks it.
+    // Use full ecall and put marker in padding area or rodata.
+    // Simpler: just use ecall (115,0,0,0) for all images, differentiate by generation.
+    buf.ptr[IMAGE_HEADER_SIZE as usize + 1usize] = 0;
+
+    // SHA-256
+    var digest: [byte: 32] = [];
+    sha256_digest(buf[0: total as usize], digest[0: 32]);
+    i = 0;
+    while i < 32 {
+        buf.ptr[28 + i] = digest[i];
+        i = i + 1;
+    }
+}
+
+// ── Dual Slot Tests ──
+
+test "dualslot_init" {
+    var ds: DualSlot = DualSlot{ slots: [], active: 0, next_generation: 0 };
+    dualslot_init(&ds);
+    try assert_eq_i32(ds.active as i32, 0);
+    try assert_eq_i32(ds.next_generation as i32, 1);
+    try assert_eq_i32(ds.slots[0].meta.state as i32, SLOT_INACTIVE as i32);
+    try assert_eq_i32(ds.slots[1].meta.state as i32, SLOT_INACTIVE as i32);
+}
+
+test "update_stage_and_commit" {
+    var ds: DualSlot = DualSlot{ slots: [], active: 0, next_generation: 0 };
+    dualslot_init(&ds);
+
+    // Build image
+    var img: [byte: 192] = [];
+    build_image(img[0: 192], 0);
+
+    // Stage: writes to slot 1 (non-active)
+    try update_stage(&ds, img[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    try assert_eq_i32(ds.slots[1].meta.state as i32, SLOT_UPDATING as i32);
+
+    // Commit: switches active to slot 1
+    try update_commit(&ds);
+    try assert_eq_i32(ds.active as i32, 1);
+    try assert_eq_i32(ds.slots[1].meta.state as i32, SLOT_ACTIVE as i32);
+    try assert_eq_i32(ds.slots[1].meta.generation as i32, 1);
+    try assert_eq_i32(ds.slots[0].meta.state as i32, SLOT_INACTIVE as i32);
+}
+
+test "update_second_update_switches_back" {
+    var ds: DualSlot = DualSlot{ slots: [], active: 0, next_generation: 0 };
+    dualslot_init(&ds);
+
+    var img: [byte: 192] = [];
+    build_image(img[0: 192], 0);
+
+    // First update: slot 0 → slot 1
+    try update_stage(&ds, img[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    try update_commit(&ds);
+    try assert_eq_i32(ds.active as i32, 1);
+
+    // Second update: slot 1 → slot 0
+    try update_stage(&ds, img[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    try update_commit(&ds);
+    try assert_eq_i32(ds.active as i32, 0);
+    try assert_eq_i32(ds.slots[0].meta.generation as i32, 2);
+}
+
+test "update_rollback" {
+    var ds: DualSlot = DualSlot{ slots: [], active: 0, next_generation: 0 };
+    dualslot_init(&ds);
+
+    var img: [byte: 192] = [];
+    build_image(img[0: 192], 0);
+
+    // First commit to slot 1
+    try update_stage(&ds, img[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    try update_commit(&ds);
+    try assert_eq_i32(ds.active as i32, 1);
+
+    // Stage new update to slot 0, then rollback
+    try update_stage(&ds, img[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    update_rollback(&ds);
+    // Slot 0 should be INVALID, active still 1
+    try assert_eq_i32(ds.slots[0].meta.state as i32, SLOT_INVALID as i32);
+    try assert_eq_i32(ds.active as i32, 1);
+}
+
+test "boot_select_highest_generation" {
+    var ds: DualSlot = DualSlot{ slots: [], active: 0, next_generation: 0 };
+    dualslot_init(&ds);
+
+    var img: [byte: 192] = [];
+    build_image(img[0: 192], 0);
+
+    // Two updates: gen 1 in slot 1, gen 2 in slot 0
+    try update_stage(&ds, img[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    try update_commit(&ds);
+    try update_stage(&ds, img[0: IMAGE_HEADER_SIZE as usize + 4usize]);
+    try update_commit(&ds);
+
+    // Simulate boot: should pick slot 0 (gen 2 > gen 1)
+    // But slot 1 was marked INACTIVE by second commit, so only slot 0 is active
+    const selected: u32 = update_boot_select(&ds);
+    try assert_eq_i32(selected as i32, 0);
+}
+
+// ── CRC32 Tests ──
+
+test "crc32_basic" {
+    var data: [byte: 4] = [1, 2, 3, 4];
+    const c: u32 = crc32_compute(data[0: 4]);
+    // Deterministic: same input → same output
+    const c2: u32 = crc32_compute(data[0: 4]);
+    try assert_eq_i32(c as i32, c2 as i32);
+
+    // Different input → different output
+    data[0] = 5;
+    const c3: u32 = crc32_compute(data[0: 4]);
+    var differ: i32 = 0;
+    if c != c3 { differ = 1; }
+    try assert_eq_i32(differ, 1);
+}
+
+// ── Recovery Tests ──
+
+test "recovery_normal_restart" {
+    var rm: RecoveryManager = RecoveryManager{ states: [], log: [], log_head: 0, log_count: 0 };
+    recovery_init(&rm);
+
+    // First crash: should allow restart
+    recovery_record_crash(&rm, 0, 100, 1);
+    try assert_eq_i32(recovery_should_restart(&rm, 0), 1);
+    try assert_eq_i32(recovery_crash_count(&rm, 0) as i32, 1);
+}
+
+test "recovery_log_preserves_structured_fault_fields" {
+    var rm: RecoveryManager = RecoveryManager{ states: [], log: [], log_head: 0, log_count: 0 };
+    recovery_init(&rm);
+
+    recovery_record_fault(&rm, 0, 100, RECOVERY_FAULT_CLASS_SEGV, 1u32, 11u32);
+
+    try assert_eq_i32(rm.log_count as i32, 1);
+    try assert_eq_i32(rm.log[0].container_id as i32, 0);
+    try assert_eq_i32(rm.log[0].fault_class as i32, RECOVERY_FAULT_CLASS_SEGV as i32);
+    try assert_eq_i32(rm.log[0].fault_code as i32, 1);
+    try assert_eq_i32(rm.log[0].fault_signal as i32, 11);
+}
+
+test "recovery_record_crash_defaults_to_unknown_fault_class" {
+    var rm: RecoveryManager = RecoveryManager{ states: [], log: [], log_head: 0, log_count: 0 };
+    recovery_init(&rm);
+
+    recovery_record_crash(&rm, 0, 100, 7u32);
+
+    try assert_eq_i32(rm.log_count as i32, 1);
+    try assert_eq_i32(rm.log[0].fault_class as i32, RECOVERY_FAULT_CLASS_UNKNOWN as i32);
+    try assert_eq_i32(rm.log[0].fault_code as i32, 7);
+    try assert_eq_i32(rm.log[0].fault_signal as i32, 0);
+}
+
+test "recovery_fuse_after_3_crashes" {
+    var rm: RecoveryManager = RecoveryManager{ states: [], log: [], log_head: 0, log_count: 0 };
+    recovery_init(&rm);
+
+    // 3 crashes within 60 seconds
+    recovery_record_crash(&rm, 0, 100, 1);
+    recovery_record_crash(&rm, 0, 110, 2);
+    recovery_record_crash(&rm, 0, 120, 3);
+
+    try assert_eq_i32(recovery_is_fused(&rm, 0), 1);
+    try assert_eq_i32(recovery_should_restart(&rm, 0), 0);
+}
+
+test "recovery_window_reset" {
+    var rm: RecoveryManager = RecoveryManager{ states: [], log: [], log_head: 0, log_count: 0 };
+    recovery_init(&rm);
+
+    // 2 crashes at t=100
+    recovery_record_crash(&rm, 0, 100, 1);
+    recovery_record_crash(&rm, 0, 110, 2);
+
+    // Next crash after 60+ seconds: window resets
+    recovery_record_crash(&rm, 0, 200, 3);
+    try assert_eq_i32(recovery_crash_count(&rm, 0) as i32, 1);  // reset to 1
+    try assert_eq_i32(recovery_is_fused(&rm, 0), 0);
+}
+
+test "recovery_reset_fuse" {
+    var rm: RecoveryManager = RecoveryManager{ states: [], log: [], log_head: 0, log_count: 0 };
+    recovery_init(&rm);
+
+    // Blow fuse
+    recovery_record_crash(&rm, 0, 100, 1);
+    recovery_record_crash(&rm, 0, 110, 2);
+    recovery_record_crash(&rm, 0, 120, 3);
+    try assert_eq_i32(recovery_is_fused(&rm, 0), 1);
+
+    // Explicit reset
+    recovery_reset_fuse(&rm, 0);
+    try assert_eq_i32(recovery_is_fused(&rm, 0), 0);
+    try assert_eq_i32(recovery_should_restart(&rm, 0), 1);
+}
+
+test "recovery_independent_containers" {
+    var rm: RecoveryManager = RecoveryManager{ states: [], log: [], log_head: 0, log_count: 0 };
+    recovery_init(&rm);
+
+    // Blow fuse on container 0
+    recovery_record_crash(&rm, 0, 100, 1);
+    recovery_record_crash(&rm, 0, 110, 2);
+    recovery_record_crash(&rm, 0, 120, 3);
+
+    // Container 1 should be unaffected
+    try assert_eq_i32(recovery_is_fused(&rm, 0), 1);
+    try assert_eq_i32(recovery_is_fused(&rm, 1), 0);
+    try assert_eq_i32(recovery_should_restart(&rm, 1), 1);
+}

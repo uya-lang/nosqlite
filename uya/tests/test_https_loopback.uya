@@ -1,0 +1,147 @@
+// test_https_loopback.uya - 最小 HTTPS 回环测试
+
+use tls.https;
+use tls.x509.cert;
+use libc.unistd;
+use libc.syscall;
+use tls.crypto.rsa;
+
+fn response_has_subslice(hay: &const byte, hay_len: usize, needle: &[byte]) bool {
+    if needle.len == 0 || hay_len < needle.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i + needle.len <= hay_len {
+        var ok: bool = true;
+        var j: usize = 0;
+        while j < needle.len {
+            if hay[i + j] != needle.ptr[j] {
+                ok = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if ok {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn test_https_read_some_would_block_nonblocking_pipe() i32 {
+    var fds: [i32: 2] = [0:2];
+    _ = sys_pipe2(&fds[0], O_NONBLOCK) catch {
+        return 20;
+    };
+    var buf: [byte: 8] = [0:8];
+    https_read_some(fds[0], &buf[0], 8) catch |err| {
+        _ = sys_close(fds[0]) catch {};
+        _ = sys_close(fds[1]) catch {};
+        if @error_id(err) == @error_id(error.ReadWouldBlock) {
+            return 0;
+        }
+        return 21;
+    };
+    _ = sys_close(fds[0]) catch {};
+    _ = sys_close(fds[1]) catch {};
+    return 22;
+}
+
+fn test_https_read_some_closed_pipe_maps_connection_closed() i32 {
+    var fds: [i32: 2] = [0:2];
+    _ = sys_pipe2(&fds[0], 0) catch {
+        return 23;
+    };
+    _ = sys_close(fds[1]) catch {};
+    var buf: [byte: 8] = [0:8];
+    https_read_some(fds[0], &buf[0], 8) catch |err| {
+        _ = sys_close(fds[0]) catch {};
+        if @error_id(err) == @error_id(error.ConnectionClosed) {
+            return 0;
+        }
+        return 24;
+    };
+    _ = sys_close(fds[0]) catch {};
+    return 25;
+}
+
+fn test_https_write_all_pipe_roundtrip() i32 {
+    var fds: [i32: 2] = [0:2];
+    _ = sys_pipe2(&fds[0], 0) catch {
+        return 26;
+    };
+    var msg: [byte: 5] = [104, 101, 108, 108, 111];
+    https_write_all(fds[1], &msg[0], 5) catch {
+        _ = sys_close(fds[0]) catch {};
+        _ = sys_close(fds[1]) catch {};
+        return 27;
+    };
+    var buf: [byte: 8] = [0:8];
+    const n: isize = sys_read(fds[0], &buf[0], 8) catch {
+        _ = sys_close(fds[0]) catch {};
+        _ = sys_close(fds[1]) catch {};
+        return 28;
+    };
+    _ = sys_close(fds[0]) catch {};
+    _ = sys_close(fds[1]) catch {};
+    if n != 5 {
+        return 29;
+    }
+    if buf[0] != 104 || buf[1] != 101 || buf[2] != 108 || buf[3] != 108 || buf[4] != 111 {
+        return 30;
+    }
+    return 0;
+}
+
+export fn main() i32 {
+    if test_https_read_some_would_block_nonblocking_pipe() != 0 {
+        return 12;
+    }
+    if test_https_read_some_closed_pipe_maps_connection_closed() != 0 {
+        return 13;
+    }
+    if test_https_write_all_pipe_roundtrip() != 0 {
+        return 14;
+    }
+    var host: [byte: 9] = [108, 111, 99, 97, 108, 104, 111, 115, 116];
+    var srv: HttpsServer = https_server_listen(&host[0], 9, 0) catch {
+        return 1;
+    };
+    var leaf: Cert = Cert{};
+    var key: RsaPrivateKey = RsaPrivateKey{};
+    https_server_set_rsa_identity(&srv, &host[0], 9, &host[0], 9, &host[0], 9, &leaf, &key);
+
+    const pid: i32 = fork();
+    if pid == 0 {
+        var resp: HttpsResponse = https_get(&host[0], 9, srv.port, &"/"[0: 1]) catch {
+            _exit(2);
+            return 2;
+        };
+        if resp.status != 200 {
+            _exit(3);
+            return 3;
+        }
+        if !response_has_subslice(&resp.response[0], resp.response_len, &"hello https"[0: 11]) {
+            _exit(4);
+            return 4;
+        }
+        _exit(0);
+        return 0;
+    }
+
+    https_server_serve_once(&srv, &"hello https"[0: 11]) catch {
+        https_server_close(&srv);
+        return 5;
+    };
+    https_server_close(&srv);
+
+    var st: i32 = 0;
+    _ = sys_waitpid(pid, &st, 0) catch {
+        return 6;
+    };
+    if ((st >> 8) & 0xff) != 0 {
+        return 10 + ((st >> 8) & 0xff);
+    }
+    return 0;
+}

@@ -1,0 +1,24 @@
+// TDD: string literal -> [byte: N], *byte; char literal -> byte
+use std.runtime.entry;
+
+export fn main() i32 {
+    // 1. string -> [byte: N] (auto NUL)
+    var buf: [byte: 8] = "hi";
+    if buf[0] != 104 { return 1; }
+    if buf[1] != 105 { return 2; }
+    if buf[2] != 0 { return 3; }
+    buf[3] = 'c';
+    if buf[3] != 'c' { return 8; }
+    // 2. string -> *byte (FFI)
+    const s: *byte = "ab";
+    if s == null { return 4; }
+    if s[0] != 97 || s[1] != 98 { return 5; }
+
+    // 3. char literal -> byte
+    const c: byte = 'A';
+    if c != 'A' { return 6; }
+    const c2: byte = '\n';
+    if c2 != '\n' { return 7; }
+
+    return 0;
+}

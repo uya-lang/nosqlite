@@ -1,0 +1,18 @@
+// test_syscall_layer.uya - 标准库重构 Phase 1：syscall 层 use syscall 验证
+// 当前仅验证 use syscall 能解析；常量/函数 C 名与 lib 前缀待 Phase 1 后续（见 todo_std_refactor）
+
+use syscall;
+use std.runtime.entry;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_syscall_module_loaded() !void {
+    // 仅验证 syscall 模块可被 use 且无编译错误；具体 sys_* 调用与常量测试待 C 名/前缀就绪后补充
+}
+
+export fn main() i32 {
+    test_suite_begin("Syscall Layer");
+    run_test("syscall_module_loaded", test_syscall_module_loaded);
+    return test_suite_end();
+}

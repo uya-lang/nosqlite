@@ -1,0 +1,55 @@
+// 枚举类型 sizeof 测试程序
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+enum Color {
+    RED,
+    GREEN,
+    BLUE,
+}
+
+enum HttpStatus {
+    OK,
+    NOT_FOUND,
+    SERVER_ERROR,
+}
+
+fn test_enum_type_sizeof() !void {
+    const color_type_size: i32 = @size_of(Color);
+    try assert_eq_i32(color_type_size, 4);
+    
+    const http_status_type_size: i32 = @size_of(HttpStatus);
+    try assert_eq_i32(http_status_type_size, 4);
+}
+
+fn test_enum_var_sizeof() !void {
+    var color: Color = Color.RED;
+    const color_var_size: i32 = @size_of(color);
+    try assert_eq_i32(color_var_size, 4);
+    
+    var status: HttpStatus = HttpStatus.OK;
+    const status_var_size: i32 = @size_of(status);
+    try assert_eq_i32(status_var_size, 4);
+}
+
+fn test_enum_ptr_sizeof() !void {
+    const color_ptr_size: i32 = @size_of(&Color);
+    try assert_eq_i32(color_ptr_size, 8);
+    
+    const http_status_ptr_size: i32 = @size_of(&HttpStatus);
+    try assert_eq_i32(http_status_ptr_size, 8);
+}
+
+export fn main() i32 {
+    test_suite_begin("Enum Sizeof Tests");
+    
+    run_test("enum type sizeof", test_enum_type_sizeof);
+    run_test("enum var sizeof", test_enum_var_sizeof);
+    run_test("enum ptr sizeof", test_enum_ptr_sizeof);
+    
+    return test_suite_end();
+}

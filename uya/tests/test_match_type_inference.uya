@@ -1,0 +1,90 @@
+// test_match_type_inference.uya - 测试 match 表达式类型推断修复
+use std.runtime.entry;
+// Bug: 当第一个分支有 as 类型转换，第二个分支是字段访问时，类型推断失败
+// 原因: checker_infer_type 没有为 match 分支变量创建符号表条目
+
+use std.testing.assert_true;
+
+struct NumberData {
+    value: i32,
+}
+
+struct BinaryData {
+    op: i32,
+}
+
+union Data {
+    number: NumberData,
+    binary: BinaryData,
+}
+
+// 测试1：第一个分支 as，第二个分支字段访问
+fn test_first_as_second_field() i32 {
+    const n: NumberData = NumberData{ value: 42 };
+    var u: Data = Data.number(n);
+    
+    const result: i32 = match u {
+        .number(n) => n.value as i32,
+        .binary(b) => b.op,  // 字段访问，不需要 as
+    };
+    return result;
+}
+
+// 测试2：第一个分支 as，第二个分支字面量
+fn test_first_as_second_literal() i32 {
+    const n: NumberData = NumberData{ value: 42 };
+    var u: Data = Data.number(n);
+    
+    const result: i32 = match u {
+        .number(n) => n.value as i32,
+        .binary(b) => 0,  // 字面量
+    };
+    return result;
+}
+
+// 测试3：所有分支都是字段访问
+fn test_all_fields() i32 {
+    const n: NumberData = NumberData{ value: 100 };
+    var u: Data = Data.number(n);
+    
+    const result: i32 = match u {
+        .number(n) => n.value,
+        .binary(b) => b.op,
+    };
+    return result;
+}
+
+// 测试4：多分支混合
+fn test_mixed() i32 {
+    const n: NumberData = NumberData{ value: 42 };
+    var u: Data = Data.number(n);
+    
+    const result: i32 = match u {
+        .number(n) => n.value as i32,
+        .binary(b) => b.op as i32,
+    };
+    return result;
+}
+
+export fn main() i32 {
+    printf("=== Match Type Inference Tests ===\n");
+    
+    const r1: i32 = test_first_as_second_field();
+    printf("test_first_as_second_field: %d\n", r1);
+    try assert_true(r1 == 42);
+    
+    const r2: i32 = test_first_as_second_literal();
+    printf("test_first_as_second_literal: %d\n", r2);
+    try assert_true(r2 == 42);
+    
+    const r3: i32 = test_all_fields();
+    printf("test_all_fields: %d\n", r3);
+    try assert_true(r3 == 100);
+    
+    const r4: i32 = test_mixed();
+    printf("test_mixed: %d\n", r4);
+    try assert_true(r4 == 42);
+    
+    printf("=== All tests passed ===\n");
+    return 0;
+}

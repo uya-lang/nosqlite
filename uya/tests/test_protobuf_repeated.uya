@@ -1,0 +1,60 @@
+// Phase 2：repeated int32（非 packed）与 repeated message
+use std.runtime.entry;
+use std.protobuf.demo.DemoInnerList;
+use std.protobuf.demo.DemoIntList;
+use std.protobuf.demo.PbI32Strip;
+use std.protobuf.decode.decode_demo_inner_list;
+use std.protobuf.decode.decode_demo_int_list;
+use std.protobuf.encode.encode_demo_inner_list_to;
+use std.protobuf.encode.encode_demo_int_list_unpacked_to;
+use std.protobuf.wire.pb_buf_load_u32_le_as_i32;
+use std.protobuf.wire.pb_buf_store_u32_le_at;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 512] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 512);
+
+    var nb: [byte: 16] = [];
+    pb_buf_store_u32_le_at(&nb[0], 0, 10 as u32);
+    pb_buf_store_u32_le_at(&nb[0], 4, 20 as u32);
+    pb_buf_store_u32_le_at(&nb[0], 8, 30 as u32);
+    const lst: DemoIntList = DemoIntList{ nums: PbI32Strip{ data: &nb[0], count: 3 } };
+    var out: [byte: 64] = [];
+    const nu: usize = encode_demo_int_list_unpacked_to(&lst, &out[0], 64) catch { return 1; };
+    const dl: DemoIntList = decode_demo_int_list(&a, &out[0], nu) catch { return 2; };
+    if dl.nums.count != 3 {
+        return 3;
+    }
+    if pb_buf_load_u32_le_as_i32(dl.nums.data, 0) != 10 {
+        return 4;
+    }
+    if pb_buf_load_u32_le_as_i32(dl.nums.data, 4) != 20 {
+        return 5;
+    }
+    if pb_buf_load_u32_le_as_i32(dl.nums.data, 8) != 30 {
+        return 6;
+    }
+
+    var ib: [byte: 8] = [];
+    pb_buf_store_u32_le_at(&ib[0], 0, 100 as u32);
+    pb_buf_store_u32_le_at(&ib[0], 4, 200 as u32);
+    const il: DemoInnerList = DemoInnerList{ items: PbI32Strip{ data: &ib[0], count: 2 } };
+    var out2: [byte: 64] = [];
+    const ni: usize = encode_demo_inner_list_to(&il, &out2[0], 64) catch { return 7; };
+    arena_init(&a, &arena_buf[0], 512);
+    const di: DemoInnerList = decode_demo_inner_list(&a, &out2[0], ni) catch { return 8; };
+    if di.items.count != 2 {
+        return 9;
+    }
+    if pb_buf_load_u32_le_as_i32(di.items.data, 0) != 100 {
+        return 10;
+    }
+    if pb_buf_load_u32_le_as_i32(di.items.data, 4) != 200 {
+        return 11;
+    }
+
+    return 0;
+}

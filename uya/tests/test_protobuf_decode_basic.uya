@@ -1,0 +1,42 @@
+// std.protobuf Phase 1：decode_demo_user（标量 + string 零拷贝视图）
+use std.runtime.entry;
+use std.protobuf.demo.DemoUser;
+use std.protobuf.decode.decode_demo_user;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 256] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 256);
+
+    // 手工构造：id=42, name="hi", active=true
+    // tag1=08, val=2a; tag2=12, len=02, 68 69; tag3=18, 01
+    var buf: [byte: 32] = [];
+    buf[0] = 8;
+    buf[1] = 42;
+    buf[2] = 18;
+    buf[3] = 2;
+    buf[4] = 104;
+    buf[5] = 105;
+    buf[6] = 24;
+    buf[7] = 1;
+    const u: DemoUser = decode_demo_user(&a, &buf[0], 8) catch { return 1; };
+    if u.id != 42 {
+        return 2;
+    }
+    if u.name.len != 2 || u.name.ptr[0] != 104 || u.name.ptr[1] != 105 {
+        return 3;
+    }
+    if !u.active {
+        return 4;
+    }
+
+    // 缺省：空输入 → 全默认
+    const z: DemoUser = decode_demo_user(&a, &buf[0], 0) catch { return 5; };
+    if z.id != 0 || z.name.len != 0 || z.active {
+        return 6;
+    }
+
+    return 0;
+}

@@ -1,0 +1,32 @@
+// 测试 drop/RAII：结构体定义 fn drop(self: T) void
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+var drop_count: i32 = 0;
+
+struct S {
+  id: i32,
+  fn drop(self: S) void {
+    drop_count = drop_count + 1;
+  }
+}
+
+fn test_drop_simple() !void {
+  drop_count = 0;
+  {
+    const s: S = S{ id: 42 };
+  }
+  try assert_eq_i32(drop_count, 1);
+}
+
+export fn main() i32 {
+  test_suite_begin("Drop Simple Tests");
+  
+  run_test("drop simple", test_drop_simple);
+  
+  return test_suite_end();
+}

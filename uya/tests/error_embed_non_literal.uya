@@ -1,0 +1,6 @@
+export fn main() i32 {
+    const path: &[const byte] = "fixtures/embed/basic.bin";
+    const _x: &[const byte] = @embed(path);
+    _ = _x;
+    return 0;
+}

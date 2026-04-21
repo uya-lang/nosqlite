@@ -1,0 +1,24 @@
+// 测试 std.json encode(arena, value) !&[byte] 返回切片
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.encoder.encode;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 131072] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 131072);
+
+    const v: JsonValue = JsonValue.int_val(42);
+    const s: &[byte] = encode(&a, &v) catch { return 1; };
+    if @len(s) != 2 { return 2; }
+    if s.ptr[0] != 52 || s.ptr[1] != 50 { return 3; }
+
+    const vn: JsonValue = JsonValue.json_null();
+    const sn: &[byte] = encode(&a, &vn) catch { return 4; };
+    if @len(sn) != 4 { return 5; }
+    if sn.ptr[0] != 110 || sn.ptr[1] != 117 || sn.ptr[2] != 108 || sn.ptr[3] != 108 { return 6; }
+
+    return 0;
+}

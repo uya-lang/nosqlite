@@ -1,0 +1,144 @@
+// 测试 to_json / from_json 对结构体数组与结构体切片字段的反射支持
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.parser.parse;
+use std.json.encoder.to_json;
+use std.json.encoder.from_json;
+use std.json.encoder.json_object_find_index;
+use std.json.encoder.json_expect_i64;
+use std.json.errors;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+struct WithPointArray {
+    id: i64,
+    points: [Point: 2],
+}
+
+struct WithPointSlice {
+    id: i64,
+    points: &[Point],
+}
+
+fn check_point_value(v: &JsonValue, expected_x: i64, expected_y: i64) i32 {
+    match v[0] {
+        .obj(o) => {
+            var x_key: [byte: 2] = [];
+            x_key[0] = 120;
+            x_key[1] = 0;
+            var y_key: [byte: 2] = [];
+            y_key[0] = 121;
+            y_key[1] = 0;
+            const x_idx: usize = json_object_find_index(&o, &x_key[0], 1) catch { return 1; };
+            const y_idx: usize = json_object_find_index(&o, &y_key[0], 1) catch { return 2; };
+            const x_val: i64 = json_expect_i64(&o.pairs[x_idx].value) catch { return 3; };
+            const y_val: i64 = json_expect_i64(&o.pairs[y_idx].value) catch { return 4; };
+            if x_val != expected_x { return 5; }
+            if y_val != expected_y { return 6; }
+            return 0;
+        },
+        else => { return 7; },
+    }
+}
+
+export fn main() i32 {
+    var arena_buf: [byte: 1048576] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 1048576);
+
+    const arr_obj: WithPointArray = WithPointArray{
+        id: 7,
+        points: [
+            Point{ x: 1, y: 2 },
+            Point{ x: 3, y: 4 },
+        ],
+    };
+    const arr_json: &[byte] = to_json<WithPointArray>(&a, arr_obj) catch { return 1; };
+    const arr_parsed: JsonValue = parse(&a, arr_json.ptr, arr_json.len) catch { return 2; };
+    match arr_parsed {
+        .obj(o) => {
+            if o.len != 2 { return 3; }
+            var id_key: [byte: 2] = [];
+            id_key[0] = 105;
+            id_key[1] = 100;
+            var points_key: [byte: 6] = [];
+            points_key[0] = 112;
+            points_key[1] = 111;
+            points_key[2] = 105;
+            points_key[3] = 110;
+            points_key[4] = 116;
+            points_key[5] = 115;
+            const id_idx: usize = json_object_find_index(&o, &id_key[0], 2) catch { return 4; };
+            const id_val: i64 = json_expect_i64(&o.pairs[id_idx].value) catch { return 5; };
+            if id_val != 7 { return 6; }
+            const points_idx: usize = json_object_find_index(&o, &points_key[0], 6) catch { return 7; };
+            match o.pairs[points_idx].value {
+                .arr(arr) => {
+                    if arr.len != 2 { return 8; }
+                    const p0_err: i32 = check_point_value(&arr.items[0], 1, 2);
+                    if p0_err != 0 { return 10 + p0_err; }
+                    const p1_err: i32 = check_point_value(&arr.items[1], 3, 4);
+                    if p1_err != 0 { return 20 + p1_err; }
+                },
+                else => { return 9; },
+            }
+        },
+        else => { return 30; },
+    }
+
+    const arr_out: WithPointArray = from_json<WithPointArray>(&a, arr_json) catch { return 31; };
+    if arr_out.id != 7 { return 32; }
+    if arr_out.points[0].x != 1 || arr_out.points[0].y != 2 { return 33; }
+    if arr_out.points[1].x != 3 || arr_out.points[1].y != 4 { return 34; }
+
+    var points_buf: [Point: 2] = [
+        Point{ x: 10, y: 20 },
+        Point{ x: 30, y: 40 },
+    ];
+    const slice_obj: WithPointSlice = WithPointSlice{ id: 9, points: &points_buf[0: 2] };
+    const slice_json: &[byte] = to_json<WithPointSlice>(&a, slice_obj) catch { return 35; };
+    const slice_parsed: JsonValue = parse(&a, slice_json.ptr, slice_json.len) catch { return 36; };
+    match slice_parsed {
+        .obj(o) => {
+            if o.len != 2 { return 37; }
+            var id_key2: [byte: 2] = [];
+            id_key2[0] = 105;
+            id_key2[1] = 100;
+            var points_key2: [byte: 6] = [];
+            points_key2[0] = 112;
+            points_key2[1] = 111;
+            points_key2[2] = 105;
+            points_key2[3] = 110;
+            points_key2[4] = 116;
+            points_key2[5] = 115;
+            const id_idx2: usize = json_object_find_index(&o, &id_key2[0], 2) catch { return 38; };
+            const id_val2: i64 = json_expect_i64(&o.pairs[id_idx2].value) catch { return 39; };
+            if id_val2 != 9 { return 40; }
+            const points_idx2: usize = json_object_find_index(&o, &points_key2[0], 6) catch { return 41; };
+            match o.pairs[points_idx2].value {
+                .arr(arr2) => {
+                    if arr2.len != 2 { return 42; }
+                    const sp0_err: i32 = check_point_value(&arr2.items[0], 10, 20);
+                    if sp0_err != 0 { return 50 + sp0_err; }
+                    const sp1_err: i32 = check_point_value(&arr2.items[1], 30, 40);
+                    if sp1_err != 0 { return 60 + sp1_err; }
+                },
+                else => { return 43; },
+            }
+        },
+        else => { return 70; },
+    }
+
+    const slice_out: WithPointSlice = from_json<WithPointSlice>(&a, slice_json) catch { return 71; };
+    if slice_out.id != 9 { return 72; }
+    if slice_out.points.len != 2 { return 73; }
+    if slice_out.points.ptr[0].x != 10 || slice_out.points.ptr[0].y != 20 { return 74; }
+    if slice_out.points.ptr[1].x != 30 || slice_out.points.ptr[1].y != 40 { return 75; }
+
+    return 0;
+}

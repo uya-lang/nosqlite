@@ -1,0 +1,116 @@
+// sizeof 测试程序
+use std.runtime.entry;
+// 测试 sizeof 内置函数（基础类型、指针类型、结构体类型、数组类型）
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Mixed {
+    a: i32,
+    b: bool,
+    c: i32,
+}
+
+fn test_basic_types() !void {
+    try assert_eq_i32(@size_of(i32), 4);
+    try assert_eq_i32(@size_of(bool), 1);
+    try assert_eq_i32(@size_of(byte), 1);
+}
+
+fn test_pointer_types() !void {
+    const ptr_i32_size: i32 = @size_of(&i32);
+    try expect(ptr_i32_size == 4 || ptr_i32_size == 8);
+    
+    const ptr_bool_size: i32 = @size_of(&bool);
+    try assert_eq_i32(ptr_bool_size, ptr_i32_size);
+}
+
+fn test_variable_size() !void {
+    var x: i32 = 42;
+    try assert_eq_i32(@size_of(x), 4);
+    
+    var b: bool = true;
+    try assert_eq_i32(@size_of(b), 1);
+    
+    var byte_val: byte = 0;
+    try assert_eq_i32(@size_of(byte_val), 1);
+}
+
+fn test_struct_types() !void {
+    try assert_eq_i32(@size_of(Point), 8);
+    
+    const mixed_type_size: i32 = @size_of(Mixed);
+    try expect(mixed_type_size >= 9 && mixed_type_size <= 12);
+}
+
+fn test_struct_variable() !void {
+    var point: Point = Point{ x: 10, y: 20 };
+    try assert_eq_i32(@size_of(point), 8);
+    
+    var mixed: Mixed = Mixed{ a: 1, b: true, c: 2 };
+    try assert_eq_i32(@size_of(mixed), @size_of(Mixed));
+}
+
+fn test_struct_pointer() !void {
+    const platform_word_size: i32 = @size_of(&i32);
+    
+    try assert_eq_i32(@size_of(&Point), platform_word_size);
+    try assert_eq_i32(@size_of(&Mixed), platform_word_size);
+}
+
+fn test_array_types() !void {
+    try assert_eq_i32(@size_of([i32: 10]), 40);
+    try assert_eq_i32(@size_of([bool: 5]), 5);
+    try assert_eq_i32(@size_of([Point: 3]), 24);
+}
+
+fn test_array_variables() !void {
+    var nums: [i32: 5] = [1, 2, 3, 4, 5];
+    try assert_eq_i32(@size_of(nums), 20);
+    
+    var bools: [bool: 10] = [true, false, true, false, true, false, true, false, true, false];
+    try assert_eq_i32(@size_of(bools), 10);
+    
+    var points: [Point: 2] = [Point{ x: 1, y: 2 }, Point{ x: 3, y: 4 }];
+    try assert_eq_i32(@size_of(points), 16);
+}
+
+fn test_pointer_variable() !void {
+    const platform_word_size: i32 = @size_of(&i32);
+    
+    var ptr: &i32 = null;
+    try assert_eq_i32(@size_of(ptr), platform_word_size);
+    
+    var point_ptr: &Point = null;
+    try assert_eq_i32(@size_of(point_ptr), platform_word_size);
+}
+
+fn test_sizeof_in_expr() !void {
+    try assert_eq_i32(@size_of(i32) * 10, 40);
+    
+    const platform_word_size: i32 = @size_of(&i32);
+    try assert_eq_i32(@size_of(&Point) * 5, platform_word_size * 5);
+}
+
+export fn main() i32 {
+    test_suite_begin("Sizeof Tests");
+    run_test("basic types", test_basic_types);
+    run_test("pointer types", test_pointer_types);
+    run_test("variable size", test_variable_size);
+    run_test("struct types", test_struct_types);
+    run_test("struct variable", test_struct_variable);
+    run_test("struct pointer", test_struct_pointer);
+    run_test("array types", test_array_types);
+    run_test("array variables", test_array_variables);
+    run_test("pointer variable", test_pointer_variable);
+    run_test("sizeof in expr", test_sizeof_in_expr);
+    return test_suite_end();
+}

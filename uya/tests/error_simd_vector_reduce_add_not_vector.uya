@@ -1,0 +1,6 @@
+// 负例：@vector.reduce_add 须接受 @vector(T,N)
+export fn main() i32 {
+    const x: i32 = 7;
+    const s: i32 = @vector.reduce_add(x);
+    return s;
+}

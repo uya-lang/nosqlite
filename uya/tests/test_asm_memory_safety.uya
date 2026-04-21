@@ -1,0 +1,133 @@
+// test_asm_memory_safety.uya - @asm 内存安全测试
+// 测试内存操作类型验证和指针安全
+
+// ===== 测试指针类型安全 =====
+
+// 测试数组指针输入
+test "asm array pointer input" {
+    var arr: [i32: 4] = [1, 2, 3, 4];
+    var ptr: &i32 = &arr[0];
+    var result: i32 = 0;
+    @asm {
+        "nop" (ptr, -> result);
+    }
+}
+
+// 测试 const 指针输入
+test "asm const pointer safe" {
+    var arr: [i32: 4] = [1, 2, 3, 4];
+    var ptr: &const i32 = &arr[0];
+    var result: i32 = 0;
+    @asm {
+        "nop" (ptr, -> result);
+    }
+}
+
+// 测试切片指针
+test "asm slice pointer" {
+    var arr: [i32: 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    var ptr: &i32 = &arr[2];
+    var result: i32 = 0;
+    @asm {
+        "nop" (ptr, -> result);
+    }
+}
+
+// ===== 测试基本内存操作 =====
+
+// 测试简单的内存读取
+test "asm memory read" {
+    var value: i32 = 42;
+    var ptr: &i32 = &value;
+    var result: i32 = 0;
+    @asm {
+        "nop" (ptr, -> result);
+    }
+}
+
+// 测试简单的内存写入
+test "asm memory write" {
+    var value: i32 = 0;
+    var ptr: &i32 = &value;
+    @asm {
+        "nop" (ptr);
+    }
+}
+
+// ===== 测试 clobbers 声明 =====
+
+// 测试单寄存器 clobber
+test "asm single register clobber" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    } clobbers = ["rax"];
+}
+
+// 测试多寄存器 clobber
+test "asm multiple register clobbers" {
+    var x: i32 = 0;
+    var y: i32 = 0;
+    @asm {
+        "nop" (-> x, y);
+    } clobbers = ["rax", "rbx", "rcx"];
+}
+
+// 测试 memory clobber
+test "asm memory clobber" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    } clobbers = ["memory"];
+}
+
+// 测试混合 clobber
+test "asm mixed clobbers" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    } clobbers = ["rax", "rbx", "memory"];
+}
+
+// ===== 测试边界检查 =====
+
+// 测试数组边界访问
+test "asm array bounds" {
+    var arr: [i32: 4] = [1, 2, 3, 4];
+    var idx: i32 = 2;
+    // 边界检查
+    if idx >= 0 && idx < 4 {
+        var ptr: &i32 = &arr[idx];
+        var result: i32 = 0;
+        @asm {
+            "nop" (ptr, -> result);
+        }
+    }
+}
+
+// ===== 测试嵌套结构 =====
+
+// 测试结构体指针
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+test "asm struct pointer" {
+    var p: Point = Point { x: 10, y: 20 };
+    var ptr: &Point = &p;
+    var result: i32 = 0;
+    @asm {
+        "nop" (ptr, -> result);
+    }
+}
+
+// 测试结构体字段指针
+test "asm struct field pointer" {
+    var p: Point = Point { x: 10, y: 20 };
+    var ptr: &i32 = &p.x;
+    var result: i32 = 0;
+    @asm {
+        "nop" (ptr, -> result);
+    }
+}

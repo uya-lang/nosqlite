@@ -1,0 +1,58 @@
+// test_async_frame_stack_ok.uya
+//
+// 说明：
+// 这不是“所有 @async_fn 都完全纯栈”的新 lowering。
+// 它用来回归当前已经支持的两类栈相关路径：
+// 1) var fut = async_fn(); @await fut; 这类暂存后再 await 的 caller-owned inline；
+// 2) @frame(foo) 可以作为局部变量按声明点持有。
+
+use std.async;
+use std.testing.expect;
+use std.testing.run_test;
+
+@async_fn
+fn child_async(n: i32) Future<!i32> {
+    return n + 1;
+}
+
+@async_fn
+fn temp_then_await() Future<!i32> {
+    var fut: Future<!i32> = child_async(41);
+    const v: i32 = try @await fut;
+    return v;
+}
+
+fn use_frame_ref(f: &@frame(child_async)) i32 {
+    _ = f;
+    return 7;
+}
+
+fn test_frame_local_on_stack() void {
+    var frame: @frame(child_async);
+    const got: i32 = use_frame_ref(&frame);
+    expect(got == 7);
+}
+
+fn test_caller_owned_inline() void {
+    const fut: Future<!i32> = temp_then_await();
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = fut.poll(&w);
+    var result: i32 = 0 - 1;
+    match p {
+        .Ready(ok_val) => {
+            result = ok_val catch { 0 - 3; };
+        },
+        .Pending(_) => {
+            result = 0 - 2;
+        },
+    }
+    expect(result == 42);
+}
+
+test "async_frame_stack_local" {
+    run_test("async_frame_stack_local", test_frame_local_on_stack);
+}
+
+test "async_frame_caller_owned_inline" {
+    run_test("async_frame_caller_owned_inline", test_caller_owned_inline);
+}

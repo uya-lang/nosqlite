@@ -1,0 +1,74 @@
+// 测试 @mc_type 编译时类型反射（含结构体字段反射 field_count / fields）
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+use std.macro_typeinfo.TypeInfo;
+use std.macro_typeinfo.FieldInfo;
+
+struct Point {
+    x: i32,
+    y: f64,
+}
+
+// 宏：获取类型信息
+mc get_type_info(T: type) expr {
+    @mc_type(T);
+}
+
+// 宏：获取类型大小
+mc get_size(T: type) expr {
+    const info: TypeInfo = @mc_type(T);
+    info.size;
+}
+
+// 宏：检查是否为整数类型
+mc is_int(T: type) expr {
+    const info: TypeInfo = @mc_type(T);
+    info.is_integer;
+}
+
+test "test_type_info" {
+    // 测试直接获取类型信息
+    const i32_info: TypeInfo = get_type_info(i32);
+    try assert_eq_i32(i32_info.size, 4);
+    try assert_eq_i32(i32_info.is_integer, true);
+}
+
+test "test_get_size" {
+    try assert_eq_i32(get_size(i32), 4);
+    try assert_eq_i32(get_size(i64), 8);
+    try assert_eq_i32(get_size(i8), 1);
+}
+
+test "test_is_int" {
+    try assert_eq_i32(is_int(i32), true);
+}
+
+test "test_float_type" {
+    const f64_info: TypeInfo = get_type_info(f64);
+    try assert_eq_i32(f64_info.size, 8);
+    try assert_eq_i32(f64_info.is_float, true);
+    try assert_eq_i32(f64_info.is_integer, false);
+}
+
+test "test_bool_type" {
+    const bool_info: TypeInfo = get_type_info(bool);
+    try assert_eq_i32(bool_info.size, 1);
+    try assert_eq_i32(bool_info.is_bool, true);
+}
+
+test "test_type_id_distinguishes_builtin_types" {
+    const i32_info: TypeInfo = get_type_info(i32);
+    const usize_info: TypeInfo = get_type_info(usize);
+    try assert_true(i32_info.type_id != usize_info.type_id);
+}
+
+test "test_struct_type_fields" {
+    const point_info: TypeInfo = get_type_info(Point);
+    try assert_eq_i32(point_info.field_count, 2);
+    try assert_eq_i32(point_info.kind, 6);
+    const f0: FieldInfo = point_info.fields[0];
+    try assert_true(f0.name != null);
+    try assert_true(f0.type_name != null);
+}

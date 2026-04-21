@@ -1,0 +1,92 @@
+// 测试程序：测试数组元素为指针类型时的成员访问
+use std.runtime.entry;
+// 验证生成的 C 代码是否正确使用 -> 操作符
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct ASTNode {
+    type: i32,
+    line: i32,
+    column: i32,
+}
+
+struct CodeGen {
+    nodes: [&ASTNode: 10],
+    count: i32,
+}
+
+fn test_array_pointer_access() !void {
+    var nodes: [&ASTNode: 10] = [];
+    var node0: ASTNode = ASTNode{ type: 0, line: 0, column: 0 };
+    var node1: ASTNode = ASTNode{ type: 0, line: 0, column: 0 };
+    var node2: ASTNode = ASTNode{ type: 0, line: 0, column: 0 };
+    nodes[0] = &node0;
+    nodes[1] = &node1;
+    nodes[2] = &node2;
+    var codegen: CodeGen = CodeGen{ nodes: nodes, count: 3 };
+    
+    // 使用常量索引
+    try expect(codegen.nodes[0].type == 0);
+    try expect(codegen.nodes[1].type == 0);
+    try expect(codegen.nodes[2].type == 0);
+}
+
+fn test_extracted_pointer_vars() !void {
+    var nodes: [&ASTNode: 10] = [];
+    var node0: ASTNode = ASTNode{ type: 0, line: 0, column: 0 };
+    nodes[0] = &node0;
+    var codegen: CodeGen = CodeGen{ nodes: nodes, count: 1 };
+    
+    try expect(codegen.nodes[0] != null);
+    
+    const node: &ASTNode = codegen.nodes[0];
+    try expect(node.type == 0);
+    try expect(node.line == 0);
+    try expect(node.column == 0);
+}
+
+fn test_nested_array_access() !void {
+    var nodes: [&ASTNode: 10] = [];
+    var node0: ASTNode = ASTNode{ type: 0, line: 0, column: 0 };
+    var node1: ASTNode = ASTNode{ type: 0, line: 0, column: 0 };
+    nodes[0] = &node0;
+    nodes[1] = &node1;
+    var codegen: CodeGen = CodeGen{ nodes: nodes, count: 2 };
+    
+    // 使用常量索引
+    const node0_ref: &ASTNode = codegen.nodes[0];
+    try expect(node0_ref.type == 0);
+    const node1_ref: &ASTNode = codegen.nodes[1];
+    try expect(node1_ref.type == 0);
+}
+
+fn test_pointer_assignment() !void {
+    var nodes: [&ASTNode: 10] = [];
+    var node0: ASTNode = ASTNode{ type: 0, line: 0, column: 0 };
+    nodes[0] = &node0;
+    var codegen: CodeGen = CodeGen{ nodes: nodes, count: 1 };
+    
+    try expect(codegen.nodes[0] != null);
+    
+    codegen.nodes[0].type = 10;
+    try assert_eq_i32(codegen.nodes[0].type, 10);
+    
+    codegen.nodes[0].line = 20;
+    try assert_eq_i32(codegen.nodes[0].line, 20);
+    
+    codegen.nodes[0].column = 30;
+    try assert_eq_i32(codegen.nodes[0].column, 30);
+}
+
+export fn main() i32 {
+    test_suite_begin("Array Pointer Access Tests");
+    run_test("array pointer access", test_array_pointer_access);
+    run_test("extracted pointer vars", test_extracted_pointer_vars);
+    run_test("nested array access", test_nested_array_access);
+    run_test("pointer assignment", test_pointer_assignment);
+    return test_suite_end();
+}

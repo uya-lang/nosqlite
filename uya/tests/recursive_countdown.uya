@@ -1,0 +1,36 @@
+// 递归函数测试 - 倒计时
+use std.runtime.entry;
+// 测试递归函数的控制流
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn countdown(n: i32) i32 {
+    if n <= 0 {
+        return 0;
+    } else {
+        return 1 + countdown(n - 1);
+    }
+}
+
+fn test_countdown_zero() !void {
+    try assert_eq_i32(countdown(0), 0);
+}
+
+fn test_countdown_five() !void {
+    try assert_eq_i32(countdown(5), 5);
+}
+
+fn test_countdown_ten() !void {
+    try assert_eq_i32(countdown(10), 10);
+}
+
+export fn main() i32 {
+    test_suite_begin("Recursive Countdown Tests");
+    run_test("countdown zero", test_countdown_zero);
+    run_test("countdown five", test_countdown_five);
+    run_test("countdown ten", test_countdown_ten);
+    return test_suite_end();
+}

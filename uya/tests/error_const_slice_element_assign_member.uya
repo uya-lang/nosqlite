@@ -1,0 +1,11 @@
+// 预期编译失败：嵌套字段为 &[const byte] 时同样不能元素赋值
+
+struct Wrap {
+    data: &[const byte],
+}
+
+fn main() i32 {
+    var w: Wrap = Wrap { data: "z" };
+    w.data[0] = 120 as byte;
+    return 0;
+}

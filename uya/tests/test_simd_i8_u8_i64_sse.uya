@@ -1,0 +1,58 @@
+// SIMD：i8/u8/i64（及掩码）走 uya_simd_sse_* 快路径（SSE/NEON/标量三档均有符号）
+type V8i8 = @vector(i8, 8);
+type V8u8 = @vector(u8, 8);
+type M8 = @mask(8);
+type V2i64 = @vector(i64, 2);
+type V4i64 = @vector(i64, 4);
+type M2 = @mask(2);
+type M4 = @mask(4);
+
+export fn main() i32 {
+    const a8: V8i8 = @vector.splat(3i8);
+    const b8: V8i8 = @vector.splat(5i8);
+    const s8: V8i8 = a8 + b8;
+    const n8: V8i8 = -s8;
+    if @vector.all(n8 == @vector.splat((-8i8))) == false {
+        return 1;
+    }
+    const m8: M8 = s8 < @vector.splat(10i8);
+    if @vector.all(m8) == false {
+        return 2;
+    }
+
+    const au: V8u8 = @vector.splat(10u8);
+    const bu: V8u8 = @vector.splat(4u8);
+    const du: V8u8 = au - bu;
+    if @vector.all(du == @vector.splat(6u8)) == false {
+        return 3;
+    }
+    const mu: M8 = du > @vector.splat(5u8);
+    if @vector.all(mu) == false {
+        return 4;
+    }
+
+    const x2: V2i64 = @vector.splat(7i64);
+    const y2: V2i64 = @vector.splat(2i64);
+    const z2: V2i64 = x2 * y2;
+    const w2: V2i64 = -z2;
+    if @vector.all(w2 == @vector.splat((-14i64))) == false {
+        return 5;
+    }
+    const m2: M2 = z2 == @vector.splat(14i64);
+    if @vector.all(m2) == false {
+        return 6;
+    }
+
+    const p4: V4i64 = @vector.splat(100i64);
+    const q4: V4i64 = @vector.splat(3i64);
+    const r4: V4i64 = p4 + q4;
+    if @vector.all(r4 == @vector.splat(103i64)) == false {
+        return 7;
+    }
+    const m4: M4 = r4 > @vector.splat(100i64);
+    if @vector.all(m4) == false {
+        return 8;
+    }
+
+    return 0;
+}

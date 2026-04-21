@@ -1,0 +1,22 @@
+// 回归：async_channel 与 async_scheduler 同时入图时不应触发重复定义
+
+use std.async;
+use std.async_channel;
+use std.async_scheduler;
+use std.testing.assert_eq_i32;
+
+test "async_channel_scheduler_can_coexist" {
+    var ch: Channel<usize> = channel_new<usize>();
+    const wk: Waker = Waker{};
+    const send_poll: Poll<usize> = ch.send(3 as usize).poll(&wk);
+    var observed: i32 = 0;
+    match send_poll {
+        .Ready(_) => { observed = 1; },
+        .Pending(_) => { observed = 2; },
+    };
+    // 回归目标是保证 async_channel + scheduler 同时入图可编译并可运行到此处。
+    // Ready/Pending 均可接受，语义细节由各模块单测分别覆盖。
+    if observed == 0 {
+        try assert_eq_i32(observed, 1);
+    }
+}

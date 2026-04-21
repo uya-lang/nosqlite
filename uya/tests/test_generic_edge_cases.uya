@@ -1,0 +1,76 @@
+// 测试泛型 - 边界情况
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn f1<T>(x: T) T { return x; }
+fn f2<A>(x: A) A { return x; }
+fn f3<X>(x: X) X { return x; }
+
+fn with_element<Element>(e: Element) Element { return e; }
+fn with_item<Item>(item: Item) Item { return item; }
+
+struct Single<T> {
+    only: T,
+}
+
+struct Triple<T> {
+    first: T,
+    second: T,
+    third: T,
+}
+
+struct Mixed<T> {
+    data: T,
+    count: i32,
+    flag: bool,
+}
+
+fn test_single_letter_params() !void {
+    const r1: i32 = f1<i32>(1);
+    const r2: i32 = f2<i32>(2);
+    const r3: i32 = f3<i32>(3);
+    try assert_eq_i32(r1, 1);
+    try assert_eq_i32(r2, 2);
+    try assert_eq_i32(r3, 3);
+}
+
+fn test_long_param_names() !void {
+    const e: i32 = with_element<i32>(42);
+    const i: i32 = with_item<i32>(100);
+    try assert_eq_i32(e, 42);
+    try assert_eq_i32(i, 100);
+}
+
+fn test_single_field_struct() !void {
+    const s: Single<i32> = Single<i32>{ only: 999 };
+    try assert_eq_i32(s.only, 999);
+}
+
+fn test_multi_field_struct() !void {
+    const t: Triple<i32> = Triple<i32>{ first: 1, second: 2, third: 3 };
+    try assert_eq_i32(t.first, 1);
+    try assert_eq_i32(t.second, 2);
+    try assert_eq_i32(t.third, 3);
+}
+
+fn test_mixed_field_struct() !void {
+    const m: Mixed<i64> = Mixed<i64>{ data: 12345, count: 10, flag: true };
+    try expect(m.data == 12345);
+    try assert_eq_i32(m.count, 10);
+    try expect(m.flag == true);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Edge Cases Tests");
+    run_test("single letter params", test_single_letter_params);
+    run_test("long param names", test_long_param_names);
+    run_test("single field struct", test_single_field_struct);
+    run_test("multi field struct", test_multi_field_struct);
+    run_test("mixed field struct", test_mixed_field_struct);
+    return test_suite_end();
+}

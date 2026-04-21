@@ -1,0 +1,11 @@
+// error_asm_invalid_input_type.uya - @asm 无效输入类型错误测试
+// 期望编译错误：@asm 输入必须是整数或指针类型（浮点数不支持）
+
+fn main() i32 {
+    var f: f32 = 3.14;
+    var result: i32 = 0;
+    @asm {
+        "mov %0, %1" (f, -> result);
+    }
+    return 0;
+}

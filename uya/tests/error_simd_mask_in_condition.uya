@@ -1,0 +1,9 @@
+type Vec4i32 = @vector(i32, 4);
+
+export fn main() i32 {
+    const v: Vec4i32 = @vector.splat(1);
+    if v == v {
+        return 1;
+    }
+    return 0;
+}

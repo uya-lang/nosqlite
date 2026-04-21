@@ -1,0 +1,53 @@
+// test_println_basic.uya - @println 内置函数基础测试
+use std.runtime.entry;
+// 测试 @println（换行）功能
+
+export fn main() i32 {
+    // 测试 i32 类型
+    @println(42);
+    @println(-100);
+    
+    // 测试 i64 类型
+    @println(123456789 as i64);
+    
+    // 测试 f64 类型
+    @println(3.14);
+    @println(-2.718);
+    
+    // 测试 bool 类型
+    @println(true);
+    @println(false);
+    
+    // 测试字符串
+    @println("Hello, World!");
+    @println("Uya Programming Language");
+    
+    // 测试字符串插值
+    const x: i32 = 10;
+    const y: i32 = 20;
+    @println("x=${x}, y=${y}");
+    @println("sum = ${x + y}");
+    
+    // 测试浮点数插值
+    const pi: f64 = 3.14159;
+    @println("pi = ${pi}");
+    @println("pi = ${pi:.2f}");
+    
+    // 测试布尔插值
+    const flag: bool = true;
+    @println("flag = ${flag}");
+    
+    // 测试十六进制格式
+    const hex_val: i32 = 255;
+    @println("hex = ${hex_val:#x}");
+    @println("HEX = ${hex_val:#X}");
+    
+    // 测试 u32/u64 类型
+    @println(42 as u32);
+    @println(9876543210 as u64);
+    
+    // 测试 usize 类型
+    @println(100 as usize);
+    
+    return 0;
+}

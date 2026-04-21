@@ -1,0 +1,27 @@
+// 测试 std.c.stdlib 模块（调试版本）
+use std.runtime.entry;
+// 测试：内存分配函数，添加调试输出
+
+use libc.malloc;
+use libc.write_stdout_bytes;
+use libc.strlen;
+
+export fn main() i32 {
+    // 测试 malloc
+    const ptr1: &void = malloc(100);
+    if ptr1 == null {
+        write_stdout_bytes("malloc failed\n", 14);
+        return 1;
+    }
+    
+    write_stdout_bytes("malloc success\n", 15);
+    
+    // 尝试访问内存（这里可能会段错误）
+    var bytes1: &byte = ptr1 as &byte;
+    bytes1[0] = 65 as byte;
+    
+    write_stdout_bytes("write success\n", 14);
+    
+    return 0;
+}
+

@@ -1,0 +1,30 @@
+use std.testing;
+use std.collections.vec.Vec;
+use std.collections.vec_helper.vec_helper_new_byte;
+use std.mem.allocator.IAllocator;
+use std.mem.allocator.MallocAllocator;
+use std.mem.allocator.get_allocator;
+
+struct MallocWrapper : IAllocator {
+    inner: &MallocAllocator,
+
+    fn alloc(self: &Self, size: usize) !&byte {
+        return self.inner.alloc(size);
+    },
+
+    fn dealloc(self: &Self, ptr: &byte) void {
+        self.inner.dealloc(ptr);
+    },
+
+    fn realloc(self: &Self, ptr: &byte, new_size: usize) !&byte {
+        return self.inner.realloc(ptr, new_size);
+    },
+}
+
+test "vec_helper_new_byte_monomorphized" {
+    var w: MallocWrapper = MallocWrapper{ inner: get_allocator() };
+    var v: Vec<byte> = vec_helper_new_byte(w);
+    try v.push(65);
+    try v.push(66);
+    try assert_eq_i32(v.len() as i32, 2);
+}

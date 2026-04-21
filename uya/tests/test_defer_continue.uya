@@ -1,0 +1,26 @@
+// defer 在 continue 前执行；循环多轮时每轮块内 defer 各自执行
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_defer_before_continue() !void {
+    var x: i32 = 0;
+    var n: i32 = 0;
+    while (n < 2) {
+        defer { x = x + 1; }
+        n = n + 1;
+        continue;          // 先执行 defer(x+=1)，再 continue
+    }
+    try expect(x == 2);    // 两轮各执行一次 defer
+}
+
+export fn main() i32 {
+    test_suite_begin("Defer Continue Tests");
+    
+    run_test("defer before continue", test_defer_before_continue);
+    
+    return test_suite_end();
+}

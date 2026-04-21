@@ -1,0 +1,21 @@
+// 测试函数前向引用
+use std.runtime.entry;
+// 验证函数可以在声明之前被调用（通过两遍检查机制）
+
+fn call_before_decl() i32 {
+    // 调用后面声明的函数
+    return func_declared_later(10);
+}
+
+fn func_declared_later(x: i32) i32 {
+    return x * 2;
+}
+
+export fn main() i32 {
+    const result: i32 = call_before_decl();
+    if result != 20 {
+        return 1;
+    }
+    return 0;
+}
+

@@ -1,0 +1,8 @@
+// SIMD 向量 lane 数第一阶段必须是 2 的幂字面量
+// 预期编译失败
+
+type BadVec = @vector(i32, 3);
+
+export fn main() i32 {
+    return 0;
+}

@@ -1,0 +1,22 @@
+// 测试 @ptr_from_usize 内置函数
+
+use std.testing.expect;
+
+test "ptr from usize zero" {
+    const addr: usize = 0x1000;
+    const ptr: &void = @ptr_from_usize(addr);
+    // 编译通过即测试通过
+}
+
+test "ptr from usize nonzero" {
+    const addr2: usize = 0x2000;
+    const ptr2: &void = @ptr_from_usize(addr2);
+    // 编译通过即测试通过
+}
+
+test "ptr from usize roundtrip" {
+    const addr3: usize = 0x3000;
+    const ptr3: &void = @ptr_from_usize(addr3);
+    const addr_back: usize = @usize_from_ptr(ptr3);
+    try expect(addr_back == addr3);
+}

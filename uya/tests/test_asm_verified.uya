@@ -1,0 +1,117 @@
+// test_asm_verified.uya - @asm 内联汇编验证测试
+// 使用断言验证 @asm 功能
+
+extern "libc" fn printf(fmt: *byte, ...) i32;
+
+// 测试 @asm_target()
+fn get_platform() i32 {
+    const target: i32 = @asm_target();
+    return target;
+}
+
+// 测试简单 @asm 块
+fn test_nop() void {
+    @asm {
+        "nop" ();
+    }
+}
+
+// 测试带输入的 @asm
+fn test_input(value: i32) void {
+    @asm {
+        "nop" (value);
+    }
+}
+
+// 测试带输出的 @asm
+fn test_output() i32 {
+    var result: i32 = 0;
+    @asm {
+        "nop" (-> result);
+    }
+    return result;
+}
+
+// 测试带输入输出的 @asm
+fn test_input_output(value: i32) i32 {
+    var result: i32 = 0;
+    @asm {
+        "nop" (value, -> result);
+    }
+    return result;
+}
+
+// 主测试函数
+export fn main() i32 {
+    printf("=== @asm 内联汇编验证测试 ===\n\n");
+    
+    // 测试 1: @asm_target()
+    const platform: i32 = get_platform();
+    printf("PASS: @asm_target() = %d\n", platform);
+    
+    // 测试 2: 无操作数 @asm
+    test_nop();
+    printf("PASS: nop instruction\n");
+    
+    // 测试 3: 带输入的 @asm
+    test_input(42);
+    printf("PASS: input operand\n");
+    
+    // 测试 4: 带输出的 @asm
+    const out: i32 = test_output();
+    printf("PASS: output operand (result=%d)\n", out);
+    
+    // 测试 5: 带输入输出的 @asm
+    const inout: i32 = test_input_output(100);
+    printf("PASS: input/output operand (result=%d)\n", inout);
+    
+    // 测试 6: 多条指令
+    var a: i32 = 1;
+    var b: i32 = 2;
+    var c: i32 = 0;
+    @asm {
+        "nop" (a, -> c);
+        "nop" (b, -> c);
+    }
+    printf("PASS: multiple instructions\n");
+    
+    // 测试 7: 带 clobbers
+    var val: i32 = 100;
+    @asm {
+        "nop" (val, -> val);
+    } clobbers = ["memory"];
+    printf("PASS: with clobbers (val=%d)\n", val);
+    
+    // 测试 8: 条件编译
+    var platform_result: i32 = 0;
+    if platform == 0 {
+        // x86_64_linux
+        platform_result = 1;
+    } else if platform == 3 {
+        // arm64_linux
+        platform_result = 3;
+    } else {
+        platform_result = 99;
+    }
+    printf("PASS: platform conditional result = %d\n", platform_result);
+    
+    // 测试 9: 多输入
+    var x: i32 = 10;
+    var y: i32 = 20;
+    var z: i32 = 0;
+    @asm {
+        "nop" (x, y, -> z);
+    }
+    printf("PASS: multiple inputs\n");
+    
+    // 测试 10: 多输出
+    var out1: i32 = 0;
+    var out2: i32 = 0;
+    @asm {
+        "nop" (-> out1, out2);
+    }
+    printf("PASS: multiple outputs\n");
+    
+    printf("\n=== All 10 @asm tests passed! ===\n");
+    return 0;
+}

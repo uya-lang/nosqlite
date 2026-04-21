@@ -1,0 +1,26 @@
+use std.async;
+use std.testing.expect;
+
+@async_fn
+fn inner(x: i32) Future<!i32> {
+    return x + 1;
+}
+
+@async_fn
+fn outer() Future<!i32> {
+    var f: Future<!i32> = inner(5);
+    const r: i32 = try @await f;
+    return r;
+}
+
+test "async_inline_temp_var" {
+    const f: Future<!i32> = outer();
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = f.poll(&w);
+    var result: i32 = 0 - 1;
+    match p {
+        .Ready(ok_val) => { result = ok_val catch { 0 - 3; }; },
+        .Pending(_) => { result = 0 - 2; },
+    }
+    expect(result == 6);
+}

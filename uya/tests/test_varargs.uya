@@ -1,0 +1,15 @@
+// 可变参数与 @params 测试
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+fn add_two(a: i32, b: i32) i32 {
+    const p: (i32, i32) = @params;
+    return p.0 + p.1;
+}
+
+test "test_params_tuple" {
+    const r1: i32 = add_two(10, 20);
+    try assert_eq_i32(r1, 30);
+}

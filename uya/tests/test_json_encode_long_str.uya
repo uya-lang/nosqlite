@@ -1,0 +1,47 @@
+// 长 ASCII 字符串编码：覆盖 json_write_str_view 的 @vector 安全段批量复制（无转义）
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.value.JsonStrView;
+use std.json.encoder.encode_to;
+
+const INNER: usize = 80;
+
+export fn main() i32 {
+    var str_buf: [byte: 96] = [];
+    var si: usize = 0;
+    while si < INNER {
+        str_buf[si] = 97;
+        si = si + 1;
+    }
+    const view: JsonStrView = JsonStrView{ ptr: &str_buf[0], len: INNER };
+    const vs: JsonValue = JsonValue.str(view);
+
+    var out: [byte: 256] = [];
+    const n: usize = encode_to(&vs, &out[0], 256) catch { return 1; };
+    const expect: usize = 2 + INNER;
+    if n != expect { return 2; }
+    if out[0] != 34 || out[expect - 1] != 34 { return 3; }
+    var j: usize = 1;
+    while j < 1 + INNER {
+        if out[j] != 97 { return 4; }
+        j = j + 1;
+    }
+
+    // 段末紧跟需转义字节：块扫描应正确中断后仍输出合法 JSON
+    var mix: [byte: 20] = [];
+    var mi: usize = 0;
+    while mi < 17 {
+        mix[mi] = 98;
+        mi = mi + 1;
+    }
+    mix[17] = 10;
+    mix[18] = 99;
+    mix[19] = 99;
+    const vm: JsonStrView = JsonStrView{ ptr: &mix[0], len: 20 };
+    const vmj: JsonValue = JsonValue.str(vm);
+    const nm: usize = encode_to(&vmj, &out[0], 256) catch { return 5; };
+    // 1 + 17 + "\\n"(2) + 2 + 1 = 23
+    if nm != 23 { return 6; }
+    if out[0] != 34 { return 7; }
+    return 0;
+}

@@ -1,0 +1,62 @@
+// test_syscall_user.uya - syscall 层用户/组测试
+// 测试 sys_getuid, sys_getgid, sys_geteuid, sys_getegid
+
+use libc.sys_getuid;
+use libc.sys_getgid;
+use libc.sys_geteuid;
+use libc.sys_getegid;
+use std.testing.expect;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+test "sys_getuid_basic" {
+    // 获取真实用户 ID
+    const uid: i32 = try sys_getuid();
+    // 用户 ID 应该 >= 0
+    try expect(uid >= 0);
+}
+
+test "sys_getgid_basic" {
+    // 获取真实组 ID
+    const gid: i32 = try sys_getgid();
+    // 组 ID 应该 >= 0
+    try expect(gid >= 0);
+}
+
+test "sys_geteuid_basic" {
+    // 获取有效用户 ID
+    const euid: i32 = try sys_geteuid();
+    // 有效用户 ID 应该 >= 0
+    try expect(euid >= 0);
+}
+
+test "sys_getegid_basic" {
+    // 获取有效组 ID
+    const egid: i32 = try sys_getegid();
+    // 有效组 ID 应该 >= 0
+    try expect(egid >= 0);
+}
+
+test "user_id_consistency" {
+    // 测试用户 ID 的一致性
+    const uid: i32 = try sys_getuid();
+    const euid: i32 = try sys_geteuid();
+    
+    // 真实用户 ID 和有效用户 ID 通常应该相等（除非使用了 setuid）
+    // 这里我们只验证它们都是有效的 ID
+    try expect(uid >= 0);
+    try expect(euid >= 0);
+}
+
+test "group_id_consistency" {
+    // 测试组 ID 的一致性
+    const gid: i32 = try sys_getgid();
+    const egid: i32 = try sys_getegid();
+    
+    // 真实组 ID 和有效组 ID 通常应该相等（除非使用了 setgid）
+    // 这里我们只验证它们都是有效的 ID
+    try expect(gid >= 0);
+    try expect(egid >= 0);
+}

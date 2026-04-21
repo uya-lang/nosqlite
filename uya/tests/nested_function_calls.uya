@@ -1,0 +1,74 @@
+// 嵌套函数调用测试
+use std.runtime.entry;
+// 测试函数调用的嵌套和链式调用
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+fn multiply(a: i32, b: i32) i32 {
+    return a * b;
+}
+
+fn square(n: i32) i32 {
+    return multiply(n, n);
+}
+
+fn double(n: i32) i32 {
+    return multiply(n, 2);
+}
+
+fn triple(n: i32) i32 {
+    return add(add(n, n), n);
+}
+
+fn test_nested_add() !void {
+    const result: i32 = add(add(1, 2), add(3, 4));
+    try assert_eq_i32(result, 10);
+}
+
+fn test_chain_multiply() !void {
+    const result: i32 = multiply(add(5, 3), 2);
+    try assert_eq_i32(result, 16);
+}
+
+fn test_multi_level_nested() !void {
+    const result: i32 = add(multiply(2, 3), add(4, 5));
+    try assert_eq_i32(result, 15);
+}
+
+fn test_square() !void {
+    try assert_eq_i32(square(5), 25);
+}
+
+fn test_nested_square() !void {
+    const result: i32 = add(square(3), square(4));
+    try assert_eq_i32(result, 25);
+}
+
+fn test_double_triple() !void {
+    const result: i32 = add(double(5), triple(3));
+    try assert_eq_i32(result, 19);
+}
+
+fn test_deep_nested() !void {
+    const result: i32 = multiply(add(double(2), triple(1)), square(2));
+    try assert_eq_i32(result, 28);
+}
+
+export fn main() i32 {
+    test_suite_begin("Nested Function Calls Tests");
+    run_test("nested add", test_nested_add);
+    run_test("chain multiply", test_chain_multiply);
+    run_test("multi level nested", test_multi_level_nested);
+    run_test("square", test_square);
+    run_test("nested square", test_nested_square);
+    run_test("double triple", test_double_triple);
+    run_test("deep nested", test_deep_nested);
+    return test_suite_end();
+}

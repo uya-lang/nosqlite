@@ -1,0 +1,35 @@
+// 测试 from_json 反射对结构体切片字段 &[T] 的支持
+use std.runtime.entry;
+use std.json.encoder.to_json;
+use std.json.encoder.from_json;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+struct WithSlice {
+    id: i64,
+    ids: &[i64],
+}
+
+export fn main() i32 {
+    var arena_buf: [byte: 262144] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 262144);
+
+    var ids: [i64: 3] = [];
+    ids[0] = 10;
+    ids[1] = 20;
+    ids[2] = 30;
+
+    const src: WithSlice = WithSlice{ id: 7, ids: &ids[0: 3] };
+    const json: &[byte] = to_json<WithSlice>(&a, src) catch { return 1; };
+    const out: WithSlice = from_json<WithSlice>(&a, json) catch { return 2; };
+
+    if out.id != 7 { return 3; }
+    if out.ids.len != 3 { return 4; }
+    if out.ids.ptr[0] != 10 || out.ids.ptr[1] != 20 || out.ids.ptr[2] != 30 { return 5; }
+
+    const json2: &[byte] = to_json<WithSlice>(&a, out) catch { return 6; };
+    if json2.len != json.len { return 7; }
+
+    return 0;
+}

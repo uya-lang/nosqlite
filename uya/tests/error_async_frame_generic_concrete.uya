@@ -1,0 +1,18 @@
+// error_async_frame_generic_concrete.uya
+//
+// 预期：编译失败。@frame 的泛型参数必须是 concrete 类型，不能是未解析的泛型形参。
+
+use std.async;
+
+@async_fn
+fn generic_async<T>() Future<!i32> {
+    return 1;
+}
+
+fn use_frame<T>() void {
+    var x: @frame(generic_async<T>);
+    _ = x;
+}
+
+test "expect_compile_fail" {
+}

@@ -1,0 +1,162 @@
+// 作用域规则测试程序
+// 根据 UYA_MINI_SPEC.md 5.1 节的作用域规则进行测试
+// 测试全局作用域、局部作用域、块作用域和作用域嵌套
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+// 全局作用域变量
+const global_const: i32 = 100;
+var global_var: i32 = 200;
+
+// 测试函数：验证作用域嵌套和访问规则
+test "scope nesting" {
+    // 函数局部作用域变量
+    const local_const: i32 = 10;
+    var local_var: i32 = 20;
+    
+    // 验证可以访问全局变量
+    try assert_eq_i32(global_const, 100);
+    try assert_eq_i32(global_var, 200);
+    
+    // 验证可以访问局部变量
+    try assert_eq_i32(local_const, 10);
+    try assert_eq_i32(local_var, 20);
+    
+    // 测试块作用域
+    {
+        // 块作用域变量
+        const block_const: i32 = 30;
+        var block_var: i32 = 40;
+        
+        // 验证可以访问外层作用域的变量
+        try assert_eq_i32(global_const, 100);
+        try assert_eq_i32(local_const, 10);
+        
+        // 验证可以访问块作用域变量
+        try assert_eq_i32(block_const, 30);
+        try assert_eq_i32(block_var, 40);
+        
+        // 修改外层作用域的 var 变量
+        local_var = 25;
+        global_var = 250;
+    }
+    
+    // 验证块作用域外的变量修改仍然有效
+    try assert_eq_i32(local_var, 25);
+    try assert_eq_i32(global_var, 250);
+    
+    // 测试嵌套块作用域
+    {
+        const inner_block: i32 = 50;
+        {
+            const inner_inner: i32 = 60;
+            
+            // 验证可以访问所有外层作用域
+            try assert_eq_i32(global_const, 100);
+            try assert_eq_i32(local_const, 10);
+            try assert_eq_i32(inner_block, 50);
+            try assert_eq_i32(inner_inner, 60);
+        }
+    }
+}
+
+// 测试函数参数作用域
+fn helper_param_scope(x: i32, y: i32) i32 {
+    // 函数参数在函数作用域内
+    if x != 1 || y != 2 {
+        return 1;
+    }
+    
+    // 测试块作用域内访问函数参数
+    {
+        const block_val: i32 = x + y;
+        if block_val != 3 {
+            return 2;
+        }
+    }
+    
+    return 0;
+}
+
+test "param scope" {
+    const result: i32 = helper_param_scope(1, 2);
+    try assert_eq_i32(result, 0);
+}
+
+// 测试 if 语句块作用域
+fn helper_if_block_scope(condition: bool) i32 {
+    if condition {
+        const if_block_var: i32 = 100;
+        if if_block_var != 100 {
+            return 1;
+        }
+    } else {
+        const else_block_var: i32 = 200;
+        if else_block_var != 200 {
+            return 2;
+        }
+    }
+    
+    return 0;
+}
+
+test "if block scope" {
+    const result1: i32 = helper_if_block_scope(true);
+    try assert_eq_i32(result1, 0);
+    
+    const result2: i32 = helper_if_block_scope(false);
+    try assert_eq_i32(result2, 0);
+}
+
+test "while block scope" {
+    var count: i32 = 0;
+    while count < 3 {
+        const loop_var: i32 = count * 10;
+        count = count + 1;
+        
+        try expect(loop_var >= 0 && loop_var <= 20);
+    }
+}
+
+test "for block scope" {
+    const arr: [i32: 3] = [10, 20, 30];
+    var sum: i32 = 0;
+    
+    for arr |item| {
+        const loop_const: i32 = item * 2;
+        sum = sum + loop_const;
+    }
+    
+    try assert_eq_i32(sum, 120);  // (10*2) + (20*2) + (30*2) = 120
+}
+
+test "function call scope" {
+    const local: i32 = 42;
+    
+    // 调用函数，验证参数作用域
+    const result: i32 = helper_param_scope(1, 2);
+    try assert_eq_i32(result, 0);
+    
+    // 验证局部变量仍然可访问
+    try assert_eq_i32(local, 42);
+}
+
+test "deep nesting" {
+    const level1: i32 = 1;
+    {
+        const level2: i32 = 2;
+        {
+            const level3: i32 = 3;
+            {
+                const level4: i32 = 4;
+                
+                // 验证可以访问所有外层作用域
+                try assert_eq_i32(level1, 1);
+                try assert_eq_i32(level2, 2);
+                try assert_eq_i32(level3, 3);
+                try assert_eq_i32(level4, 4);
+            }
+        }
+    }
+}

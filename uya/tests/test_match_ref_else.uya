@@ -1,0 +1,85 @@
+// test_match_ref_else.uya - 测试 match 引用类型时 else 分支的类型推断
+use std.runtime.entry;
+// Bug: 当 match 的被匹配表达式是引用类型 &T 时，else 分支的类型推断失败
+// 原因: checker_infer_type 和 checker_check_node 没有对指针类型自动解引用
+
+use std.testing.assert_true;
+
+union DataUnion {
+    num: i32,
+    other: i32,
+}
+
+// 测试：match 引用类型参数，else 分支使用字面量
+fn test_match_ref_else_literal(u: &DataUnion) i32 {
+    return match u {
+        .num(d) => d,
+        .other(x) => x,
+        else => 0,  // else 在最后，使用字面量
+    };
+}
+
+// 测试：match 值类型参数（对照组）
+fn test_match_value_else(u: DataUnion) i32 {
+    return match u {
+        .num(d) => d,
+        .other(x) => x,
+        else => 0,
+    };
+}
+
+// 测试：match 引用类型，多个变体
+union MultiVariant {
+    a: i32,
+    b: i32,
+    c: i32,
+}
+
+fn test_match_ref_multi(u: &MultiVariant) i32 {
+    return match u {
+        .a(v) => v,
+        .b(v) => v * 2,
+        .c(v) => v * 3,
+        else => -1,
+    };
+}
+
+export fn main() i32 {
+    printf("=== Match Ref Else Tests ===\n");
+    
+    // 测试1: 引用类型参数 + else
+    var u1: DataUnion = DataUnion.num(42);
+    const r1: i32 = test_match_ref_else_literal(&u1);
+    printf("test_match_ref_else_literal (num): %d\n", r1);
+    try assert_true(r1 == 42);
+    
+    var u2: DataUnion = DataUnion.other(100);
+    const r2: i32 = test_match_ref_else_literal(&u2);
+    printf("test_match_ref_else_literal (other): %d\n", r2);
+    try assert_true(r2 == 100);
+    
+    // 测试2: 值类型参数（对照组）
+    var u3: DataUnion = DataUnion.num(77);
+    const r3: i32 = test_match_value_else(u3);
+    printf("test_match_value_else: %d\n", r3);
+    try assert_true(r3 == 77);
+    
+    // 测试3: 多变体 + 引用类型
+    var u4: MultiVariant = MultiVariant.a(10);
+    const r4: i32 = test_match_ref_multi(&u4);
+    printf("test_match_ref_multi (a): %d\n", r4);
+    try assert_true(r4 == 10);
+    
+    var u5: MultiVariant = MultiVariant.b(10);
+    const r5: i32 = test_match_ref_multi(&u5);
+    printf("test_match_ref_multi (b): %d\n", r5);
+    try assert_true(r5 == 20);
+    
+    var u6: MultiVariant = MultiVariant.c(10);
+    const r6: i32 = test_match_ref_multi(&u6);
+    printf("test_match_ref_multi (c): %d\n", r6);
+    try assert_true(r6 == 30);
+    
+    printf("=== All tests passed ===\n");
+    return 0;
+}

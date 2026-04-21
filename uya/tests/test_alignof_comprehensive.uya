@@ -1,0 +1,213 @@
+// alignof 综合测试程序
+use std.runtime.entry;
+// 按照 TDD 方式，全面测试 alignof 内置函数的所有场景
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Mixed {
+    a: byte,
+    b: i32,
+    c: i32,
+}
+
+struct Nested {
+    inner: Point,
+    value: i32,
+}
+
+struct Empty {
+    // 空结构体
+}
+
+fn test_basic_type_align() !void {
+    const i32_align: i32 = @align_of(i32);
+    try assert_eq_i32(i32_align, 4);
+    
+    const bool_align: i32 = @align_of(bool);
+    try assert_eq_i32(bool_align, 1);
+    
+    const byte_align: i32 = @align_of(byte);
+    try assert_eq_i32(byte_align, 1);
+}
+
+fn test_expr_align() !void {
+    var x: i32 = 42;
+    const x_align: i32 = @align_of(x);
+    try assert_eq_i32(x_align, 4);
+    
+    var b: bool = true;
+    const b_align: i32 = @align_of(b);
+    try assert_eq_i32(b_align, 1);
+    
+    var byte_val: byte = 0;
+    const byte_val_align: i32 = @align_of(byte_val);
+    try assert_eq_i32(byte_val_align, 1);
+}
+
+fn test_pointer_type_align() !void {
+    const ptr_i32_align: i32 = @align_of(&i32);
+    try expect(ptr_i32_align == 4 || ptr_i32_align == 8);
+    
+    const ptr_bool_align: i32 = @align_of(&bool);
+    try expect(ptr_bool_align == ptr_i32_align);
+}
+
+fn test_pointer_var_align() !void {
+    const platform_word_align: i32 = @align_of(&i32);
+    
+    var ptr: &i32 = null;
+    const ptr_align: i32 = @align_of(ptr);
+    try assert_eq_i32(ptr_align, platform_word_align);
+}
+
+fn test_struct_type_align() !void {
+    const point_align: i32 = @align_of(Point);
+    try assert_eq_i32(point_align, 4);
+    
+    const mixed_align: i32 = @align_of(Mixed);
+    try assert_eq_i32(mixed_align, 4);
+    
+    const nested_align: i32 = @align_of(Nested);
+    try assert_eq_i32(nested_align, 4);
+}
+
+fn test_struct_var_align() !void {
+    var p: Point = Point{ x: 10, y: 20 };
+    const p_align: i32 = @align_of(p);
+    try assert_eq_i32(p_align, 4);
+    
+    var m: Mixed = Mixed{ a: 1, b: 2, c: 3 };
+    const m_align: i32 = @align_of(m);
+    try assert_eq_i32(m_align, 4);
+}
+
+fn test_struct_pointer_align() !void {
+    const platform_word_align: i32 = @align_of(&i32);
+    
+    const point_ptr_align: i32 = @align_of(&Point);
+    try assert_eq_i32(point_ptr_align, platform_word_align);
+    
+    var point_ptr: &Point = null;
+    const point_ptr_var_align: i32 = @align_of(point_ptr);
+    try assert_eq_i32(point_ptr_var_align, platform_word_align);
+}
+
+fn test_array_type_align() !void {
+    const array_i32_align: i32 = @align_of([i32: 10]);
+    try assert_eq_i32(array_i32_align, 4);
+    
+    const array_bool_align: i32 = @align_of([bool: 5]);
+    try assert_eq_i32(array_bool_align, 1);
+    
+    const array_byte_align: i32 = @align_of([byte: 100]);
+    try assert_eq_i32(array_byte_align, 1);
+    
+    const array_point_align: i32 = @align_of([Point: 3]);
+    try assert_eq_i32(array_point_align, 4);
+}
+
+fn test_array_var_align() !void {
+    var arr: [i32: 5] = [1, 2, 3, 4, 5];
+    const arr_align: i32 = @align_of(arr);
+    try assert_eq_i32(arr_align, 4);
+    
+    var bools: [bool: 10] = [true, false, true, false, true, false, true, false, true, false];
+    const bools_align: i32 = @align_of(bools);
+    try assert_eq_i32(bools_align, 1);
+    
+    var points: [Point: 2] = [Point{ x: 1, y: 2 }, Point{ x: 3, y: 4 }];
+    const points_align: i32 = @align_of(points);
+    try assert_eq_i32(points_align, 4);
+}
+
+fn test_empty_array_align() !void {
+    var empty_arr: [i32: 100] = [];
+    const empty_arr_align: i32 = @align_of(empty_arr);
+    try assert_eq_i32(empty_arr_align, 4);
+}
+
+fn test_alignof_vs_sizeof() !void {
+    var arr2: [i32: 4] = [1, 2, 3, 4];
+    const arr2_size: i32 = @size_of(arr2);
+    const arr2_align: i32 = @align_of(arr2);
+    try assert_eq_i32(arr2_size, 16);
+    try assert_eq_i32(arr2_align, 4);
+}
+
+fn test_const_array_align() !void {
+    const const_arr: [i32: 7] = [1, 2, 3, 4, 5, 6, 7];
+    const const_arr_align: i32 = @align_of(const_arr);
+    try assert_eq_i32(const_arr_align, 4);
+}
+
+fn test_alignof_in_expr() !void {
+    const calculated_align: i32 = @align_of(i32);
+    try assert_eq_i32(calculated_align, 4);
+}
+
+fn test_nested_struct_align() !void {
+    var n: Nested = Nested{ inner: Point{ x: 1, y: 2 }, value: 3 };
+    const n_align: i32 = @align_of(n);
+    try assert_eq_i32(n_align, 4);
+}
+
+fn test_empty_struct_align() !void {
+    const empty_align: i32 = @align_of(Empty);
+    try assert_eq_i32(empty_align, 1);
+}
+
+fn test_ptr_array_align() !void {
+    const platform_word_align: i32 = @align_of(&i32);
+    const ptr_array_align: i32 = @align_of([&i32: 5]);
+    try assert_eq_i32(ptr_array_align, platform_word_align);
+}
+
+fn test_alignof_in_conditional() !void {
+    try expect(@align_of(i32) == 4);
+}
+
+fn test_alignof_consistency() !void {
+    const type_align: i32 = @align_of(Point);
+    var test_point: Point = Point{ x: 1, y: 2 };
+    const expr_align: i32 = @align_of(test_point);
+    try assert_eq_i32(type_align, expr_align);
+}
+
+fn test_array_align_equals_elem() !void {
+    const elem_align: i32 = @align_of(i32);
+    const arr_type_align: i32 = @align_of([i32: 10]);
+    try assert_eq_i32(elem_align, arr_type_align);
+}
+
+export fn main() i32 {
+    test_suite_begin("Alignof Comprehensive Tests");
+    run_test("basic type align", test_basic_type_align);
+    run_test("expr align", test_expr_align);
+    run_test("pointer type align", test_pointer_type_align);
+    run_test("pointer var align", test_pointer_var_align);
+    run_test("struct type align", test_struct_type_align);
+    run_test("struct var align", test_struct_var_align);
+    run_test("struct pointer align", test_struct_pointer_align);
+    run_test("array type align", test_array_type_align);
+    run_test("array var align", test_array_var_align);
+    run_test("empty array align", test_empty_array_align);
+    run_test("alignof vs sizeof", test_alignof_vs_sizeof);
+    run_test("const array align", test_const_array_align);
+    run_test("alignof in expr", test_alignof_in_expr);
+    run_test("nested struct align", test_nested_struct_align);
+    run_test("empty struct align", test_empty_struct_align);
+    run_test("ptr array align", test_ptr_array_align);
+    run_test("alignof in conditional", test_alignof_in_conditional);
+    run_test("alignof consistency", test_alignof_consistency);
+    run_test("array align equals elem", test_array_align_equals_elem);
+    return test_suite_end();
+}

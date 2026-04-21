@@ -1,0 +1,117 @@
+// 原子类型复合赋值操作测试（含 *= /= %= 的 CAS 循环），规范 uya.md §13
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_i64;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// --- i32 基本运算 ---
+fn test_atomic_add() !void {
+    var counter: atomic i32 = 10;
+    counter += 5;
+    try assert_eq_i32(counter, 15);
+}
+
+fn test_atomic_sub() !void {
+    var counter: atomic i32 = 15;
+    counter -= 3;
+    try assert_eq_i32(counter, 12);
+}
+
+fn test_atomic_mul() !void {
+    var counter: atomic i32 = 12;
+    counter *= 2;
+    try assert_eq_i32(counter, 24);
+}
+
+fn test_atomic_div() !void {
+    var counter: atomic i32 = 24;
+    counter /= 4;
+    try assert_eq_i32(counter, 6);
+}
+
+fn test_atomic_mod() !void {
+    var counter: atomic i32 = 6;
+    counter %= 4;
+    try assert_eq_i32(counter, 2);
+}
+
+// --- i64 *= /= %=（CAS 循环）---
+fn test_atomic_mul_i64() !void {
+    var counter: atomic i64 = 100;
+    counter *= 3;
+    try assert_eq_i64(counter, 300);
+}
+
+fn test_atomic_div_i64() !void {
+    var counter: atomic i64 = 300;
+    counter /= 5;
+    try assert_eq_i64(counter, 60);
+}
+
+fn test_atomic_mod_i64() !void {
+    var counter: atomic i64 = 17;
+    counter %= 5;
+    try assert_eq_i64(counter, 2);
+}
+
+// --- 边界：乘 0、除 1、模 1 ---
+fn test_atomic_mul_zero() !void {
+    var counter: atomic i32 = 42;
+    counter *= 0;
+    try assert_eq_i32(counter, 0);
+}
+
+fn test_atomic_div_one() !void {
+    var counter: atomic i32 = 7;
+    counter /= 1;
+    try assert_eq_i32(counter, 7);
+}
+
+fn test_atomic_mod_one() !void {
+    var counter: atomic i32 = 7;
+    counter %= 1;
+    try assert_eq_i32(counter, 0);
+}
+
+// --- 负数（*=-1, 负除数/模数）---
+fn test_atomic_mul_neg() !void {
+    var counter: atomic i32 = 5;
+    counter *= -1;
+    try assert_eq_i32(counter, -5);
+}
+
+fn test_atomic_div_neg() !void {
+    var counter: atomic i32 = -10;
+    counter /= 2;
+    try assert_eq_i32(counter, -5);
+}
+
+fn test_atomic_mod_positive() !void {
+    var counter: atomic i32 = 10;
+    counter %= 3;
+    try assert_eq_i32(counter, 1);
+}
+
+export fn main() i32 {
+    test_suite_begin("Atomic Ops Tests");
+    
+    run_test("atomic add", test_atomic_add);
+    run_test("atomic sub", test_atomic_sub);
+    run_test("atomic mul", test_atomic_mul);
+    run_test("atomic div", test_atomic_div);
+    run_test("atomic mod", test_atomic_mod);
+    run_test("atomic mul i64", test_atomic_mul_i64);
+    run_test("atomic div i64", test_atomic_div_i64);
+    run_test("atomic mod i64", test_atomic_mod_i64);
+    run_test("atomic mul zero", test_atomic_mul_zero);
+    run_test("atomic div one", test_atomic_div_one);
+    run_test("atomic mod one", test_atomic_mod_one);
+    run_test("atomic mul neg", test_atomic_mul_neg);
+    run_test("atomic div neg", test_atomic_div_neg);
+    run_test("atomic mod positive", test_atomic_mod_positive);
+    
+    return test_suite_end();
+}

@@ -1,0 +1,32 @@
+// 测试宏体内 for info.fields 编译期展开（TypeInfo.fields 循环生成多段代码）
+
+use std.testing.assert_eq_i32;
+use std.macro_typeinfo.TypeInfo;
+use std.macro_typeinfo.FieldInfo;
+
+struct Point {
+    x: i32,
+    y: f64,
+}
+
+// 宏：对 TypeInfo.fields 做编译期展开，每字段生成 counter = counter + 1；展开后应得到两条语句
+mc count_fields(T: type) stmt {
+    const info: TypeInfo = @mc_type(T);
+    for info.fields |f| {
+        @mc_code(@mc_ast({
+            increment_counter();
+        }));
+    }
+}
+
+fn increment_counter() void {
+    counter = counter + 1;
+}
+
+var counter: i32 = 0;
+
+test "test_for_typeinfo_fields_unroll" {
+    counter = 0;
+    count_fields(Point);
+    try assert_eq_i32(counter, 2);
+}

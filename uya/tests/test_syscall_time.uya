@@ -1,0 +1,65 @@
+// test_syscall_time.uya - syscall 层时间相关测试
+// 测试 sys_nanosleep, sys_gettimeofday
+
+use libc.sys_nanosleep;
+use libc.sys_gettimeofday;
+use libc.TimeSpec;
+use libc.TimeVal;
+use std.testing.expect;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+test "sys_nanosleep_short" {
+    // 测试短时间睡眠（1 毫秒 = 1,000,000 纳秒）
+    var req: TimeSpec = TimeSpec {
+        tv_sec: 0,
+        tv_nsec: 1000000  // 1 毫秒
+    };
+    var rem: TimeSpec = TimeSpec { tv_sec: 0, tv_nsec: 0 };
+    
+    const result: i32 = try sys_nanosleep(&req, &rem);
+    // 返回 0 表示成功，-1 表示失败
+    try expect(result == 0);
+}
+
+test "sys_nanosleep_zero" {
+    // 测试零时间睡眠（应该立即返回）
+    var req: TimeSpec = TimeSpec {
+        tv_sec: 0,
+        tv_nsec: 0
+    };
+    var rem: TimeSpec = TimeSpec { tv_sec: 0, tv_nsec: 0 };
+    
+    const result: i32 = try sys_nanosleep(&req, &rem);
+    try expect(result == 0);
+}
+
+test "sys_gettimeofday_basic" {
+    // 测试获取当前时间
+    var tv: TimeVal = TimeVal { tv_sec: 0, tv_usec: 0 };
+    
+    const result: i32 = try sys_gettimeofday(&tv, null as &void);
+    try expect(result == 0);
+    
+    // 验证返回的时间值是合理的
+    // tv_sec 应该大于 0（从 1970 年以来的秒数）
+    try expect(tv.tv_sec > 0);
+    
+    // tv_usec 应该在 0 到 999999 之间
+    try expect(tv.tv_usec >= 0 && tv.tv_usec < 1000000);
+}
+
+test "sys_gettimeofday_consistency" {
+    // 测试两次获取时间的一致性
+    var tv1: TimeVal = TimeVal { tv_sec: 0, tv_usec: 0 };
+    var tv2: TimeVal = TimeVal { tv_sec: 0, tv_usec: 0 };
+    
+    _ = try sys_gettimeofday(&tv1, null as &void);
+    _ = try sys_gettimeofday(&tv2, null as &void);
+    
+    // 第二次获取的时间应该 >= 第一次
+    try expect(tv2.tv_sec > tv1.tv_sec || 
+              (tv2.tv_sec == tv1.tv_sec && tv2.tv_usec >= tv1.tv_usec));
+}

@@ -1,0 +1,77 @@
+// 测试泛型 - 在控制流语句中使用
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn identity<T>(x: T) T {
+    return x;
+}
+
+fn max<T: Ord>(a: T, b: T) T {
+    if a > b { return a; }
+    return b;
+}
+
+fn test_in_if() !void {
+    var result: i32 = 0;
+    const cond1: bool = identity<bool>(true);
+    if cond1 {
+        result = 1;
+    }
+    try assert_eq_i32(result, 1);
+}
+
+fn test_in_if_else() !void {
+    var result: i32 = 0;
+    const val1: i32 = identity<i32>(10);
+    if val1 > 5 {
+        result = 2;
+    } else {
+        result = 0;
+    }
+    try assert_eq_i32(result, 2);
+}
+
+fn test_in_while() !void {
+    var i: i32 = 0;
+    var sum: i32 = 0;
+    const limit: i32 = identity<i32>(5);
+    while i < limit {
+        const inc: i32 = identity<i32>(1);
+        sum = sum + inc;
+        i = i + 1;
+    }
+    try assert_eq_i32(sum, 5);
+}
+
+fn test_in_loop_body() !void {
+    var j: i32 = 0;
+    var total: i32 = 0;
+    while j < 3 {
+        const m1: i32 = max<i32>(0, 1);
+        const m2: i32 = max<i32>(1, 1);
+        const m3: i32 = max<i32>(2, 1);
+        if j == 0 {
+            total = total + m1;
+        } else if j == 1 {
+            total = total + m2;
+        } else {
+            total = total + m3;
+        }
+        j = j + 1;
+    }
+    try assert_eq_i32(total, 4);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic In Control Flow Tests");
+    run_test("in if", test_in_if);
+    run_test("in if else", test_in_if_else);
+    run_test("in while", test_in_while);
+    run_test("in loop body", test_in_loop_body);
+    return test_suite_end();
+}

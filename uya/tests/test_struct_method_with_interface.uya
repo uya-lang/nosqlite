@@ -1,0 +1,45 @@
+// 结构体同时实现接口 + 额外纯结构体方法
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+interface IDouble {
+  fn double(self: &Self) i32;
+}
+
+struct Num : IDouble {
+  val: i32
+}
+
+Num {
+  fn double(self: &Self) i32 {
+    return self.val * 2;
+  }
+  fn triple(self: &Self) i32 {
+    return self.val * 3;
+  }
+}
+
+fn use_iface(x: IDouble) i32 {
+  return x.double();
+}
+
+fn test_method_with_interface() !void {
+  const n: Num = Num{ val: 5 };
+  const d: i32 = n.double();
+  const t: i32 = n.triple();
+  try assert_eq_i32(d, 10);
+  try assert_eq_i32(t, 15);
+  const di: i32 = use_iface(n);
+  try assert_eq_i32(di, 10);
+}
+
+export fn main() i32 {
+  test_suite_begin("Struct Method With Interface Tests");
+  run_test("method with interface", test_method_with_interface);
+  return test_suite_end();
+}

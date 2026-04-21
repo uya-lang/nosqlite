@@ -1,0 +1,24 @@
+use std.testing.assert_eq_i32;
+use std.testing.run_test;
+
+struct Config {
+    dns_resolver: [byte: 32],
+    dns_resolver_len: usize,
+}
+
+fn test_slice_from_struct_field_byte_array() !void {
+    var cfg: Config = Config{
+        dns_resolver: [
+            '1' as byte, '.' as byte, '1' as byte, '.' as byte, '1' as byte,
+            '.' as byte, '1' as byte, ':' as byte, '5' as byte, '3' as byte
+        ],
+        dns_resolver_len: 10,
+    };
+    const resolver_slice: &[byte] = &cfg.dns_resolver[0: cfg.dns_resolver_len];
+    try assert_eq_i32((resolver_slice.len as! i32).value, 10);
+    try assert_eq_i32(resolver_slice.ptr[0] as i32, '1' as i32);
+}
+
+test "slice_from_struct_field_byte_array" {
+    run_test("slice_from_struct_field_byte_array", test_slice_from_struct_field_byte_array);
+}

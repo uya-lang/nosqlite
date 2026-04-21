@@ -1,0 +1,9 @@
+// ERROR TEST: microapp 模式禁止 extern (E4002)
+// 编译命令: ./bin/uya tests/error_microapp_mode_extern.uya --c99 --app microapp
+// 预期: 编译失败，报错 E4002
+
+extern fn some_c_function(x: i32) i32;
+
+export fn main() i32 {
+    return 0;
+}

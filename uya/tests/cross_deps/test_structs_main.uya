@@ -1,0 +1,49 @@
+// test_structs_main.uya - 主程序文件：测试多文件结构体和函数交叉依赖
+
+fn main() i32 {
+    // 测试文件A的函数（使用文件B的结构体）
+    const result1: i32 = test_cross_file_call();
+    if result1 != 0 {
+        return 10 + result1;
+    }
+    
+    // 测试文件B的函数（使用文件A的结构体）
+    const result2: i32 = test_cross_file_call_b();
+    if result2 != 0 {
+        return 20 + result2;
+    }
+    
+    // 直接测试结构体和函数的组合使用
+    const p: Point = create_point(100, 200);
+    if p.x != 100 || p.y != 200 {
+        return 30;
+    }
+    
+    const r: Rectangle = create_rectangle(0, 0, 50, 60);
+    if r.x != 0 || r.y != 0 || r.width != 50 || r.height != 60 {
+        return 40;
+    }
+    
+    const area: i32 = calculate_rectangle_area(r);
+    if area != 3000 {
+        return 50;
+    }
+    
+    // 重新创建 r，因为之前的 r 已被移动
+    const r2: Rectangle = create_rectangle(0, 0, 50, 60);
+    const inside: bool = point_in_rectangle(p, r2);
+    if inside {
+        return 60;  // p(100, 200) 不在 r(0, 0, 50, 60) 内
+    }
+    
+    const p2: Point = create_point(25, 30);
+    // 重新创建 r，因为之前的 r2 已被移动
+    const r3: Rectangle = create_rectangle(0, 0, 50, 60);
+    const inside2: bool = point_in_rectangle(p2, r3);
+    if !inside2 {
+        return 70;  // p2(25, 30) 应该在 r(0, 0, 50, 60) 内
+    }
+    
+    return 0;  // 所有测试通过
+}
+

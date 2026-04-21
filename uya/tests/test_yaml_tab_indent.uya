@@ -1,0 +1,45 @@
+// Block 缩进中出现 Tab 应解析失败（error_* 在本仓库表示编译失败，故用 test_*）
+use std.runtime.entry;
+use std.yaml.parser.parse;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.mem.arena.arena_reset;
+
+fn expect_parse_fail(a: &Arena, ptr: &byte, n: usize) bool {
+    _ = parse(a, ptr, n) catch {
+        return true;
+    };
+    return false;
+}
+
+export fn main() i32 {
+    var arena_buf: [byte: 4096] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 4096);
+
+    var buf: [byte: 32] = [];
+    // a:\n\tb: 1\n
+    buf[0] = 97;
+    buf[1] = 58;
+    buf[2] = 10;
+    buf[3] = 9;
+    buf[4] = 98;
+    buf[5] = 58;
+    buf[6] = 32;
+    buf[7] = 49;
+    buf[8] = 10;
+    if !expect_parse_fail(&a, &buf[0], 9) { return 1; }
+
+    arena_reset(&a);
+    // 行首空白行后根级带 Tab 作为缩进（block_skip_leading）
+    buf[0] = 32;
+    buf[1] = 9;
+    buf[2] = 97;
+    buf[3] = 58;
+    buf[4] = 32;
+    buf[5] = 49;
+    buf[6] = 10;
+    if !expect_parse_fail(&a, &buf[0], 7) { return 2; }
+
+    return 0;
+}

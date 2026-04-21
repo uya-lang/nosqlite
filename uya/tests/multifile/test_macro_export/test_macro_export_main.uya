@@ -1,0 +1,30 @@
+// 跨模块宏使用测试
+
+use macro_lib.add;
+use macro_lib.square;
+use macro_lib.get_const;
+use macro_lib.do_nothing;
+
+fn main() i32 {
+    // 测试导入的 add 宏
+    const sum: i32 = add(10, 20);
+    if sum != 30 { return 1; }
+    
+    // 测试导入的 square 宏
+    const sq: i32 = square(5);
+    if sq != 25 { return 2; }
+    
+    // 测试导入的 get_const 宏
+    const c: i32 = get_const();
+    if c != 42 { return 3; }
+    
+    // 测试导入的 stmt 宏
+    do_nothing();
+    
+    // 测试宏嵌套调用
+    const nested: i32 = add(square(2), square(3)); // 4 + 9 = 13
+    if nested != 13 { return 4; }
+    
+    return 0;
+}
+

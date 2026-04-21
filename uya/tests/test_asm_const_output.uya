@@ -1,0 +1,8 @@
+// test_asm_const_output.uya - @asm 输出测试
+
+test "asm const output" {
+    var result: i32 = 0;
+    @asm {
+        "nop" (-> result);
+    }
+}

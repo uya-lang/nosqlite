@@ -1,0 +1,54 @@
+use std.async;
+use std.testing.expect;
+use std.testing.run_test;
+
+@async_fn
+fn frame_method_child(n: i32) Future<!i32> {
+    return n + 1;
+}
+
+fn poll_ready_i32(p: Poll<!i32>) i32 {
+    match p {
+        .Ready(v) => {
+            return v catch { 0 - 3; };
+        },
+        .Pending(_) => {
+            return 0 - 2;
+        },
+    }
+}
+
+fn test_frame_methods_value() void {
+    var frame: @frame(frame_method_child);
+    frame.stop();
+
+    const w: Waker = Waker{};
+    frame.start(41);
+    const first: i32 = poll_ready_i32(frame.poll(&w));
+    expect(first == 42);
+
+    frame.stop();
+    frame.start(9);
+    const second: i32 = poll_ready_i32(frame.poll(&w));
+    expect(second == 10);
+    frame.stop();
+}
+
+fn test_frame_methods_ref() void {
+    var frame: @frame(frame_method_child);
+    const fp: &@frame(frame_method_child) = &frame;
+    const w: Waker = Waker{};
+
+    fp.start(4);
+    const got: i32 = poll_ready_i32(fp.poll(&w));
+    expect(got == 5);
+    fp.stop();
+}
+
+test "async_frame_methods_value" {
+    run_test("async_frame_methods_value", test_frame_methods_value);
+}
+
+test "async_frame_methods_ref" {
+    run_test("async_frame_methods_ref", test_frame_methods_ref);
+}

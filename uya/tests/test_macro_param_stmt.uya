@@ -1,0 +1,68 @@
+// 测试宏 stmt 参数类型
+// stmt 参数使用块语法传递
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+// 测试 1: 简单 stmt 参数 - 执行传入的语句
+mc execute_stmt(s: stmt) stmt {
+    @mc_code(@mc_ast({
+        ${s};
+    }));
+}
+
+// 测试 2: stmt 参数后跟其他代码（使用分号）
+mc stmt_then_assign(s: stmt, dest: expr, val: expr) stmt {
+    @mc_code(@mc_ast({
+        ${s};
+        ${dest} = ${val};
+    }));
+}
+
+// 测试 3: 多个 stmt 参数
+mc execute_two_stmts(s1: stmt, s2: stmt) stmt {
+    @mc_code(@mc_ast({
+        ${s1};
+        ${s2};
+    }));
+}
+
+// 测试 4: stmt 参数与条件组合
+mc conditional_stmt(cond: expr, s: stmt) stmt {
+    @mc_code(@mc_ast(
+        if ${cond} {
+            ${s};
+        }
+    ));
+}
+
+test "test_basic_stmt" {
+    var x: i32 = 0;
+    execute_stmt({ x = 42; });
+    try assert_eq_i32(x, 42);
+}
+
+test "test_stmt_then_assign" {
+    var y: i32 = 0;
+    var result: i32 = 0;
+    stmt_then_assign({ y = 10; }, result, y + 5);
+    try assert_eq_i32(result, 15);
+}
+
+test "test_two_stmts" {
+    var a: i32 = 0;
+    var b: i32 = 0;
+    execute_two_stmts({ a = 100; }, { b = 200; });
+    try assert_eq_i32(a, 100);
+    try assert_eq_i32(b, 200);
+}
+
+test "test_conditional_stmt" {
+    var z: i32 = 0;
+    conditional_stmt(1 == 1, { z = 999; });
+    try assert_eq_i32(z, 999);
+    
+    conditional_stmt(1 == 0, { z = 0; });
+    try assert_eq_i32(z, 999);
+}

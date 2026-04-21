@@ -1,0 +1,64 @@
+// 预期编译失败：match 表达式缺少 else 分支
+// 错误信息应包含 "必须包含 else 分支" 或 "必须处理所有变体"
+
+union DataUnion {
+    num: i32,
+    other: i32,
+}
+
+// 错误1：return 语句中的 match 联合体没有处理所有变体
+fn test_match_return_union(u: DataUnion) i32 {
+    return match u {
+        .num(n) => n,
+        // 缺少 .other 和 else
+    };
+}
+
+// 错误2：return 语句中的 match 非联合体缺少 else 分支
+fn test_match_return_int(x: i32) i32 {
+    return match x {
+        0 => 100,
+        1 => 200,
+        // 缺少 else 分支
+    };
+}
+
+// 错误3：右值场景 - match 作为右值赋值给变量（联合体）
+fn test_match_rvalue_union(u: DataUnion) i32 {
+    const result: i32 = match u {
+        .num(n) => n,
+        // 缺少 .other 和 else
+    };
+    return result;
+}
+
+// 错误4：右值场景 - match 作为右值赋值给变量（非联合体）
+fn test_match_rvalue_int(x: i32) i32 {
+    const result: i32 = match x {
+        0 => 100,
+        1 => 200,
+        // 缺少 else 分支
+    };
+    return result;
+}
+
+// 错误5：独立语句场景 - match 作为独立语句（联合体）
+fn test_match_stmt_union(u: DataUnion) void {
+    match u {
+        .num(n) => { _ = n; },
+        // 缺少 .other 和 else
+    };
+}
+
+// 错误6：独立语句场景 - match 作为独立语句（非联合体）
+fn test_match_stmt_int(x: i32) void {
+    match x {
+        0 => { },
+        1 => { },
+        // 缺少 else 分支
+    };
+}
+
+fn main() i32 {
+    return 0;
+}

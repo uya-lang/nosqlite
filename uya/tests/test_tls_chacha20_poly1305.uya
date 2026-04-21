@@ -1,0 +1,58 @@
+// test_tls_chacha20_poly1305.uya - TLS ChaCha20-Poly1305 占位测试
+// 目的：验证 chacha20_poly1305 模块 API 可被链接与调用。
+
+use std.runtime.entry;
+use tls.crypto.chacha20_poly1305;
+
+extern fn chacha20_poly1305_encrypt(
+    key: &const byte,
+    key_len: usize,
+    nonce: &const byte,
+    nonce_len: usize,
+    aad: &const byte,
+    aad_len: usize,
+    plain: &const byte,
+    plain_len: usize,
+    cipher_out: &byte,
+    tag_out: &byte,
+) i32;
+
+extern fn chacha20_poly1305_decrypt(
+    key: &const byte,
+    key_len: usize,
+    nonce: &const byte,
+    nonce_len: usize,
+    aad: &const byte,
+    aad_len: usize,
+    cipher: &const byte,
+    cipher_len: usize,
+    tag: &const byte,
+    plain_out: &byte,
+) i32;
+
+fn test_chacha20_poly1305_api() i32 {
+    var key: [byte: 32] = [0:32];
+    var nonce: [byte: 12] = [0:12];
+    var plain: [byte: 16] = [0:16];
+    var cipher: [byte: 16] = [0:16];
+    var tag: [byte: 16] = [0:16];
+
+    // 占位实现：只要求 API 可被调用，并返回非 0 错误码
+    const enc_ret: i32 = chacha20_poly1305_encrypt(&key[0], 32, &nonce[0], 12, null, 0, &plain[0], 16, &cipher[0], &tag[0]);
+    if enc_ret == 0 {
+        // 当前实现不应返回成功
+        return 1;
+    }
+
+    const dec_ret: i32 = chacha20_poly1305_decrypt(&key[0], 32, &nonce[0], 12, null, 0, &cipher[0], 16, &tag[0], &plain[0]);
+    if dec_ret == 0 {
+        return 2;
+    }
+
+    return 0;
+}
+
+export fn main() i32 {
+    return test_chacha20_poly1305_api();
+}
+

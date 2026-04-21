@@ -1,0 +1,7 @@
+// 预期编译失败：[byte:N] 赋字符串字面量时 N 须 ≥ 可见字节数+1（含 \0）
+
+fn main() i32 {
+    var buf: [byte: 2] = "a";
+    buf = "ab";
+    return 0;
+}

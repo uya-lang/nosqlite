@@ -1,0 +1,253 @@
+// test_async_channel.uya - 测试 std.async_channel 泛型/特化单槽通道与最小 MPSC
+
+use std.async;
+use std.async_channel;
+use std.mem.allocator.g_allocator;
+use std.testing.assert_eq_i32;
+
+const SINGLE_SLOT_SIZE: i32 = 1;
+const MULTI_SLOT_SIZE: i32 = 4;
+
+test "channel_send_recv" {
+    var ch: Channel<i32> = channel_new<i32>();
+    const fw: Future<usize> = ch.send(42);
+    const wk: Waker = Waker{};
+    const pw: Poll<usize> = fw.poll(&wk);
+    var sent: i32 = 0;
+    match pw {
+        .Ready(_) => { sent = 1; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(sent, 1);
+
+    const fr: Future<i32> = ch.recv();
+    const pr: Poll<i32> = fr.poll(&wk);
+    var got: i32 = 0;
+    match pr {
+        .Ready(v) => { got = v; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(got, 42);
+}
+
+test "mpsc_channel_send_recv" {
+    var ch: MpscChannel<i32> = mpsc_channel_new<i32>(g_allocator, SINGLE_SLOT_SIZE);
+    const wk: Waker = Waker{};
+
+    const fw: Future<usize> = ch.send(7);
+    const pw: Poll<usize> = fw.poll(&wk);
+    var sent: i32 = 0;
+    match pw {
+        .Ready(_) => { sent = 1; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(sent, 1);
+
+    const fr: Future<i32> = ch.recv();
+    const pr: Poll<i32> = fr.poll(&wk);
+    var got: i32 = 0;
+    match pr {
+        .Ready(v) => { got = v; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(got, 7);
+}
+
+test "mpsc_channel_second_send_pending_until_recv" {
+    var ch: MpscChannel<i32> = mpsc_channel_new<i32>(g_allocator, SINGLE_SLOT_SIZE);
+    const wk: Waker = Waker{};
+
+    const first_send_future: Future<usize> = ch.send(11);
+    const first_send: Poll<usize> = first_send_future.poll(&wk);
+    var first_ready: i32 = 0;
+    match first_send {
+        .Ready(_) => { first_ready = 1; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(first_ready, 1);
+
+    const second_send_future: Future<usize> = ch.send(22);
+    const second_send: Poll<usize> = second_send_future.poll(&wk);
+    var second_pending: i32 = 0;
+    match second_send {
+        .Ready(_) => { },
+        .Pending(_) => { second_pending = 1; },
+    };
+    try assert_eq_i32(second_pending, 1);
+
+    const first_recv_future: Future<i32> = ch.recv();
+    const first_recv: Poll<i32> = first_recv_future.poll(&wk);
+    var first_value: i32 = 0;
+    match first_recv {
+        .Ready(v) => { first_value = v; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(first_value, 11);
+
+    const third_send_future: Future<usize> = ch.send(22);
+    const third_send: Poll<usize> = third_send_future.poll(&wk);
+    var third_ready: i32 = 0;
+    match third_send {
+        .Ready(_) => { third_ready = 1; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(third_ready, 1);
+
+    const second_recv_future: Future<i32> = ch.recv();
+    const second_recv: Poll<i32> = second_recv_future.poll(&wk);
+    var second_value: i32 = 0;
+    match second_recv {
+        .Ready(v) => { second_value = v; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(second_value, 22);
+}
+
+test "channel_generic_usize_send_recv" {
+    var ch: Channel<usize> = channel_new<usize>();
+    const wk: Waker = Waker{};
+
+    const send_future: Future<usize> = ch.send(55 as usize);
+    const send_poll: Poll<usize> = send_future.poll(&wk);
+    var send_ready: i32 = 0;
+    match send_poll {
+        .Ready(_) => { send_ready = 1; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(send_ready, 1);
+
+    const recv_future: Future<usize> = ch.recv();
+    const recv_poll: Poll<usize> = recv_future.poll(&wk);
+    var recv_value: usize = 0 as usize;
+    match recv_poll {
+        .Ready(v) => { recv_value = v; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(recv_value as i32, 55);
+}
+
+test "mpsc_channel_generic_u32_pending_until_recv" {
+    var ch: MpscChannel<u32> = mpsc_channel_new<u32>(g_allocator, SINGLE_SLOT_SIZE);
+    const wk: Waker = Waker{};
+
+    const first_send_future: Future<usize> = ch.send(13 as u32);
+    const first_send_poll: Poll<usize> = first_send_future.poll(&wk);
+    var first_send_ready: i32 = 0;
+    match first_send_poll {
+        .Ready(_) => { first_send_ready = 1; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(first_send_ready, 1);
+
+    const second_send_future: Future<usize> = ch.send(21 as u32);
+    const second_send_poll: Poll<usize> = second_send_future.poll(&wk);
+    var second_send_pending: i32 = 0;
+    match second_send_poll {
+        .Ready(_) => { },
+        .Pending(_) => { second_send_pending = 1; },
+    };
+    try assert_eq_i32(second_send_pending, 1);
+
+    const first_recv_future: Future<u32> = ch.recv();
+    const first_recv_poll: Poll<u32> = first_recv_future.poll(&wk);
+    var first_recv_value: u32 = 0 as u32;
+    match first_recv_poll {
+        .Ready(v) => { first_recv_value = v; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(first_recv_value as i32, 13);
+
+    const third_send_future: Future<usize> = ch.send(21 as u32);
+    const third_send_poll: Poll<usize> = third_send_future.poll(&wk);
+    var third_send_ready: i32 = 0;
+    match third_send_poll {
+        .Ready(_) => { third_send_ready = 1; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(third_send_ready, 1);
+
+    const second_recv_future: Future<u32> = ch.recv();
+    const second_recv_poll: Poll<u32> = second_recv_future.poll(&wk);
+    var second_recv_value: u32 = 0 as u32;
+    match second_recv_poll {
+        .Ready(v) => { second_recv_value = v; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(second_recv_value as i32, 21);
+}
+
+test "mpsc_channel_multi_slot_fifo_wraparound" {
+    var ch: MpscChannel<i32> = mpsc_channel_new<i32>(g_allocator, MULTI_SLOT_SIZE);
+    const wk: Waker = Waker{};
+
+    const send1_future: Future<usize> = ch.send(1);
+    const send2_future: Future<usize> = ch.send(2);
+    const send3_future: Future<usize> = ch.send(3);
+    const send4_future: Future<usize> = ch.send(4);
+    const send1: Poll<usize> = send1_future.poll(&wk);
+    const send2: Poll<usize> = send2_future.poll(&wk);
+    const send3: Poll<usize> = send3_future.poll(&wk);
+    const send4: Poll<usize> = send4_future.poll(&wk);
+    var ready_count: i32 = 0;
+    match send1 { .Ready(_) => { ready_count = ready_count + 1; }, .Pending(_) => { }, };
+    match send2 { .Ready(_) => { ready_count = ready_count + 1; }, .Pending(_) => { }, };
+    match send3 { .Ready(_) => { ready_count = ready_count + 1; }, .Pending(_) => { }, };
+    match send4 { .Ready(_) => { ready_count = ready_count + 1; }, .Pending(_) => { }, };
+    try assert_eq_i32(ready_count, 4);
+
+    const send5_future: Future<usize> = ch.send(5);
+    const send5: Poll<usize> = send5_future.poll(&wk);
+    var pending_when_full: i32 = 0;
+    match send5 {
+        .Ready(_) => { },
+        .Pending(_) => { pending_when_full = 1; },
+    };
+    try assert_eq_i32(pending_when_full, 1);
+
+    var v1: i32 = 0;
+    var v2: i32 = 0;
+    const recv1_future: Future<i32> = ch.recv();
+    const recv2_future: Future<i32> = ch.recv();
+    const recv1: Poll<i32> = recv1_future.poll(&wk);
+    const recv2: Poll<i32> = recv2_future.poll(&wk);
+    match recv1 {
+        .Ready(v) => { v1 = v; },
+        .Pending(_) => { },
+    };
+    match recv2 {
+        .Ready(v) => { v2 = v; },
+        .Pending(_) => { },
+    };
+    try assert_eq_i32(v1, 1);
+    try assert_eq_i32(v2, 2);
+
+    const send6_future: Future<usize> = ch.send(5);
+    const send7_future: Future<usize> = ch.send(6);
+    const send6: Poll<usize> = send6_future.poll(&wk);
+    const send7: Poll<usize> = send7_future.poll(&wk);
+    var wrap_ready_count: i32 = 0;
+    match send6 { .Ready(_) => { wrap_ready_count = wrap_ready_count + 1; }, .Pending(_) => { }, };
+    match send7 { .Ready(_) => { wrap_ready_count = wrap_ready_count + 1; }, .Pending(_) => { }, };
+    try assert_eq_i32(wrap_ready_count, 2);
+
+    var out3: i32 = 0;
+    var out4: i32 = 0;
+    var out5: i32 = 0;
+    var out6: i32 = 0;
+    const recv3_future: Future<i32> = ch.recv();
+    const recv4_future: Future<i32> = ch.recv();
+    const recv5_future: Future<i32> = ch.recv();
+    const recv6_future: Future<i32> = ch.recv();
+    const recv3: Poll<i32> = recv3_future.poll(&wk);
+    const recv4: Poll<i32> = recv4_future.poll(&wk);
+    const recv5: Poll<i32> = recv5_future.poll(&wk);
+    const recv6: Poll<i32> = recv6_future.poll(&wk);
+    match recv3 { .Ready(v) => { out3 = v; }, .Pending(_) => { }, };
+    match recv4 { .Ready(v) => { out4 = v; }, .Pending(_) => { }, };
+    match recv5 { .Ready(v) => { out5 = v; }, .Pending(_) => { }, };
+    match recv6 { .Ready(v) => { out6 = v; }, .Pending(_) => { }, };
+    try assert_eq_i32(out3, 3);
+    try assert_eq_i32(out4, 4);
+    try assert_eq_i32(out5, 5);
+    try assert_eq_i32(out6, 6);
+}

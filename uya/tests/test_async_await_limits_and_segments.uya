@@ -1,0 +1,83 @@
+// test_async_await_limits_and_segments.uya
+// 覆盖两类回归：
+// 1) await 绑定数量超过 32 时，绑定名映射仍正确
+// 2) 两个 await 之间的普通语句副作用不能被状态机跳过
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+var g_gap_side_effect: i32 = 0;
+
+fn ready(v: i32) Future<!i32> {
+    const p: Poll<!i32> = Poll<!i32>.Ready(ok<i32>(v));
+    return Future<!i32>{ state: p };
+}
+
+@async_fn
+fn await_side_effect_gap() Future<!i32> {
+    const a0: i32 = try @await ready(1);
+    g_gap_side_effect = a0 + 2;
+    const a1: i32 = try @await ready(g_gap_side_effect);
+    return a1;
+}
+
+@async_fn
+fn await_more_than_32_bindings() Future<!i32> {
+    const a0: i32 = try @await ready(0);
+    const a1: i32 = try @await ready(1);
+    const a2: i32 = try @await ready(2);
+    const a3: i32 = try @await ready(3);
+    const a4: i32 = try @await ready(4);
+    const a5: i32 = try @await ready(5);
+    const a6: i32 = try @await ready(6);
+    const a7: i32 = try @await ready(7);
+    const a8: i32 = try @await ready(8);
+    const a9: i32 = try @await ready(9);
+    const a10: i32 = try @await ready(10);
+    const a11: i32 = try @await ready(11);
+    const a12: i32 = try @await ready(12);
+    const a13: i32 = try @await ready(13);
+    const a14: i32 = try @await ready(14);
+    const a15: i32 = try @await ready(15);
+    const a16: i32 = try @await ready(16);
+    const a17: i32 = try @await ready(17);
+    const a18: i32 = try @await ready(18);
+    const a19: i32 = try @await ready(19);
+    const a20: i32 = try @await ready(20);
+    const a21: i32 = try @await ready(21);
+    const a22: i32 = try @await ready(22);
+    const a23: i32 = try @await ready(23);
+    const a24: i32 = try @await ready(24);
+    const a25: i32 = try @await ready(25);
+    const a26: i32 = try @await ready(26);
+    const a27: i32 = try @await ready(27);
+    const a28: i32 = try @await ready(28);
+    const a29: i32 = try @await ready(29);
+    const a30: i32 = try @await ready(30);
+    const a31: i32 = try @await ready(31);
+    const a32: i32 = try @await ready(32);
+    const a33: i32 = try @await ready(33);
+    const a34: i32 = try @await ready(34);
+    const a35: i32 = try @await ready(35);
+    const a36: i32 = try @await ready(36);
+    const a37: i32 = try @await ready(37);
+    const a38: i32 = try @await ready(38);
+    const a39: i32 = try @await ready(39);
+    return a39;
+}
+
+test "async_gap_side_effect_kept_between_awaits" {
+    g_gap_side_effect = 0;
+    const f: Future<!i32> = await_side_effect_gap();
+    const bo: !i32 = block_on<i32>(f);
+    const v: i32 = bo catch { 0 - 1; };
+    try assert_eq_i32(v, 3);
+    try assert_eq_i32(g_gap_side_effect, 3);
+}
+
+test "async_more_than_32_bindings_keep_mapping" {
+    const f: Future<!i32> = await_more_than_32_bindings();
+    const bo: !i32 = block_on<i32>(f);
+    const v: i32 = bo catch { 0 - 1; };
+    try assert_eq_i32(v, 39);
+}

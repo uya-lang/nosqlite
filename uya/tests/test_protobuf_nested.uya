@@ -1,0 +1,34 @@
+// Phase 2：嵌套 message + RecursionLimit
+use std.runtime.entry;
+use std.protobuf.demo.DemoInner;
+use std.protobuf.demo.DemoOuter;
+use std.protobuf.decode.decode_demo_inner_d;
+use std.protobuf.decode.decode_demo_outer;
+use std.protobuf.encode.encode_demo_outer_to;
+use std.protobuf.wire.PB_MAX_NEST_DEPTH;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 512] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 512);
+
+    const o: DemoOuter = DemoOuter{ inner: DemoInner{ x: 11 }, y: 22 };
+    var buf: [byte: 128] = [];
+    const n: usize = encode_demo_outer_to(&o, &buf[0], 128) catch { return 1; };
+    const d: DemoOuter = decode_demo_outer(&a, &buf[0], n) catch { return 2; };
+    if d.inner.x != 11 || d.y != 22 {
+        return 3;
+    }
+
+    // 仅 Inner：field1=1 varint 7 → 08 07
+    var ib: [byte: 8] = [];
+    ib[0] = 8;
+    ib[1] = 7;
+    const lim: usize = PB_MAX_NEST_DEPTH + 1;
+    decode_demo_inner_d(&a, &ib[0], 2, lim) catch {
+        return 0;
+    };
+    return 4;
+}

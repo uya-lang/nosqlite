@@ -1,0 +1,20 @@
+// error_async_recursive.uya
+//
+// 预期：编译失败。异步函数（@async_fn）直接递归会导致状态机大小无法在编译期确定，
+// 在 CPS/状态机生成前先禁止该模式，避免后续实现陷入不一致。
+
+use std.async;
+
+@async_fn
+fn rec(n: i32) !Future<i32> {
+    if n <= 0 {
+        return 0;
+    }
+    const _x: i32 = try @await rec(n - 1);
+    _ = _x;
+    return n;
+}
+
+test "expect_compile_fail" {
+}
+

@@ -1,0 +1,142 @@
+// test_std_string.uya - 测试新的 std.string 模块
+use std.runtime.entry;
+// 测试字符串操作函数
+
+use std.string.strlen;
+use std.string.strcmp;
+use std.string.strncmp;
+use std.string.strcpy;
+use std.string.strncpy;
+use std.string.strcat;
+use std.string.strchr;
+use std.string.strrchr;
+use std.string.strstr;
+
+export fn main() i32 {
+    // 测试 1: strlen - 字符串长度
+    const s1: &const byte = "Hello\0" as &const byte;
+    const len1: usize = strlen(s1);
+    if len1 != 5 {
+        return 1;  // 长度不匹配
+    }
+    
+    // 测试 2: strcmp - 字符串比较
+    const s2: &const byte = "abc\0" as &const byte;
+    const s3: &const byte = "abc\0" as &const byte;
+    const s4: &const byte = "abd\0" as &const byte;
+    const cmp1: i32 = strcmp(s2, s3);
+    const cmp2: i32 = strcmp(s2, s4);
+    if cmp1 != 0 {
+        return 2;  // 相同字符串应该返回 0
+    }
+    if cmp2 >= 0 {
+        return 3;  // "abc" < "abd"，应该返回负数
+    }
+    
+    // 测试 3: strncmp - 限制长度的字符串比较
+    const s5: &const byte = "abc\0" as &const byte;
+    const s6: &const byte = "abd\0" as &const byte;
+    const ncmp1: i32 = strncmp(s5, s6, 2);
+    if ncmp1 != 0 {
+        return 4;  // 前 2 个字符相同，应该返回 0
+    }
+    
+    // 测试 4: strcpy - 字符串复制
+    var dst1: [byte: 10] = [];
+    const src1: &const byte = "Hello\0" as &const byte;
+    const copied1: &byte = strcpy(&dst1[0], src1);
+    // 验证返回的指针（通过地址比较）
+    const copied_addr: usize = @usize_from_ptr(copied1 as &void);
+    const dst_addr: usize = @usize_from_ptr(&dst1[0] as &void);
+    if copied_addr != dst_addr {
+        return 5;  // 应该返回目标指针
+    }
+    // 验证复制结果（简化：只检查第一个字符）
+    // 'H' 的 ASCII 码是 72
+    if dst1[0] != 72 {
+        return 6;  // 复制内容不匹配
+    }
+    
+    // 测试 5: strncpy - 限制长度的字符串复制
+    var dst2: [byte: 10] = [];
+    const src2: &const byte = "Hello\0" as &const byte;
+    const copied2: &byte = strncpy(&dst2[0], src2, 3);
+    // 验证返回的指针（通过地址比较）
+    const copied2_addr: usize = @usize_from_ptr(copied2 as &void);
+    const dst2_addr: usize = @usize_from_ptr(&dst2[0] as &void);
+    if copied2_addr != dst2_addr {
+        return 7;  // 应该返回目标指针
+    }
+    // 'H'=72, 'e'=101, 'l'=108
+    if dst2[0] != 72 || dst2[1] != 101 || dst2[2] != 108 {
+        return 8;  // 复制内容不匹配
+    }
+    
+    // 测试 6: strcat - 字符串连接
+    var dst3: [byte: 20] = [];
+    dst3[0] = 72;  // 'H'
+    dst3[1] = 105;  // 'i'
+    dst3[2] = 0;  // '\0'
+    const src3: &const byte = " World\0" as &const byte;
+    const cat1: &byte = strcat(&dst3[0], src3);
+    // 验证返回的指针（通过地址比较）
+    const cat1_addr: usize = @usize_from_ptr(cat1 as &void);
+    const dst3_addr: usize = @usize_from_ptr(&dst3[0] as &void);
+    if cat1_addr != dst3_addr {
+        return 9;  // 应该返回目标指针
+    }
+    // 验证连接结果（简化：只检查前几个字符）
+    if dst3[0] != 72 || dst3[1] != 105 {
+        return 10;  // 连接内容不匹配
+    }
+    
+    // 测试 7: strchr - 查找字符
+    const s7: &const byte = "Hello\0" as &const byte;
+    const found1: &byte = strchr(s7, 108);  // 'l' = 108
+    if found1 == null {
+        return 11;  // 应该找到字符 'l'
+    }
+    // 验证找到的位置（通过地址差）
+    const found_addr: usize = @usize_from_ptr(found1 as &void);
+    const expected_addr: usize = @usize_from_ptr(s7 as &void) + 2;
+    if found_addr != expected_addr {
+        return 12;  // 找到的位置不正确（应该是第一个 'l'）
+    }
+    const not_found1: &byte = strchr(s7, 122);  // 'z' = 122
+    if not_found1 != null {
+        return 13;  // 不应该找到字符 'z'
+    }
+    
+    // 测试 8: strrchr - 从右查找字符
+    const s8: &const byte = "Hello\0" as &const byte;
+    const found2: &byte = strrchr(s8, 108);  // 'l' = 108
+    if found2 == null {
+        return 14;  // 应该找到字符 'l'
+    }
+    // 验证找到的位置（应该是最后一个 'l'）
+    const found_addr2: usize = @usize_from_ptr(found2 as &void);
+    const expected_addr2: usize = @usize_from_ptr(s8 as &void) + 3;
+    if found_addr2 != expected_addr2 {
+        return 15;  // 找到的位置不正确（应该是最后一个 'l'）
+    }
+    
+    // 测试 9: strstr - 查找子字符串
+    const s9: &const byte = "Hello World\0" as &const byte;
+    const substr1: &const byte = "World\0" as &const byte;
+    const found3: &byte = strstr(s9, substr1);
+    if found3 == null {
+        return 16;  // 应该找到子字符串
+    }
+    // 验证找到的位置（简化：只检查第一个字符）
+    // 'W' 的 ASCII 码是 87
+    if found3[0] != 87 {
+        return 17;  // 找到的位置不正确
+    }
+    const substr2: &const byte = "xyz\0" as &const byte;
+    const not_found2: &byte = strstr(s9, substr2);
+    if not_found2 != null {
+        return 18;  // 不应该找到子字符串
+    }
+    
+    return 0;
+}

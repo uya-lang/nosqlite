@@ -1,0 +1,38 @@
+// 测试泛型结构体 - 带方法
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Container<T> {
+    value: T,
+    
+    fn get(self: &Self) T {
+        return self.value;
+    }
+    
+    fn set(self: &Self, new_value: T) void {
+    }
+}
+
+fn test_i32_container() !void {
+    const c: Container<i32> = Container<i32>{ value: 42 };
+    const v: i32 = c.get();
+    try assert_eq_i32(v, 42);
+}
+
+fn test_f64_container() !void {
+    const cf: Container<f64> = Container<f64>{ value: 3.14 };
+    const vf: f64 = cf.get();
+    try expect(vf == 3.14);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Struct Method Tests");
+    run_test("i32 container", test_i32_container);
+    run_test("f64 container", test_f64_container);
+    return test_suite_end();
+}

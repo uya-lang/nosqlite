@@ -1,0 +1,176 @@
+// 复杂表达式完整测试程序
+use std.runtime.entry;
+// 测试复杂表达式的组合：字段访问、数组访问、函数调用、类型转换等
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Data {
+    value: i32,
+    points: [Point: 2],
+}
+
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+fn multiply(a: i32, b: i32) i32 {
+    return a * b;
+}
+
+fn get_value(d: Data) i32 {
+    return d.value;
+}
+
+fn get_point_x(p: &Point) i32 {
+    return p.x;
+}
+
+fn get_index(arr: [i32: 3], index: i32) i32 {
+    // 边界检查
+    if index >= 0 && index < 3 {
+        return arr[index];
+    }
+    return -1;  // 越界返回错误值
+}
+
+fn test_complex_arithmetic() !void {
+    var result1: i32 = 2 * 3 + 4 * 5 - 6 / 2;
+    try assert_eq_i32(result1, 23);
+    
+    var result2: i32 = (2 + 3) * (4 + 5);
+    try assert_eq_i32(result2, 45);
+}
+
+fn test_field_and_array_access() !void {
+    var data: Data = Data{
+        value: 100,
+        points: [
+            Point{ x: 10, y: 20 },
+            Point{ x: 30, y: 40 },
+        ],
+    };
+    
+    var point_x: i32 = data.points[0].x;
+    try assert_eq_i32(point_x, 10);
+    
+    var point_y: i32 = data.points[1].y;
+    try assert_eq_i32(point_y, 40);
+    
+    data.points[0].x = 50;
+    try assert_eq_i32(data.points[0].x, 50);
+}
+
+fn test_function_call_chain() !void {
+    var result3: i32 = add(multiply(2, 3), multiply(4, 5));
+    try assert_eq_i32(result3, 26);
+    
+    var result4: i32 = multiply(add(1, 2), add(3, 4));
+    try assert_eq_i32(result4, 21);
+}
+
+fn test_field_and_function_combo() !void {
+    var p: Point = Point{ x: 100, y: 200 };
+    var result5: i32 = add(p.x, p.y);
+    try assert_eq_i32(result5, 300);
+}
+
+fn test_type_cast_in_expr() !void {
+    var byte_val: byte = 10;
+    var i32_val: i32 = 20;
+    var result8: i32 = (byte_val as i32) + i32_val;
+    try assert_eq_i32(result8, 30);
+    
+    var bool_val: bool = (i32_val as bool);
+    try expect(bool_val == true);
+    
+    var result9: i32 = add(byte_val as i32, i32_val);
+    try assert_eq_i32(result9, 30);
+}
+
+fn test_pointer_deref_and_field() !void {
+    var p: Point = Point{ x: 100, y: 200 };
+    var ptr: &Point = &p;
+    
+    var x_value: i32 = (*ptr).x;
+    try assert_eq_i32(x_value, 100);
+    
+    var y_value: i32 = ptr.y;
+    try assert_eq_i32(y_value, 200);
+    
+    ptr.x = 300;
+    try assert_eq_i32(p.x, 300);
+}
+
+fn test_array_and_function_combo() !void {
+    var arr: [i32: 3] = [10, 20, 30];
+    var result10: i32 = add(arr[0], arr[1]);
+    try assert_eq_i32(result10, 30);
+    
+    var result11: i32 = get_index(arr, 2);
+    try assert_eq_i32(result11, 30);
+}
+
+fn test_logical_expr_combo() !void {
+    var a: i32 = 10;
+    var b: i32 = 20;
+    var c: i32 = 30;
+    var result12: bool = a < b && b < c && c > a;
+    try expect(result12 == true);
+    
+    var result13: bool = add(a, b) > 25 && multiply(a, 2) < 30;
+    try expect(result13 == true);
+}
+
+fn test_assignment_combo() !void {
+    var p2: Point = Point{ x: 1, y: 2 };
+    p2.x = add(5, 5);
+    try assert_eq_i32(p2.x, 10);
+    
+    var arr: [i32: 3] = [1, 2, 3];
+    arr[0] = multiply(3, 4);
+    try assert_eq_i32(arr[0], 12);
+}
+
+fn test_sizeof_alignof_in_expr() !void {
+    var size1: i32 = @size_of(Point) * 2;
+    try assert_eq_i32(size1, 16);
+    
+    var align1: i32 = @align_of(Point);
+    try assert_eq_i32(align1, 4);
+}
+
+fn test_len_in_loop() !void {
+    var arr2: [i32: 5] = [1, 2, 3, 4, 5];
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    while i < @len(arr2) {
+        sum = sum + arr2[i];
+        i = i + 1;
+    }
+    try assert_eq_i32(sum, 15);
+}
+
+export fn main() i32 {
+    test_suite_begin("Complex Expressions Tests");
+    run_test("complex arithmetic", test_complex_arithmetic);
+    run_test("field and array access", test_field_and_array_access);
+    run_test("function call chain", test_function_call_chain);
+    run_test("field and function combo", test_field_and_function_combo);
+    run_test("type cast in expr", test_type_cast_in_expr);
+    run_test("pointer deref and field", test_pointer_deref_and_field);
+    run_test("array and function combo", test_array_and_function_combo);
+    run_test("logical expr combo", test_logical_expr_combo);
+    run_test("assignment combo", test_assignment_combo);
+    run_test("sizeof alignof in expr", test_sizeof_alignof_in_expr);
+    run_test("len in loop", test_len_in_loop);
+    return test_suite_end();
+}

@@ -1,0 +1,21 @@
+// 回归：同程序 i32×4 与 f32×4 @vector.select → 仅生成二者，不拖带 u32（及 ×2）select 助手
+type V4i = @vector(i32, 4);
+type V4f = @vector(f32, 4);
+
+export fn main() i32 {
+    const ai: V4i = @vector.splat(1);
+    const bi: V4i = @vector.splat(2);
+    const mi: @mask(4) = ai < bi;
+    const ri: V4i = @vector.select(mi, ai, bi);
+    if @vector.all(ri == ai) == false {
+        return 1;
+    }
+    const af: V4f = @vector.splat(1.0f32);
+    const bf: V4f = @vector.splat(2.0f32);
+    const mf: @mask(4) = af < bf;
+    const rf: V4f = @vector.select(mf, af, bf);
+    if @vector.all(rf == af) == false {
+        return 2;
+    }
+    return 0;
+}

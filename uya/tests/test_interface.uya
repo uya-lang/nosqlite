@@ -1,0 +1,27 @@
+// 接口：定义、实现、装箱与调用
+
+use std.testing.assert_eq_i32;
+
+interface IAdd {
+  fn add(self: &Self, x: i32) i32;
+}
+
+struct Counter : IAdd {
+  value: i32
+}
+
+Counter {
+  fn add(self: &Self, x: i32) i32 {
+    return self.value + x;
+  }
+}
+
+fn use_it(a: IAdd) i32 {
+  return a.add(10);
+}
+
+test "interface" {
+  const c: Counter = Counter{ value: 5 };
+  const n: i32 = use_it(c);
+  try assert_eq_i32(n, 15);
+}

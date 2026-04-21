@@ -1,0 +1,51 @@
+// 测试结构体实现泛型接口
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+interface Getter<T> {
+    fn get(self: &Self) T;
+}
+
+struct IntHolder : Getter<i32> {
+    value: i32,
+}
+
+IntHolder {
+    fn get(self: &IntHolder) i32 {
+        return self.value;
+    }
+}
+
+struct FloatHolder : Getter<f64> {
+    value: f64,
+}
+
+FloatHolder {
+    fn get(self: &FloatHolder) f64 {
+        return self.value;
+    }
+}
+
+fn test_int_holder() !void {
+    const ih: IntHolder = IntHolder{ value: 42 };
+    const r1: i32 = ih.get();
+    try assert_eq_i32(r1, 42);
+}
+
+fn test_float_holder() !void {
+    const fh: FloatHolder = FloatHolder{ value: 3.14 };
+    const r2: f64 = fh.get();
+    try expect(r2 == 3.14);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Interface Impl Tests");
+    run_test("int holder", test_int_holder);
+    run_test("float holder", test_float_holder);
+    return test_suite_end();
+}

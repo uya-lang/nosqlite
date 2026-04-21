@@ -1,0 +1,117 @@
+// test_mem_layer.uya - mem 层内存操作测试
+// 测试 lib/mem/mem.uya 的纯内存操作函数
+
+use mem.mem_copy;
+use mem.mem_copy_backward;
+use mem.mem_set;
+use mem.mem_zero;
+use mem.mem_compare;
+use mem.mem_memcmp;
+use mem.mem_memset;
+use mem.mem_memchr;
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+test "mem_copy" {
+    var src: [byte: 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    var dest: [byte: 10] = [];
+    
+    mem_copy(&dest[0], &src[0], 10);
+    
+    var i: usize = 0;
+    while i < 10 {
+        try expect(dest[i] == src[i]);
+        i = i + 1;
+    }
+}
+
+test "mem_copy_backward" {
+    var src: [byte: 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    var dest: [byte: 10] = [];
+    
+    mem_copy_backward(&dest[0], &src[0], 10);
+    
+    var i: usize = 0;
+    while i < 10 {
+        try expect(dest[i] == src[i]);
+        i = i + 1;
+    }
+}
+
+test "mem_set" {
+    var buf: [byte: 10] = [];
+    
+    mem_set(&buf[0], 42, 10);
+    
+    var i: usize = 0;
+    while i < 10 {
+        try expect(buf[i] == 42);
+        i = i + 1;
+    }
+}
+
+test "mem_zero" {
+    var buf: [byte: 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    
+    mem_zero(&buf[0], 10);
+    
+    var i: usize = 0;
+    while i < 10 {
+        try expect(buf[i] == 0);
+        i = i + 1;
+    }
+}
+
+test "mem_compare" {
+    var a: [byte: 5] = [1, 2, 3, 4, 5];
+    var b: [byte: 5] = [1, 2, 3, 4, 5];
+    var c: [byte: 5] = [1, 2, 3, 4, 6];
+    
+    const cmp_ab: i32 = mem_compare(&a[0], &b[0], 5);
+    try expect(cmp_ab == 0);
+    
+    const cmp_ac: i32 = mem_compare(&a[0], &c[0], 5);
+    try expect(cmp_ac < 0);
+    
+    const cmp_ca: i32 = mem_compare(&c[0], &a[0], 5);
+    try expect(cmp_ca > 0);
+}
+
+test "memcmp" {
+    var a: [byte: 5] = ['h', 'e', 'l', 'l', 'o'];
+    var b: [byte: 5] = ['h', 'e', 'l', 'l', 'o'];
+    var c: [byte: 5] = ['h', 'e', 'l', 'p', 'o'];
+    
+    const cmp_ab: i32 = mem_memcmp(&a[0], &b[0], 5);
+    try expect(cmp_ab == 0);
+    
+    const cmp_ac: i32 = mem_memcmp(&a[0], &c[0], 5);
+    try expect(cmp_ac != 0);
+}
+
+test "memset" {
+    var buf: [byte: 10] = [];
+    
+    const ptr: &byte = mem_memset(&buf[0], 65, 10);
+    try expect(ptr == &buf[0]);
+    
+    var i: usize = 0;
+    while i < 10 {
+        try expect(buf[i] == 65);
+        i = i + 1;
+    }
+}
+
+test "memchr" {
+    var str: [byte: 10] = ['h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l'];
+    
+    const result1: &const byte = mem_memchr(&str[0], 'l', 10);
+    try expect(result1 == &str[2]);
+    
+    const result2: &const byte = mem_memchr(&str[0], 'x', 10);
+    try expect(result2 == null);
+}

@@ -1,0 +1,30 @@
+// 测试 export 关键字基本功能
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+// 导出函数
+export fn public_func() i32 {
+    return 42;
+}
+
+// 未导出的函数（私有）
+fn private_func() i32 {
+    return 0;
+}
+
+// 导出结构体
+export struct PublicStruct {
+    x: i32,
+    y: i32,
+}
+
+// 未导出的结构体（私有）
+struct PrivateStruct {
+    x: i32,
+}
+
+test "test_export_func" {
+    try assert_eq_i32(public_func(), 42);
+    try assert_eq_i32(private_func(), 0);
+}

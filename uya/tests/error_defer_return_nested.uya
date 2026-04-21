@@ -1,0 +1,10 @@
+// defer 块内嵌套语句中的 return 也应被禁止
+// 预期：编译失败（递归识别 defer 内的 return）
+fn main() i32 {
+    defer {
+        if true {
+            return 0;
+        }
+    }
+    return 1;
+}

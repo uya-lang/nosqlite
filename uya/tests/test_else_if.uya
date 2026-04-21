@@ -1,0 +1,75 @@
+// else if 语句测试
+// 测试 else if 语法和多个条件分支
+
+use std.testing.expect;
+
+test "simple else if" {
+    const x: i32 = 2;
+    var result: i32 = 0;
+    if x == 1 {
+        result = 10;
+    } else if x == 2 {
+        result = 20;
+    } else {
+        result = 30;
+    }
+    try expect(result == 20);
+}
+
+test "multiple else if chain" {
+    const y: i32 = 3;
+    var result: i32 = 0;
+    if y == 1 {
+        result = 100;
+    } else if y == 2 {
+        result = 200;
+    } else if y == 3 {
+        result = 300;
+    } else if y == 4 {
+        result = 400;
+    } else {
+        result = 500;
+    }
+    try expect(result == 300);
+}
+
+test "first condition true" {
+    const z: i32 = 1;
+    var result: i32 = 0;
+    if z == 1 {
+        result = 1000;
+    } else if z == 2 {
+        result = 2000;
+    } else if z == 3 {
+        result = 3000;
+    } else {
+        result = 4000;
+    }
+    try expect(result == 1000);
+}
+
+test "all conditions false" {
+    const w: i32 = 99;
+    var result: i32 = 0;
+    if w == 1 {
+        result = 10000;
+    } else if w == 2 {
+        result = 20000;
+    } else if w == 3 {
+        result = 30000;
+    } else {
+        result = 40000;
+    }
+    try expect(result == 40000);
+}
+
+test "no final else" {
+    const v: i32 = 2;
+    var result: i32 = 0;
+    if v == 1 {
+        result = 100000;
+    } else if v == 2 {
+        result = 200000;
+    }
+    try expect(result == 200000);
+}

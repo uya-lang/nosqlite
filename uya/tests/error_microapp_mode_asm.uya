@@ -1,0 +1,13 @@
+// ERROR TEST: microapp 模式禁止 @asm (E4001)
+// 编译命令: ./bin/uya tests/error_microapp_mode_asm.uya --c99 --app microapp
+// 预期: 编译失败，报错 E4001
+
+fn do_asm() void {
+    @asm {
+        "nop" ();
+    }
+}
+
+export fn main() i32 {
+    return 0;
+}

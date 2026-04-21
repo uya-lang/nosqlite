@@ -1,0 +1,197 @@
+// TFLM Phase 1：Resolver + invoke（FC）+ 各 kernel 直接 smoke
+use std.runtime.entry;
+use tflm.common;
+use tflm.common.BuiltinOperator;
+use tflm.common.Context;
+use tflm.interpreter.interpreter_make;
+use tflm.interpreter.invoke;
+use tflm.interpreter.Interpreter;
+use tflm.model.load_model_plan;
+use tflm.model.ModelPlan;
+use tflm.kernels.conv2d_eval;
+use tflm.kernels.depthwise_conv2d_eval;
+use tflm.kernels.fc_eval;
+use tflm.kernels.softmax_eval;
+use tflm.resolver.register_op;
+use tflm.resolver.resolver_init;
+use tflm.resolver.OpResolver;
+use tflm.tensor.TensorType;
+use tflm.tensor.TensorView;
+
+extern "libc" fn memcpy(dest: &void, src: &const void, n: usize) &void;
+
+fn memcpy_sf32(p: &byte, idx: usize, v: f32) void {
+    const off: usize = idx * 4;
+    memcpy(&(p[off]) as &void, &v as &const void, 4 as usize);
+}
+
+fn load_f32_le(p: &byte, idx: usize) f32 {
+    const off: usize = idx * 4;
+    var f: f32 = 0.0;
+    memcpy(&f as &void, &(p[off]) as &const void, 4 as usize);
+    return f;
+}
+
+fn store_i32_le(p: &byte, idx: usize, v: i32) void {
+    const off: usize = idx * 4;
+    const u: u32 = v as u32;
+    p[off] = (u as byte);
+    p[off + 1] = ((u >> 8) as byte);
+    p[off + 2] = ((u >> 16) as byte);
+    p[off + 3] = ((u >> 24) as byte);
+}
+
+fn load_i32_le(p: &byte, idx: usize) i32 {
+    const off: usize = idx * 4;
+    const u: u32 = (p[off] as u32) | ((p[off + 1] as u32) << 8) | ((p[off + 2] as u32) << 16) | ((p[off + 3] as u32) << 24);
+    return u as i32;
+}
+
+export fn main() i32 {
+    var model_buf: [byte: 16] = [];
+    model_buf[0] = (TFLITE_VERSION as byte);
+    model_buf[8] = 1;
+    model_buf[12] = 9;
+    const plan: ModelPlan = load_model_plan(&model_buf[0], 16) catch {
+        return 1;
+    };
+
+    var res: OpResolver = resolver_init();
+    register_op(&res, BuiltinOperator.fully_connected) catch {
+        return 2;
+    };
+
+    var inb: [byte: 16] = [];
+    var wb: [byte: 32] = [];
+    var bb: [byte: 8] = [];
+    var ob: [byte: 8] = [];
+    store_i32_le(&inb[0], 0, 1);
+    store_i32_le(&inb[0], 1, 2);
+    store_i32_le(&wb[0], 0, 1);
+    store_i32_le(&wb[0], 1, 0);
+    store_i32_le(&wb[0], 2, 0);
+    store_i32_le(&wb[0], 3, 1);
+    store_i32_le(&bb[0], 0, 0);
+    store_i32_le(&bb[0], 1, 0);
+
+    const tv_in: TensorView = TensorView{
+        dims: [2, 0, 0, 0],
+        dim_count: 1,
+        typ: TensorType.tt_int32,
+        data: &inb[0],
+        bytes: 8,
+    };
+    const tv_w: TensorView = TensorView{
+        dims: [2, 2, 0, 0],
+        dim_count: 2,
+        typ: TensorType.tt_int32,
+        data: &wb[0],
+        bytes: 16,
+    };
+    const tv_b: TensorView = TensorView{
+        dims: [2, 0, 0, 0],
+        dim_count: 1,
+        typ: TensorType.tt_int32,
+        data: &bb[0],
+        bytes: 8,
+    };
+    const tv_o: TensorView = TensorView{
+        dims: [2, 0, 0, 0],
+        dim_count: 1,
+        typ: TensorType.tt_int32,
+        data: &ob[0],
+        bytes: 8,
+    };
+
+    var ctx: Context = Context{
+        op: BuiltinOperator.fully_connected,
+        in0: tv_in,
+        in1: tv_w,
+        in2: tv_b,
+        out0: tv_o,
+    };
+
+    var interp: Interpreter = interpreter_make(plan, &res, ctx);
+    invoke(&interp) catch {
+        return 3;
+    };
+    if load_i32_le(&ob[0], 0) != 1 || load_i32_le(&ob[0], 1) != 2 {
+        return 4;
+    }
+
+    var sf_in: [byte: 8] = [];
+    var sf_out: [byte: 8] = [];
+    memcpy_sf32(&sf_in[0], 0, 0.0);
+    memcpy_sf32(&sf_in[0], 1, 0.0);
+    var ctx_sm: Context = Context{
+        op: BuiltinOperator.softmax,
+        in0: TensorView{ dims: [2, 0, 0, 0], dim_count: 1, typ: TensorType.tt_float32, data: &sf_in[0], bytes: 8 },
+        in1: TensorView{ dims: [0, 0, 0, 0], dim_count: 0, typ: TensorType.tt_float32, data: &sf_in[0], bytes: 0 },
+        in2: TensorView{ dims: [0, 0, 0, 0], dim_count: 0, typ: TensorType.tt_float32, data: &sf_in[0], bytes: 0 },
+        out0: TensorView{ dims: [2, 0, 0, 0], dim_count: 1, typ: TensorType.tt_float32, data: &sf_out[0], bytes: 8 },
+    };
+    softmax_eval(&ctx_sm) catch {
+        return 5;
+    };
+    const u0: f32 = load_f32_le(&sf_out[0], 0);
+    const u1: f32 = load_f32_le(&sf_out[0], 1);
+    const diff: f32 = u0 - 0.5;
+    if diff > 0.01 || diff < -0.01 {
+        return 6;
+    }
+    if u1 > 0.51 || u1 < 0.49 {
+        return 7;
+    }
+
+    var cv_in: [byte: 4] = [];
+    var cv_w: [byte: 4] = [];
+    var cv_b: [byte: 4] = [];
+    var cv_o: [byte: 4] = [];
+    store_i32_le(&cv_in[0], 0, 3);
+    store_i32_le(&cv_w[0], 0, 2);
+    store_i32_le(&cv_b[0], 0, 1);
+    var ctx_cv: Context = Context{
+        op: BuiltinOperator.conv_2d,
+        in0: TensorView{ dims: [1, 1, 1, 0], dim_count: 3, typ: TensorType.tt_int32, data: &cv_in[0], bytes: 4 },
+        in1: TensorView{ dims: [1, 1, 0, 0], dim_count: 2, typ: TensorType.tt_int32, data: &cv_w[0], bytes: 4 },
+        in2: TensorView{ dims: [1, 0, 0, 0], dim_count: 1, typ: TensorType.tt_int32, data: &cv_b[0], bytes: 4 },
+        out0: TensorView{ dims: [1, 1, 1, 0], dim_count: 3, typ: TensorType.tt_int32, data: &cv_o[0], bytes: 4 },
+    };
+    conv2d_eval(&ctx_cv) catch {
+        return 8;
+    };
+    if load_i32_le(&cv_o[0], 0) != 7 {
+        return 9;
+    }
+
+    var dw_in: [byte: 64] = [];
+    var dw_f: [byte: 36] = [];
+    var dw_b: [byte: 4] = [];
+    var dw_o: [byte: 16] = [];
+    var di: usize = 0;
+    while di < 16 {
+        store_i32_le(&dw_in[0], di, 1);
+        di = di + 1;
+    }
+    var fi: usize = 0;
+    while fi < 9 {
+        store_i32_le(&dw_f[0], fi, 1);
+        fi = fi + 1;
+    }
+    store_i32_le(&dw_b[0], 0, 0);
+    var ctx_dw: Context = Context{
+        op: BuiltinOperator.depthwise_conv_2d,
+        in0: TensorView{ dims: [4, 4, 1, 0], dim_count: 3, typ: TensorType.tt_int32, data: &dw_in[0], bytes: 64 },
+        in1: TensorView{ dims: [3, 3, 1, 0], dim_count: 3, typ: TensorType.tt_int32, data: &dw_f[0], bytes: 36 },
+        in2: TensorView{ dims: [1, 0, 0, 0], dim_count: 1, typ: TensorType.tt_int32, data: &dw_b[0], bytes: 4 },
+        out0: TensorView{ dims: [2, 2, 1, 0], dim_count: 3, typ: TensorType.tt_int32, data: &dw_o[0], bytes: 16 },
+    };
+    depthwise_conv2d_eval(&ctx_dw) catch {
+        return 10;
+    };
+    if load_i32_le(&dw_o[0], 0) != 9 {
+        return 11;
+    }
+
+    return 0;
+}

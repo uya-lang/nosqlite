@@ -1,0 +1,116 @@
+// &void 通用指针类型测试程序
+use std.runtime.entry;
+// 测试 &void 类型的功能：类型擦除、类型恢复、指针转换
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Data {
+    value: i32,
+}
+
+fn test_void_ptr_null() !void {
+    var void_ptr: &void = null;
+    try expect(void_ptr == null);
+}
+
+fn test_type_erase() !void {
+    var x: i32 = 42;
+    var i32_ptr: &i32 = &x;
+    var void_ptr: &void = i32_ptr as &void;
+    try expect(void_ptr != null);
+}
+
+fn test_type_recover() !void {
+    var x: i32 = 42;
+    var i32_ptr: &i32 = &x;
+    var void_ptr: &void = i32_ptr as &void;
+    
+    var recovered_i32_ptr: &i32 = void_ptr as &i32;
+    try expect(recovered_i32_ptr != null);
+    try assert_eq_i32(*recovered_i32_ptr, 42);
+}
+
+fn test_struct_ptr_to_void() !void {
+    var p: Point = Point{ x: 10, y: 20 };
+    var point_ptr: &Point = &p;
+    var void_ptr: &void = point_ptr as &void;
+    try expect(void_ptr != null);
+}
+
+fn test_void_to_struct_ptr() !void {
+    var p: Point = Point{ x: 10, y: 20 };
+    var point_ptr: &Point = &p;
+    var void_ptr: &void = point_ptr as &void;
+    
+    var recovered_point_ptr: &Point = void_ptr as &Point;
+    try expect(recovered_point_ptr != null);
+    try assert_eq_i32(recovered_point_ptr.x, 10);
+    try assert_eq_i32(recovered_point_ptr.y, 20);
+}
+
+fn test_multi_type_via_void() !void {
+    var d: Data = Data{ value: 100 };
+    var data_ptr: &Data = &d;
+    var void_ptr: &void = data_ptr as &void;
+    
+    var recovered_data_ptr: &Data = void_ptr as &Data;
+    try assert_eq_i32(recovered_data_ptr.value, 100);
+}
+
+fn test_void_ptr_compare() !void {
+    var x: i32 = 42;
+    var i32_ptr: &i32 = &x;
+    var void_ptr: &void = i32_ptr as &void;
+    
+    var void_ptr2: &void = null;
+    try expect(void_ptr != void_ptr2);
+    
+    var y: i32 = 100;
+    var y_ptr: &i32 = &y;
+    void_ptr2 = y_ptr as &void;
+    try expect(void_ptr != void_ptr2);
+}
+
+fn test_void_ptr_size() !void {
+    const void_ptr_size: i32 = @size_of(&void);
+    const i32_ptr_size: i32 = @size_of(&i32);
+    try assert_eq_i32(void_ptr_size, i32_ptr_size);
+}
+
+fn test_void_ptr_align() !void {
+    const void_ptr_align: i32 = @align_of(&void);
+    const i32_ptr_align: i32 = @align_of(&i32);
+    try assert_eq_i32(void_ptr_align, i32_ptr_align);
+}
+
+fn test_void_deref_via_convert() !void {
+    var y: i32 = 200;
+    var y_ptr: &i32 = &y;
+    var void_ptr: &void = y_ptr as &void;
+    var z_ptr: &i32 = void_ptr as &i32;
+    try assert_eq_i32(*z_ptr, 200);
+}
+
+export fn main() i32 {
+    test_suite_begin("Void Pointer Tests");
+    run_test("void ptr null", test_void_ptr_null);
+    run_test("type erase", test_type_erase);
+    run_test("type recover", test_type_recover);
+    run_test("struct ptr to void", test_struct_ptr_to_void);
+    run_test("void to struct ptr", test_void_to_struct_ptr);
+    run_test("multi type via void", test_multi_type_via_void);
+    run_test("void ptr compare", test_void_ptr_compare);
+    run_test("void ptr size", test_void_ptr_size);
+    run_test("void ptr align", test_void_ptr_align);
+    run_test("void deref via convert", test_void_deref_via_convert);
+    return test_suite_end();
+}

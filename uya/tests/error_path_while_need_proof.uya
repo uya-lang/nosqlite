@@ -1,0 +1,23 @@
+// error_path_while_need_proof.uya - while 循环内数组访问缺少边界检查
+// 
+// 功能：验证 while 循环内，如果缺少边界约束，编译器应报告错误。
+//
+// 预期：编译失败，报告 "数组索引需要安全证明" 错误
+
+fn main() i32 {
+    var arr: [i32: 10] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    var i: i32 = get_start();
+    
+    // i 是运行时值，循环条件只保证 i < 10
+    // 但没有证明 i >= 0，应该报告编译错误
+    while i < 10 {
+        arr[i] = 42;  // 错误：无法证明 i >= 0
+        i = i + 1;
+    }
+    
+    return 0;
+}
+
+fn get_start() i32 {
+    return 0;
+}

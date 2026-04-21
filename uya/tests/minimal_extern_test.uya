@@ -1,0 +1,11 @@
+// 简单测试 extern 函数
+use std.runtime.entry;
+struct Node {
+    id: i32,
+}
+
+extern fn test_func(node: *Node) i32;
+
+export fn main() i32 {
+    return 0;
+}

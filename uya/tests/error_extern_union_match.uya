@@ -1,0 +1,15 @@
+// 预期编译失败：extern union 不支持 match
+
+extern union CValue {
+    i: i32,
+    f: f64,
+}
+
+fn main() i32 {
+    const v: union CValue = CValue.i(1);
+    const x: i32 = match v {
+        .i(n) => n,
+        .f(_) => 0,
+    };
+    return x;
+}

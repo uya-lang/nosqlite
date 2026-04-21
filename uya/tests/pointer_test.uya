@@ -1,0 +1,138 @@
+// 指针类型测试程序
+use std.runtime.entry;
+// 测试指针类型功能（函数参数、取地址、解引用、结构体指针）
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+// 全局变量用于测试返回指针
+var global_value: i32 = 100;
+
+// 指针类型函数参数和通过指针修改值
+fn set_value(p: &i32, value: i32) void {
+    *p = value;
+}
+
+// 指针类型函数参数和读取值
+fn get_value(p: &i32) i32 {
+    return *p;
+}
+
+// 指针类型作为函数返回值（返回全局变量的地址）
+fn get_global_pointer() &i32 {
+    return &global_value;
+}
+
+// 结构体指针参数和字段访问
+fn get_point_x(p: &Point) i32 {
+    return p.x;
+}
+
+// 结构体指针参数和字段修改
+fn set_point(p: &Point, x: i32, y: i32) void {
+    p.x = x;
+    p.y = y;
+}
+
+fn test_pointer_size() !void {
+    const ptr_size: i32 = @size_of(&i32);
+    try expect(ptr_size == 8 || ptr_size == 4);
+}
+
+fn test_pointer_init() !void {
+    var x: i32 = 42;
+    var p: &i32 = &x;
+    try expect(p != null);
+}
+
+fn test_pointer_deref() !void {
+    var x: i32 = 42;
+    var p: &i32 = &x;
+    const value: i32 = *p;
+    try assert_eq_i32(value, 42);
+}
+
+fn test_pointer_modify() !void {
+    var x: i32 = 42;
+    var p: &i32 = &x;
+    set_value(p, 100);
+    try assert_eq_i32(x, 100);
+}
+
+fn test_pointer_reassign() !void {
+    var x: i32 = 42;
+    var y: i32 = 200;
+    var p: &i32 = &x;
+    p = &y;
+    try assert_eq_i32(*p, 200);
+}
+
+fn test_pointer_comparison() !void {
+    var x: i32 = 42;
+    var y: i32 = 200;
+    var p1: &i32 = &y;
+    var p2: &i32 = &y;
+    var p3: &i32 = &x;
+    
+    try expect(p1 == p2);
+    try expect(p1 != p3);
+}
+
+fn test_null_pointer() !void {
+    var null_ptr: &i32 = null;
+    try expect(null_ptr == null);
+}
+
+fn test_return_pointer() !void {
+    var global_ptr: &i32 = get_global_pointer();
+    try expect(global_ptr != null);
+    try assert_eq_i32(*global_ptr, 100);
+}
+
+fn test_struct_pointer() !void {
+    var point: Point = Point{ x: 10, y: 20 };
+    var point_ptr: &Point = &point;
+    
+    const x_val: i32 = get_point_x(point_ptr);
+    try assert_eq_i32(x_val, 10);
+    
+    try assert_eq_i32(point_ptr.x, 10);
+    try assert_eq_i32(point_ptr.y, 20);
+}
+
+fn test_struct_pointer_modify() !void {
+    var point: Point = Point{ x: 10, y: 20 };
+    var point_ptr: &Point = &point;
+    
+    set_point(point_ptr, 30, 40);
+    try assert_eq_i32(point.x, 30);
+    try assert_eq_i32(point.y, 40);
+    
+    point_ptr.x = 50;
+    point_ptr.y = 60;
+    try assert_eq_i32(point.x, 50);
+    try assert_eq_i32(point.y, 60);
+}
+
+export fn main() i32 {
+    test_suite_begin("Pointer Tests");
+    run_test("pointer size", test_pointer_size);
+    run_test("pointer init", test_pointer_init);
+    run_test("pointer deref", test_pointer_deref);
+    run_test("pointer modify", test_pointer_modify);
+    run_test("pointer reassign", test_pointer_reassign);
+    run_test("pointer comparison", test_pointer_comparison);
+    run_test("null pointer", test_null_pointer);
+    run_test("return pointer", test_return_pointer);
+    run_test("struct pointer", test_struct_pointer);
+    run_test("struct pointer modify", test_struct_pointer_modify);
+    return test_suite_end();
+}

@@ -1,0 +1,7 @@
+use std.testing.assert_eq_i32;
+use file_module.pure_utils.add_one;
+
+test "use file module path under project root" {
+    const got: i32 = add_one(41);
+    try assert_eq_i32(got, 42);
+}

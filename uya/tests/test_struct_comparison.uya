@@ -1,0 +1,137 @@
+// 结构体比较完整测试程序
+// 测试结构体的 == 和 != 比较运算符（逐字段比较）
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Data {
+    value: i32,
+    flag: bool,
+}
+
+struct Nested {
+    point: Point,
+    count: i32,
+}
+
+struct ArrayStruct {
+    items: [i32: 3],
+    size: i32,
+}
+
+struct Empty {
+}
+
+test "struct equal" {
+    var p1: Point = Point{ x: 10, y: 20 };
+    var p2: Point = Point{ x: 10, y: 20 };
+    try expect(p1 == p2);
+}
+
+test "struct not equal" {
+    var p1: Point = Point{ x: 10, y: 20 };
+    var p3: Point = Point{ x: 10, y: 30 };
+    try expect(p1 != p3);
+    
+    var p4: Point = Point{ x: 20, y: 20 };
+    try expect(p1 != p4);
+}
+
+test "struct different fields" {
+    var d1: Data = Data{ value: 42, flag: true };
+    var d2: Data = Data{ value: 100, flag: true };
+    try expect(d1 != d2);
+    
+    var d3: Data = Data{ value: 42, flag: false };
+    try expect(d1 != d3);
+    
+    var d4: Data = Data{ value: 42, flag: true };
+    try expect(d1 == d4);
+}
+
+test "nested struct compare" {
+    var n1: Nested = Nested{
+        point: Point{ x: 1, y: 2 },
+        count: 10,
+    };
+    var n2: Nested = Nested{
+        point: Point{ x: 1, y: 2 },
+        count: 10,
+    };
+    try expect(n1 == n2);
+    
+    var n3: Nested = Nested{
+        point: Point{ x: 1, y: 3 },
+        count: 10,
+    };
+    try expect(n1 != n3);
+    
+    var n4: Nested = Nested{
+        point: Point{ x: 1, y: 2 },
+        count: 20,
+    };
+    try expect(n1 != n4);
+}
+
+test "array field compare" {
+    var a1: ArrayStruct = ArrayStruct{
+        items: [1, 2, 3],
+        size: 3,
+    };
+    var a2: ArrayStruct = ArrayStruct{
+        items: [1, 2, 3],
+        size: 3,
+    };
+    try expect(a1 == a2);
+    
+    var a3: ArrayStruct = ArrayStruct{
+        items: [1, 2, 4],
+        size: 3,
+    };
+    try expect(a1 != a3);
+}
+
+test "struct in conditional" {
+    var p5: Point = Point{ x: 5, y: 6 };
+    var p6: Point = Point{ x: 5, y: 6 };
+    var result: i32 = 0;
+    if p5 == p6 {
+        result = 100;
+    } else {
+        result = 200;
+    }
+    try assert_eq_i32(result, 100);
+}
+
+test "struct assignment compare" {
+    var p9: Point = Point{ x: 10, y: 20 };
+    var p10: Point = p9;
+    try assert_eq_i32(p10.x, 10);
+    try assert_eq_i32(p10.y, 20);
+    
+    p10.x = 30;
+    try assert_eq_i32(p10.x, 30);
+    try assert_eq_i32(p10.y, 20);
+}
+
+test "struct pointer compare" {
+    var p11: Point = Point{ x: 1, y: 2 };
+    var ptr1: &Point = &p11;
+    var ptr2: &Point = &p11;
+    try expect(ptr1 == ptr2);
+    
+    var p12: Point = Point{ x: 1, y: 2 };
+    var ptr3: &Point = &p12;
+    try expect(ptr1 != ptr3);
+}
+
+test "empty struct compare" {
+    var e1: Empty = Empty{};
+    var e2: Empty = Empty{};
+    try expect(e1 == e2);
+}

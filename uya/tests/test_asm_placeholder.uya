@@ -1,0 +1,66 @@
+// test_asm_placeholder.uya - @asm 占位符类型推断测试
+// 测试占位符 {name} 语法和类型推断
+
+// 测试基本占位符
+test "asm placeholder simple" {
+    var a: i32 = 10;
+    var b: i32 = 20;
+    var result: i32 = 0;
+    @asm {
+        "nop" (a, b, -> result);
+    }
+}
+
+// 测试占位符与输入输出
+test "asm placeholder with input output" {
+    var x: i32 = 100;
+    var y: i32 = 0;
+    @asm {
+        "nop" (x, -> y);
+    }
+}
+
+// 测试多个占位符
+test "asm multiple placeholders" {
+    var a: i32 = 1;
+    var b: i32 = 2;
+    var c: i32 = 3;
+    var result: i32 = 0;
+    @asm {
+        "nop" (a, b, c, -> result);
+    }
+}
+
+// 测试占位符重用
+test "asm placeholder reuse" {
+    var x: i32 = 42;
+    var result: i32 = 0;
+    @asm {
+        "nop" (x, -> x);
+        "nop" (x, -> result);
+    }
+}
+
+// 测试占位符与不同类型
+test "asm placeholder different types" {
+    var a: i32 = 10;
+    var b: i64 = 20;
+    var result_i32: i32 = 0;
+    var result_i64: i64 = 0;
+    @asm {
+        "nop" (a, -> result_i32);
+    }
+    @asm {
+        "nop" (b, -> result_i64);
+    }
+}
+
+// 测试占位符与指针
+test "asm placeholder pointer" {
+    var arr: [i32: 4] = [1, 2, 3, 4];
+    var ptr: &i32 = &arr[0];
+    var value: i32 = 0;
+    @asm {
+        "nop" (ptr, -> value);
+    }
+}

@@ -1,0 +1,58 @@
+// 测试 union 包含值类型结构体变体的代码生成顺序
+use std.runtime.entry;
+// 模拟 ASTNodeData 的情况：union 变体是结构体，结构体包含指针字段
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 结构体包含指针字段（模拟 AST*Data）
+// 注意：指针字段类型在 Uya 中可以直接使用，编译器会生成前向声明
+struct ProgramData {
+    name: &byte,
+    decl_count: i32,
+}
+
+struct BinaryExprData {
+    left: &Node,
+    right: &Node,
+    op: i32,
+}
+
+struct CallExprData {
+    callee: &Node,
+    arg_count: i32,
+}
+
+// Union 包含值类型结构体变体（模拟 ASTNodeData）
+union NodeData {
+    program: ProgramData,
+    binary_expr: BinaryExprData,
+    call_expr: CallExprData,
+}
+
+// 完整的 Node 结构（模拟 ASTNode）
+struct Node {
+    type_id: i32,
+    data: NodeData,
+}
+
+fn test_union_value_struct_deps() !void {
+    var pd: ProgramData = ProgramData{ name: "test" as &byte, decl_count: 42 };
+    var nd: NodeData = NodeData.program(pd);
+    
+    const result: i32 = match nd {
+        .program(p) => p.decl_count,
+        .binary_expr(b) => b.op,
+        .call_expr(c) => c.arg_count,
+    };
+    try assert_eq_i32(result, 42);
+}
+
+export fn main() i32 {
+    test_suite_begin("Union Value Struct Deps Tests");
+    run_test("union value struct deps", test_union_value_struct_deps);
+    return test_suite_end();
+}

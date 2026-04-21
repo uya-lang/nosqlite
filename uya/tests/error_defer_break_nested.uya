@@ -1,0 +1,11 @@
+// defer 块内嵌套语句中的 break 也应被禁止
+// 预期：编译失败（递归识别 defer 内的 break）
+fn main() i32 {
+    var x: i32 = 0;
+    defer {
+        while x < 1 {
+            break;
+        }
+    }
+    return 0;
+}

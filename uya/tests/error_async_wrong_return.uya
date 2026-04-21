@@ -1,0 +1,17 @@
+// error_async_wrong_return.uya
+//
+// 功能：验证 @async_fn 函数必须返回 !Future<T> 类型
+// 预期：编译失败，报告 "@async_fn 函数必须返回 !Future<T> 类型"
+
+@async_fn
+fn bad_return_void() !void {
+    return;
+}
+
+@async_fn
+fn bad_return_i32() i32 {
+    return 42;
+}
+
+test "expect_compile_fail" {
+}

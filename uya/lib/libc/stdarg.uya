@@ -1,0 +1,48 @@
+// libc.stdarg - 可变参数处理
+// 版本：v0.2.0
+// 说明：va_list 现在是编译器内置类型
+//
+// 使用内置函数：
+// - @va_start(&ap, last_param) - 初始化 va_list
+// - @va_arg(ap, Type) - 获取下一个参数
+// - @va_end(&ap) - 结束 va_list 访问
+// - @va_copy(&dest, src) - 复制 va_list
+
+// ============================================================
+// va_list 类型
+// ============================================================
+
+// va_list 是编译器内置类型，无需定义
+// 平台相关大小：
+// - x86-64 Linux: 24 字节
+// - x86-64 Windows: 8 字节
+// - ARM64: 32 字节
+
+// ============================================================
+// 使用示例
+// ============================================================
+
+// fn my_printf(format: &const byte, ...) i32 {
+//     var ap: va_list = va_list{};
+//     @va_start(&ap, format);
+//     
+//     // 解析 format 并获取参数
+//     const val: i32 = @va_arg(ap, i32);
+//     const str: &const byte = @va_arg(ap, &const byte);
+//     
+//     @va_end(&ap);
+//     return 0;
+// }
+//
+// fn process_va_list(ap: va_list) i32 {
+//     // 接收 va_list 参数的函数可以直接使用 @va_arg
+//     return @va_arg(ap, i32);
+// }
+//
+// fn copy_and_process(ap: va_list) i32 {
+//     var ap_copy: va_list = va_list{};
+//     @va_copy(&ap_copy, ap);
+//     const val: i32 = @va_arg(ap_copy, i32);
+//     @va_end(&ap_copy);
+//     return val;
+// }

@@ -1,0 +1,38 @@
+// test_heap.uya - libc.heap malloc/free/realloc 基础功能
+//
+// 编译运行（nostdlib，与 verify_nostdlib_user.sh 链路一致）：
+//   uya build --nostdlib tests/test_heap.uya -o /tmp/t
+//   cc -nostartfiles -nodefaultlibs -static /tmp/t -o /tmp/t_exe && /tmp/t_exe; echo $?
+//
+// test "name" {} 风格（通过 make tests）：
+//   tests/programs/test_heap.uya
+
+use std.testing.assert_eq_i32;
+
+test "malloc_free_basic" {
+    const p1: &void = malloc(64);
+    if p1 == null { try assert_eq_i32(1, 0); }
+    const b1: &u8 = p1 as &u8;
+    b1[0] = 0xAB;
+    b1[1] = 0xCD;
+    try assert_eq_i32(b1[0] as i32, 0xAB as i32);
+    try assert_eq_i32(b1[1] as i32, 0xCD as i32);
+    free(p1);
+}
+
+test "realloc_preserves_data" {
+    const p2: &void = malloc(32);
+    if p2 == null { try assert_eq_i32(1, 0); }
+    const b2: &u8 = p2 as &u8;
+    b2[0] = 42;
+    const p3: &void = realloc(p2, 128);
+    if p3 == null { try assert_eq_i32(1, 0); }
+    const b3: &u8 = p3 as &u8;
+    try assert_eq_i32(b3[0] as i32, 42);
+    free(p3);
+}
+
+test "malloc_zero_does_not_crash" {
+    const p4: &void = malloc(0);
+    if p4 != null { free(p4); }
+}

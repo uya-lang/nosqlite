@@ -1,0 +1,7 @@
+// 预期编译失败：不能对 &[const T] 切片做元素赋值
+
+fn main() i32 {
+    var s: &[const byte] = "ab";
+    s[0] = 99 as byte;
+    return 0;
+}

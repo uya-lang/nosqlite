@@ -1,0 +1,16 @@
+// 预期编译失败：结构体方法调用实参个数不匹配
+struct Calc {
+  n: i32
+}
+
+Calc {
+  fn add(self: &Self, x: i32, y: i32) i32 {
+    return self.n + x + y;
+  }
+}
+
+fn main() i32 {
+  var c: Calc = Calc{ n: 0 };
+  const r: i32 = c.add(1);
+  return r;
+}

@@ -1,0 +1,29 @@
+// 元组类型测试：(T1,T2)、字面量、.0/.1 访问、解构
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+test "tuple access" {
+    const p: (i32, i32) = (10, 20);
+    const x: i32 = p.0;
+    const y: i32 = p.1;
+    try assert_eq_i32(x, 10);
+    try assert_eq_i32(y, 20);
+}
+
+test "tuple another" {
+    const q: (i32, i32) = (1, 2);
+    try assert_eq_i32(q.0, 1);
+    try assert_eq_i32(q.1, 2);
+}
+
+test "tuple destructure" {
+    const (a, b) = (100, 200);
+    try assert_eq_i32(a, 100);
+    try assert_eq_i32(b, 200);
+}
+
+test "tuple destructure ignore" {
+    const (m, _) = (7, 8);
+    try assert_eq_i32(m, 7);
+}

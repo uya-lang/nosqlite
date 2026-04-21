@@ -1,0 +1,48 @@
+// 测试泛型函数 - 返回泛型结构体
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Result<T> {
+    value: T,
+    ok: bool,
+}
+
+// 勿用 ok/err 名：会与 lib/std/async.uya 的 export fn ok<T> 冲突；
+// 查找缓存与 codegen 对「首个声明」不一致时会生成无 struct 定义的 C。
+fn result_ok<T>(value: T) Result<T> {
+    return Result<T>{ value: value, ok: true };
+}
+
+fn result_err<T>(default_value: T) Result<T> {
+    return Result<T>{ value: default_value, ok: false };
+}
+
+fn test_ok_i32() !void {
+    const r1: Result<i32> = result_ok<i32>(42);
+    try assert_eq_i32(r1.value, 42);
+    try expect(r1.ok == true);
+}
+
+fn test_err_i32() !void {
+    const r2: Result<i32> = result_err<i32>(0);
+    try assert_eq_i32(r2.value, 0);
+    try expect(r2.ok == false);
+}
+
+fn test_ok_bool() !void {
+    const r3: Result<bool> = result_ok<bool>(true);
+    try expect(r3.value == true);
+}
+
+export fn main() i32 {
+    test_suite_begin("Generic Return Struct Tests");
+    run_test("ok i32", test_ok_i32);
+    run_test("err i32", test_err_i32);
+    run_test("ok bool", test_ok_bool);
+    return test_suite_end();
+}

@@ -1,0 +1,12 @@
+// SIMD：f32 向量 splat 须使用 f32 浮点字面量后缀（裸 1.0 为 f64，与元素类型不兼容）
+type V2f32 = @vector(f32, 2);
+
+export fn main() i32 {
+    const v: V2f32 = @vector.splat(1.25f32);
+    const w: V2f32 = @vector.splat(2.5f32);
+    const lt: @mask(2) = v < w;
+    if @vector.all(lt) == false {
+        return 1;
+    }
+    return 0;
+}

@@ -1,0 +1,12 @@
+// 错误测试：系统调用号必须是编译期常量
+// 预期：编译失败
+
+fn main() i32 {
+    var syscall_nr: i64 = 1;  // 变量，不是常量
+    
+    const msg = "test";
+    const result: !i64 = @syscall(syscall_nr, 1, msg as i64, 4);  // 错误！
+    
+    return 0;
+}
+

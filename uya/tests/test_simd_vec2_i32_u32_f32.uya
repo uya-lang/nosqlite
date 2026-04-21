@@ -1,0 +1,39 @@
+// SIMD 阶段 4：`@vector(i32|u32|f32, 2)` C99 快路径（`*_x2` 助手，与 `f64` 2× 对齐）
+type Vec2i32 = @vector(i32, 2);
+type Vec2u32 = @vector(u32, 2);
+type Vec2f32 = @vector(f32, 2);
+type Mask2i = @mask(2);
+type Mask2u = @mask(2);
+type Mask2f = @mask(2);
+
+export fn main() i32 {
+    const vi: Vec2i32 = @vector.splat(3) * @vector.splat(4);
+    if @vector.all(vi == @vector.splat(12)) == false {
+        return 1;
+    }
+    const ni: Vec2i32 = -vi;
+    if @vector.all(ni == @vector.splat(-12)) == false {
+        return 2;
+    }
+    const vu: Vec2u32 = @vector.splat(5 as u32) / @vector.splat(2 as u32);
+    if @vector.all(vu == @vector.splat(2 as u32)) == false {
+        return 3;
+    }
+    const vf: Vec2f32 = @vector.splat(2.0f32) / @vector.splat(4.0f32);
+    if @vector.all(vf == @vector.splat(0.5f32)) == false {
+        return 4;
+    }
+    const mf: Mask2f = vf < @vector.splat(1.0f32);
+    if @vector.all(mf) == false {
+        return 5;
+    }
+    const mi: Mask2i = vi > @vector.splat(0);
+    if @vector.all(mi) == false {
+        return 6;
+    }
+    const mu: Mask2u = vu < @vector.splat(3 as u32);
+    if @vector.all(mu) == false {
+        return 7;
+    }
+    return 0;
+}

@@ -1,0 +1,62 @@
+// tests/test_constant_folding.uya
+// 测试编译期常量折叠优化
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+
+test "basic_folding" {
+    const a: i32 = 10 + 20;
+    try assert_eq_i32(a, 30);
+    
+    const b: i32 = 100 - 30;
+    try assert_eq_i32(b, 70);
+    
+    const c: i32 = 7 * 8;
+    try assert_eq_i32(c, 56);
+    
+    const d: i32 = 100 / 4;
+    try assert_eq_i32(d, 25);
+    
+    const e: i32 = 17 % 5;
+    try assert_eq_i32(e, 2);
+}
+
+test "nested_folding" {
+    const a: i32 = 10;
+    const b: i32 = a * 2;
+    const c: i32 = b + 5;
+    try assert_eq_i32(c, 25);
+}
+
+test "complex_folding" {
+    const x: i32 = (10 + 20) * (5 - 2);
+    try assert_eq_i32(x, 90);
+}
+
+test "boolean_folding" {
+    const a: bool = true && false;
+    try assert_eq_bool(a, false);
+    
+    const b: bool = true || false;
+    try assert_eq_bool(b, true);
+    
+    const c: bool = !true;
+    try assert_eq_bool(c, false);
+}
+
+test "comparison_folding" {
+    const a: bool = 10 > 5;
+    const b: bool = 10 < 5;
+    const c: bool = 10 == 10;
+    const d: bool = 10 != 5;
+    
+    try assert_eq_bool(a, true);
+    try assert_eq_bool(b, false);
+    try assert_eq_bool(c, true);
+    try assert_eq_bool(d, true);
+}
+
+test "unary_folding" {
+    const a: i32 = -10;
+    try assert_eq_i32(a, -10);
+}

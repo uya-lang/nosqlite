@@ -1,0 +1,18 @@
+use std.testing.expect;
+use std.runtime.entry;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_array_literal() !void {
+    var nums: [i32: 3] = [1, 2, 3];
+    try expect(nums[0] == 1);
+    try expect(nums[1] == 2);
+    try expect(nums[2] == 3);
+}
+
+export fn main() i32 {
+    test_suite_begin("Array Literal Tests");
+    run_test("array literal", test_array_literal);
+    return test_suite_end();
+}

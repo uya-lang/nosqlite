@@ -1,0 +1,41 @@
+// 回归复现：外层 @async_fn 里直接 @await http1_async_get(...)
+//
+// 现象：
+// - Uya 前端 build --c99 可通过
+// - 生成的 C 交给 gcc/cc 编译时，会在嵌套 async frame 上报 incomplete type / forward decl 顺序错误
+//
+// 修复编译器后，此用例应能完整通过：
+//   uya --c99 test_async_nested_http1_await_codegen.uya -o out.c
+//   cc -std=c99 -c out.c -o out.o
+
+use std.async;
+use std.http.http1_async.Http1AsyncResponse;
+use std.http.http1_async.http1_async_get;
+use std.http.http1_async.http1_async_response_free;
+
+@async_fn
+fn nested_http_get(url: &[byte], timeout_ms: u32) Future<!i32> {
+    const resp: Http1AsyncResponse = try @await http1_async_get(url, null, timeout_ms);
+    const status: i32 = resp.status;
+    http1_async_response_free(&resp);
+    return status;
+}
+
+export fn main() i32 {
+    var url_storage: [byte: 18] = "http://127.0.0.1/";
+    const url: &[byte] = &url_storage[0: 17];
+
+    const fut: Future<!i32> = nested_http_get(url, 1);
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = fut.poll(&w);
+
+    match p {
+        .Ready(r) => {
+            const v: i32 = r catch { 0; };
+            return v;
+        },
+        .Pending(_) => {
+            return 0;
+        },
+    };
+}

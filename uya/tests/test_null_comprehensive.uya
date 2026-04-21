@@ -1,0 +1,141 @@
+// null 字面量综合测试程序
+use std.runtime.entry;
+// 测试 null 字面量的所有使用场景
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Node {
+    value: i32,
+    next: &Node,
+}
+
+struct Data {
+    x: i32,
+    y: i32,
+    ptr: &Data,
+}
+
+fn create_node(value: i32) &Node {
+    return null;
+}
+
+fn test_null_init() !void {
+    var ptr_i32: &i32 = null;
+    var ptr_void: &void = null;
+    var ptr_node: &Node = null;
+    var ptr_usize: &usize = null;
+    var ptr_bool: &bool = null;
+    var ptr_byte: &byte = null;
+    
+    try expect(ptr_i32 == null);
+    try expect(ptr_void == null);
+    try expect(ptr_node == null);
+    try expect(ptr_usize == null);
+    try expect(ptr_bool == null);
+    try expect(ptr_byte == null);
+}
+
+fn test_null_assign() !void {
+    var x: i32 = 42;
+    var ptr: &i32 = &x;
+    try expect(ptr != null);
+    
+    ptr = null;
+    try expect(ptr == null);
+}
+
+fn test_null_compare() !void {
+    var ptr1: &i32 = null;
+    var ptr2: &i32 = null;
+    
+    try expect(ptr1 == ptr2);
+    try expect(ptr1 == null);
+    
+    var y: i32 = 10;
+    var ptr3: &i32 = &y;
+    try expect(ptr3 != null);
+}
+
+fn test_null_in_condition() !void {
+    var ptr5: &i32 = null;
+    try expect(ptr5 == null);
+    
+    var z: i32 = 20;
+    var ptr6: &i32 = &z;
+    try expect(ptr6 != null);
+}
+
+fn test_null_struct_ptr() !void {
+    var node_ptr: &Node = null;
+    try expect(node_ptr == null);
+    
+    var data_ptr: &Data = null;
+    try expect(data_ptr == null);
+}
+
+fn test_null_void_ptr() !void {
+    var void_ptr: &void = null;
+    try expect(void_ptr == null);
+    
+    var w: i32 = 30;
+    var i32_ptr: &i32 = &w;
+    void_ptr = i32_ptr as &void;
+    try expect(void_ptr != null);
+    
+    void_ptr = null;
+    try expect(void_ptr == null);
+}
+
+fn test_null_in_loop() !void {
+    var ptr7: &i32 = null;
+    var count: i32 = 0;
+    while ptr7 == null && count < 5 {
+        count = count + 1;
+    }
+    try expect(count == 5);
+}
+
+fn test_null_sizeof() !void {
+    const ptr_type_size: i32 = @size_of(&i32);
+    try expect(ptr_type_size > 0);
+}
+
+fn test_null_ptr_compare() !void {
+    var null1: &i32 = null;
+    var null2: &i32 = null;
+    var null3: &Node = null;
+    
+    try expect(null1 == null2);
+}
+
+fn test_null_assign_chain() !void {
+    var ptr_a: &i32 = null;
+    var ptr_b: &i32 = null;
+    var ptr_c: &i32 = null;
+    
+    ptr_a = null;
+    ptr_b = ptr_a;
+    ptr_c = ptr_b;
+    
+    try expect(ptr_a == null);
+    try expect(ptr_b == null);
+    try expect(ptr_c == null);
+}
+
+export fn main() i32 {
+    test_suite_begin("Null Comprehensive Tests");
+    run_test("null init", test_null_init);
+    run_test("null assign", test_null_assign);
+    run_test("null compare", test_null_compare);
+    run_test("null in condition", test_null_in_condition);
+    run_test("null struct ptr", test_null_struct_ptr);
+    run_test("null void ptr", test_null_void_ptr);
+    run_test("null in loop", test_null_in_loop);
+    run_test("null sizeof", test_null_sizeof);
+    run_test("null ptr compare", test_null_ptr_compare);
+    run_test("null assign chain", test_null_assign_chain);
+    return test_suite_end();
+}

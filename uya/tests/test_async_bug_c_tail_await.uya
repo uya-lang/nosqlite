@@ -1,0 +1,28 @@
+// Bug C: 外层 @async_fn 尾部 return try @await inner_async_fn(...)
+// 应能通过 C 编译且语义正确
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+@async_fn fn inner_async(r: &MemAsyncReader, buf: &byte, buf_len: usize) Future<!usize> {
+    const rd: usize = try @await r.read(buf, buf_len);
+    return rd;
+}
+
+@async_fn fn outer_async(r: &MemAsyncReader, buf: &byte, buf_len: usize) Future<!usize> {
+    // 前半段同步
+    buf[0] = 0;
+
+    // 尾部: return try @await inner
+    return try @await inner_async(r, buf, buf_len);
+}
+
+test "bug_c_tail_return_await" {
+    var data: [byte: 4] = [10, 20, 30, 40];
+    var r: MemAsyncReader = mem_async_reader_new(&data[0] as &const byte, 4);
+    var buf: [byte: 8] = [];
+    const f: Future<!usize> = outer_async(&r, &buf[0], 8);
+    const result: !usize = block_on<usize>(f);
+    const total: usize = result catch { 0 as usize; };
+    try assert_eq_i32(total as i32, 4);
+}

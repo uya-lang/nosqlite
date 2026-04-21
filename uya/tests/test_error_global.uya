@@ -1,0 +1,23 @@
+// 错误名全局唯一：多处函数引用同一 error，行为一致
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+error GlobalErr;
+
+fn fail() !i32 { return error.GlobalErr; }
+
+fn check(flag: i32) !i32 {
+    if (flag != 0) { return error.GlobalErr; }
+    return 0;
+}
+
+test "test_error_global" {
+    const x: i32 = fail() catch { 1; };
+    const y: i32 = check(1) catch { 2; };
+    const z: i32 = check(0) catch { 0; };
+    try assert_eq_i32(x, 1);
+    try assert_eq_i32(y, 2);
+    try assert_eq_i32(z, 0);
+}

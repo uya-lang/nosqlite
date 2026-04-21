@@ -1,0 +1,15 @@
+// defer 绑定到当前作用域；嵌套块内层 defer 先于外层执行
+
+use std.testing.expect;
+
+test "defer nested scope" {
+    var a: i32 = 0;
+    var b: i32 = 0;
+    defer { a = 1; }       // 外层：函数返回时执行
+    {
+        defer { b = 1; }   // 内层：离开内层块时执行
+        a = 10;
+    }                     // 离开内层：执行 b=1
+    try expect(b == 1);
+    // 返回时 a 会被设为 1
+}

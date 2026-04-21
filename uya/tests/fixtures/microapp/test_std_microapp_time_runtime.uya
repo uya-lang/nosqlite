@@ -1,0 +1,16 @@
+use std.runtime.entry;
+use std.microapp.io.write_stdout_bytes;
+use std.microapp.time.unix_millis;
+
+export fn main() i32 {
+    const now_ms: u64 = unix_millis() catch {
+        return 1;
+    };
+    if now_ms == 0u64 {
+        return 2;
+    }
+    _ = write_stdout_bytes("time ok\n", 8) catch {
+        return 3;
+    };
+    return 0;
+}

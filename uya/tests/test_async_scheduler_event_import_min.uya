@@ -1,0 +1,14 @@
+use std.async_scheduler.Scheduler;
+use std.async_scheduler.scheduler_new;
+use std.async_event.LinuxEpoll;
+use std.async_event.linux_epoll_create;
+
+export fn main() i32 {
+    const s: Scheduler = scheduler_new();
+    _ = s;
+    const lp: LinuxEpoll = linux_epoll_create(0) catch {
+        return 2;
+    };
+    _ = lp;
+    return 0;
+}

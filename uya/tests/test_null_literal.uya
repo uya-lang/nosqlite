@@ -1,0 +1,52 @@
+// null 字面量测试程序
+
+use std.testing.expect;
+
+struct Node {
+    value: i32,
+    next: &Node,
+}
+
+test "null i32 ptr" {
+    var ptr1: &i32 = null;
+    try expect(ptr1 == null);
+}
+
+test "null struct ptr" {
+    var node_ptr: &Node = null;
+    try expect(node_ptr == null);
+}
+
+test "null ptr equality" {
+    var ptr1: &i32 = null;
+    var ptr2: &i32 = null;
+    try expect(ptr1 == ptr2);
+}
+
+test "non null ptr" {
+    var x: i32 = 42;
+    var ptr3: &i32 = &x;
+    try expect(ptr3 != null);
+}
+
+test "null assign" {
+    var x: i32 = 42;
+    var ptr4: &i32 = &x;
+    ptr4 = null;
+    try expect(ptr4 == null);
+}
+
+test "null usize ptr" {
+    var usize_ptr: &usize = null;
+    try expect(usize_ptr == null);
+}
+
+test "null bool ptr" {
+    var bool_ptr: &bool = null;
+    try expect(bool_ptr == null);
+}
+
+test "null byte ptr" {
+    var byte_ptr: &byte = null;
+    try expect(byte_ptr == null);
+}

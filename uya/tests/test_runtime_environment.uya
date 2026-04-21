@@ -1,0 +1,17 @@
+use std.runtime.entry;
+
+use libc.getenv;
+use libc.system;
+
+export fn main() i32 {
+    const uya_root: &byte = getenv("UYA_ROOT");
+    if uya_root == null || uya_root[0] == 0 {
+        return 1;
+    }
+
+    if system("test -n \"$UYA_ROOT\"") != 0 {
+        return 2;
+    }
+
+    return 0;
+}

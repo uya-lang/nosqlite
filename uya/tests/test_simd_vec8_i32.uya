@@ -1,0 +1,14 @@
+// SIMD：8 通道 @vector(i32, 8) 与 @mask(8)
+type Vec8i32 = @vector(i32, 8);
+type Mask8 = @mask(8);
+
+export fn main() i32 {
+    const a: Vec8i32 = @vector.splat(2);
+    const b: Vec8i32 = @vector.splat(3);
+    const p: Vec8i32 = a * b;
+    const ok: Mask8 = p == @vector.splat(6);
+    if @vector.all(ok) == false {
+        return 1;
+    }
+    return 0;
+}

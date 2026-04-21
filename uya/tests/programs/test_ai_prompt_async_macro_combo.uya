@@ -1,0 +1,59 @@
+// 与 docs/uya_ai_prompt.md「综合示例」同步：
+// - export fn main 须为 i32（与 std.runtime.entry 的 main_main() i32 一致，勿用 main() !i32）
+// - main 内无 try：!Future / !i32 用 catch 早退
+// - expr 宏勿放在 @async_fn 体内（当前 codegen 对宏展开局部绑定不完整，见 async poll 中 sum 丢失）
+// - block_on_plain 当前以 i32 等整数路径验证；f64 单态 C 生成仍有问题，示例改用整除
+
+use std.async;
+
+error DivideByZero;
+
+export mc add(a: expr, b: expr) expr {
+    ${a} + ${b};
+}
+
+@async_fn
+fn async_calculate(a: i32, b: i32) Future<!i32> {
+    const sum: i32 = a + b;
+    return sum;
+}
+
+@async_fn
+fn async_divide(a: i32, b: i32) !Future<i32> {
+    if b == 0 {
+        return error.DivideByZero;
+    }
+    return a / b;
+}
+
+export fn main() i32 {
+    const macro_chk: i32 = add(1, 2);
+    if macro_chk != 3 {
+        return 10;
+    }
+
+    const calc_fut: Future<!i32> = async_calculate(20, 30);
+    const calc_bo: !i32 = block_on<i32>(calc_fut);
+    const calc_result: i32 = calc_bo catch |_| {
+        return 1;
+    };
+    @println("加法异步结果 ${calc_result}");
+
+    const div_res: !Future<i32> = async_divide(100, 20);
+    const divide_fut: Future<i32> = div_res catch |_| {
+        return 2;
+    };
+    const divide_result: i32 = block_on_plain<i32>(divide_fut);
+    @println("除法异步结果 ${divide_result}");
+
+    if divide_result != 5 {
+        return 3;
+    }
+
+    // async_divide(1,0) 应在调用点返回 !Future 错误（包装器前言），而非仅在 poll 中失效
+    const zdiv: !Future<i32> = async_divide(1, 0);
+    const _zfut: Future<i32> = zdiv catch |_| {
+        return 0;
+    };
+    return 12;
+}

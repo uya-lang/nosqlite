@@ -1,0 +1,26 @@
+// as! 强转：返回 !T，需 try 或 catch 处理
+// 规范 uya.md §11.3
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+test "test_as_force_f32" {
+    const x: f64 = 3.14;
+    const y: f32 = try (x as! f32);
+    try assert_eq_i32(y > 3.13, true);
+    try assert_eq_i32(y < 3.15, true);
+}
+
+test "test_as_force_with_catch" {
+    const large: i32 = 100;
+    const f: f32 = large as! f32 catch |_| { 0.0 };
+    try assert_eq_i32(f > 99.0, true);
+    try assert_eq_i32(f < 101.0, true);
+}
+
+test "test_as_force_f64_to_i32" {
+    const pi: f64 = 3.14;
+    const n: i32 = try (pi as! i32);
+    try assert_eq_i32(n, 3);
+}

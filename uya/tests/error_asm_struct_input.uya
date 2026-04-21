@@ -1,0 +1,13 @@
+// error_asm_struct_input.uya - @asm 结构体作为输入错误测试
+// 期望编译错误：@asm 输入必须是整数或指针类型
+
+struct Point { x: i32, y: i32 }
+
+fn main() i32 {
+    var p: Point = Point { x: 1, y: 2 };
+    var result: i32 = 0;
+    @asm {
+        "mov %0, %1" (p, -> result);
+    }
+    return 0;
+}

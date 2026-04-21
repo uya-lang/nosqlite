@@ -1,0 +1,345 @@
+// malloc_test.uya - 内存分配器综合测试
+// 测试 malloc/free/calloc/realloc 的各种场景
+
+use std.testing.test_suite_begin;
+use std.testing.test_pass;
+use std.testing.test_fail;
+use std.testing.test_suite_end;
+use std.testing.expect;
+
+// ============================================================
+// 测试 1: malloc 基本功能
+// ============================================================
+fn test_malloc_basic() !void {
+    var ptr: &void = malloc(16);
+    if (((ptr as &byte) as usize) == 0) {
+        return error.TestFailed;
+    }
+    
+    // 写入数据
+    var p: &byte = (ptr as &byte);
+    var i: usize = 0;
+    while i < 16 {
+        p[i] = (i as u8);
+        i = i + 1;
+    }
+    
+    // 验证数据
+    i = 0;
+    while i < 16 {
+        if p[i] != (i as u8) {
+            free(ptr);
+            return error.TestFailed;
+        }
+        i = i + 1;
+    }
+    
+    free(ptr);
+}
+
+// ============================================================
+// 测试 2: malloc(0) 返回 null
+// ============================================================
+fn test_malloc_zero() !void {
+    var ptr: &void = malloc(0);
+    // malloc(0) 可能返回 null 或者一个可释放的有效指针
+    // 只要不崩溃就是成功的
+    if (((ptr as &byte) as usize) != 0) {
+        free(ptr);
+    }
+}
+
+// ============================================================
+// 测试 3: 多次分配
+// ============================================================
+fn test_multiple_allocations() !void {
+    var ptr1: &void = malloc(100);
+    var ptr2: &void = malloc(200);
+    var ptr3: &void = malloc(300);
+    
+    if (((ptr1 as &byte) as usize) == 0) { return error.TestFailed; }
+    if (((ptr2 as &byte) as usize) == 0) { free(ptr1); return error.TestFailed; }
+    if (((ptr3 as &byte) as usize) == 0) { free(ptr1); free(ptr2); return error.TestFailed; }
+    
+    // 写入不同数据
+    var p1: &byte = (ptr1 as &byte);
+    var p2: &byte = (ptr2 as &byte);
+    var p3: &byte = (ptr3 as &byte);
+    
+    var i: usize = 0;
+    while i < 100 { p1[i] = 1; i = i + 1; }
+    i = 0;
+    while i < 200 { p2[i] = 2; i = i + 1; }
+    i = 0;
+    while i < 300 { p3[i] = 3; i = i + 1; }
+    
+    // 验证
+    i = 0;
+    while i < 100 { if p1[i] != 1 { free(ptr1); free(ptr2); free(ptr3); return error.TestFailed; } i = i + 1; }
+    i = 0;
+    while i < 200 { if p2[i] != 2 { free(ptr1); free(ptr2); free(ptr3); return error.TestFailed; } i = i + 1; }
+    i = 0;
+    while i < 300 { if p3[i] != 3 { free(ptr1); free(ptr2); free(ptr3); return error.TestFailed; } i = i + 1; }
+    
+    free(ptr1);
+    free(ptr2);
+    free(ptr3);
+}
+
+// ============================================================
+// 测试 4: calloc 清零
+// ============================================================
+fn test_calloc_zeroes() !void {
+    var ptr: &void = calloc(10, 4);  // 40 字节
+    if (((ptr as &byte) as usize) == 0) { return error.TestFailed; }
+    
+    // 验证所有字节都是 0
+    var p: &byte = (ptr as &byte);
+    var i: usize = 0;
+    while i < 40 {
+        if p[i] != 0 {
+            free(ptr);
+            return error.TestFailed;
+        }
+        i = i + 1;
+    }
+    
+    free(ptr);
+}
+
+// ============================================================
+// 测试 5: realloc 扩展
+// ============================================================
+fn test_realloc_expand() !void {
+    var ptr: &void = malloc(16);
+    if (((ptr as &byte) as usize) == 0) { return error.TestFailed; }
+    
+    // 写入数据
+    var p: &byte = (ptr as &byte);
+    var i: usize = 0;
+    while i < 16 {
+        p[i] = (i as u8);
+        i = i + 1;
+    }
+    
+    // 扩展到 32 字节
+    var new_ptr: &void = realloc(ptr, 32);
+    if (((new_ptr as &byte) as usize) == 0) {
+        free(ptr);
+        return error.TestFailed;
+    }
+    
+    // 验证原数据
+    var new_p: &byte = (new_ptr as &byte);
+    i = 0;
+    while i < 16 {
+        if new_p[i] != (i as u8) {
+            free(new_ptr);
+            return error.TestFailed;
+        }
+        i = i + 1;
+    }
+    
+    free(new_ptr);
+}
+
+// ============================================================
+// 测试 6: realloc 缩小
+// ============================================================
+fn test_realloc_shrink() !void {
+    var ptr: &void = malloc(64);
+    if (((ptr as &byte) as usize) == 0) { return error.TestFailed; }
+    
+    // 写入数据
+    var p: &byte = (ptr as &byte);
+    var i: usize = 0;
+    while i < 64 {
+        p[i] = (i as u8);
+        i = i + 1;
+    }
+    
+    // 缩小到 16 字节（应该原地返回）
+    var new_ptr: &void = realloc(ptr, 16);
+    if (((new_ptr as &byte) as usize) == 0) {
+        free(ptr);
+        return error.TestFailed;
+    }
+    
+    // 验证原数据（前 16 字节）
+    var new_p: &byte = (new_ptr as &byte);
+    i = 0;
+    while i < 16 {
+        if new_p[i] != (i as u8) {
+            free(new_ptr);
+            return error.TestFailed;
+        }
+        i = i + 1;
+    }
+    
+    free(new_ptr);
+}
+
+// ============================================================
+// 测试 7: realloc(null, size) = malloc(size)
+// ============================================================
+fn test_realloc_null() !void {
+    var ptr: &void = realloc(null, 32);
+    if (((ptr as &byte) as usize) == 0) { return error.TestFailed; }
+    free(ptr);
+}
+
+// ============================================================
+// 测试 8: realloc(ptr, 0) = free(ptr)
+// ============================================================
+fn test_realloc_zero() !void {
+    var ptr: &void = malloc(32);
+    if (((ptr as &byte) as usize) == 0) { return error.TestFailed; }
+    
+    var result: &void = realloc(ptr, 0);
+    if !(((result as &byte) as usize) == 0) {
+        return error.TestFailed;
+    }
+}
+
+// ============================================================
+// 测试 9: 大量小内存分配
+// ============================================================
+fn test_many_small_allocations() !void {
+    var i: usize = 0;
+    while i < 50 {
+        var ptr: &void = malloc(8);
+        if (((ptr as &byte) as usize) == 0) {
+            return error.TestFailed;
+        }
+        // 写入数据
+        var p: &byte = (ptr as &byte);
+        var k: usize = 0;
+        while k < 8 {
+            p[k] = ((i + k) as u8);
+            k = k + 1;
+        }
+        free(ptr);
+        i = i + 1;
+    }
+}
+
+// ============================================================
+// 测试 10: 内存复用（分配 - 释放 - 再分配）
+// ============================================================
+fn test_memory_reuse() !void {
+    var ptr1: &void = malloc(100);
+    if (((ptr1 as &byte) as usize) == 0) { return error.TestFailed; }
+    
+    // 写入数据
+    var p: &byte = (ptr1 as &byte);
+    var i: usize = 0;
+    while i < 100 { p[i] = 42; i = i + 1; }
+    
+    free(ptr1);
+    
+    // 再次分配相同大小
+    var ptr2: &void = malloc(100);
+    if (((ptr2 as &byte) as usize) == 0) { return error.TestFailed; }
+    
+    // 验证可以正常写入
+    var p2: &byte = (ptr2 as &byte);
+    i = 0;
+    while i < 100 { p2[i] = 99; i = i + 1; }
+    
+    free(ptr2);
+}
+
+// ============================================================
+// 测试 11: 大内存分配
+// ============================================================
+fn test_large_allocation() !void {
+    var ptr: &void = malloc(4096);  // 一页
+    if (((ptr as &byte) as usize) == 0) { return error.TestFailed; }
+    
+    // 写入数据
+    var p: &byte = (ptr as &byte);
+    var i: usize = 0;
+    while i < 4096 {
+        p[i] = ((i % (256 as usize)) as! u8).value;
+        i = i + 1;
+    }
+    
+    // 验证
+    i = 0;
+    while i < 4096 {
+        if p[i] != ((i % (256 as usize)) as! u8).value {
+            free(ptr);
+            return error.TestFailed;
+        }
+        i = i + 1;
+    }
+    
+    free(ptr);
+}
+
+// ============================================================
+// 测试 12: calloc 大数组
+// ============================================================
+fn test_calloc_large() !void {
+    var ptr: &void = calloc(100, 10);  // 1000 字节
+    if (((ptr as &byte) as usize) == 0) { return error.TestFailed; }
+    
+    // 验证清零
+    var p: &byte = (ptr as &byte);
+    var i: usize = 0;
+    while i < 1000 {
+        if p[i] != 0 {
+            free(ptr);
+            return error.TestFailed;
+        }
+        i = i + 1;
+    }
+    
+    free(ptr);
+}
+
+// ============================================================
+// 主测试函数
+// ============================================================
+export fn main() i32 {
+    test_suite_begin("Malloc Tests");
+    
+    // 运行测试
+    test_malloc_basic() catch { test_fail("test_malloc_basic"); };
+    test_pass("test_malloc_basic");
+    
+    test_malloc_zero() catch { test_fail("test_malloc_zero"); };
+    test_pass("test_malloc_zero");
+    
+    test_multiple_allocations() catch { test_fail("test_multiple_allocations"); };
+    test_pass("test_multiple_allocations");
+    
+    test_calloc_zeroes() catch { test_fail("test_calloc_zeroes"); };
+    test_pass("test_calloc_zeroes");
+    
+    test_realloc_expand() catch { test_fail("test_realloc_expand"); };
+    test_pass("test_realloc_expand");
+    
+    test_realloc_shrink() catch { test_fail("test_realloc_shrink"); };
+    test_pass("test_realloc_shrink");
+    
+    test_realloc_null() catch { test_fail("test_realloc_null"); };
+    test_pass("test_realloc_null");
+    
+    test_realloc_zero() catch { test_fail("test_realloc_zero"); };
+    test_pass("test_realloc_zero");
+    
+    test_many_small_allocations() catch { test_fail("test_many_small_allocations"); };
+    test_pass("test_many_small_allocations");
+    
+    test_memory_reuse() catch { test_fail("test_memory_reuse"); };
+    test_pass("test_memory_reuse");
+    
+    test_large_allocation() catch { test_fail("test_large_allocation"); };
+    test_pass("test_large_allocation");
+    
+    test_calloc_large() catch { test_fail("test_calloc_large"); };
+    test_pass("test_calloc_large");
+    
+    return test_suite_end();
+}

@@ -1,0 +1,16 @@
+// 测试空数组字面量
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+test "empty array len" {
+    var arr: [i32: 100] = [];
+    const len_val: i32 = @len(arr);
+    try assert_eq_i32(len_val, 100);
+}
+
+test "empty array sizeof" {
+    var arr: [i32: 100] = [];
+    const size_val: i32 = @size_of(arr);
+    try assert_eq_i32(size_val, 400);  // 100 * 4 字节
+}

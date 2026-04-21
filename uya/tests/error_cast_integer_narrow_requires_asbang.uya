@@ -1,0 +1,10 @@
+use std.runtime.entry;
+
+export fn main() i32 {
+    var wide: i32 = 300;
+    const narrow: byte = wide as byte;
+    if narrow == 44 as byte {
+        return 0;
+    }
+    return 1;
+}

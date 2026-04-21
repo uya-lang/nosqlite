@@ -1,0 +1,15 @@
+// 移动语义：循环中的变量不能移动（规范 §12.5.6）
+// 预期：编译失败，错误信息含「循环」或「不能移动」
+
+struct S {
+  id: i32
+}
+
+fn main() i32 {
+  const a: S = S{ id: 42 };
+  const arr: [i32: 3] = [1, 2, 3];
+  for arr |_| {
+    const b: S = a;
+  }
+  return 0;
+}

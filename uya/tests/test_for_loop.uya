@@ -1,0 +1,42 @@
+// 测试 for 循环（数组遍历）
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+test "for value iter" {
+    const arr: [i32: 5] = [1, 2, 3, 4, 5];
+    var sum: i32 = 0;
+    
+    for arr |item| {
+        sum = sum + item;
+    }
+    
+    try assert_eq_i32(sum, 15);
+}
+
+test "for ref iter" {
+    var arr2: [i32: 5] = [1, 2, 3, 4, 5];
+    
+    for arr2 |&item| {
+        *item = *item * 2;
+    }
+    
+    try expect(arr2[0] == 2 && arr2[1] == 4 && arr2[2] == 6 && arr2[3] == 8 && arr2[4] == 10);
+}
+
+test "for break continue" {
+    var arr3: [i32: 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    var sum2: i32 = 0;
+    
+    for arr3 |item| {
+        if item == 5 {
+            continue;
+        }
+        if item == 8 {
+            break;
+        }
+        sum2 = sum2 + item;
+    }
+    
+    try assert_eq_i32(sum2, 23);  // 1+2+3+4+6+7 = 23
+}

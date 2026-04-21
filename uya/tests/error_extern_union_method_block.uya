@@ -1,0 +1,14 @@
+// 预期编译失败：extern union 不能有方法块
+
+extern union CValue {
+    i: i32,
+    f: f64,
+}
+
+CValue {
+    fn get_i(self: &Self) i32 { return 0; }
+}
+
+fn main() i32 {
+    return 0;
+}

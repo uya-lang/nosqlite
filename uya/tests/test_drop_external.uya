@@ -1,0 +1,33 @@
+// 测试 drop/RAII：drop 在结构体外（方法块）定义（规范 §12）
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+var drop_count: i32 = 0;
+
+struct S {
+  id: i32
+}
+
+S {
+  fn drop(self: S) void {
+    drop_count = drop_count + 1;
+  }
+}
+
+fn test_drop_external() !void {
+  drop_count = 0;
+  {
+    const s: S = S{ id: 42 };
+  }
+  try expect(drop_count == 1);
+}
+
+export fn main() i32 {
+  test_suite_begin("Drop External Tests");
+  run_test("drop external method", test_drop_external);
+  return test_suite_end();
+}

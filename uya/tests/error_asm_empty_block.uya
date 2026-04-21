@@ -1,0 +1,8 @@
+// error_asm_empty_block.uya - @asm 空块错误测试
+// 期望编译错误：@asm 块不能为空
+
+fn main() i32 {
+    @asm {
+    }
+    return 0;
+}

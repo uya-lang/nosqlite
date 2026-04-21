@@ -1,0 +1,29 @@
+// 回归：@async_fn 状态机 struct 中定长数组局部须生成合法 C（uint8_t _uya_loc_x[N]，而非 uint8_t[N] _uya_loc_x）。
+use std.async;
+use std.testing.assert_eq_i32;
+
+fn ready(v: i32) Future<!i32> {
+    const p: Poll<!i32> = Poll<!i32>.Ready(ok<i32>(v));
+    return Future<!i32>{ state: p };
+}
+
+@async_fn
+fn await_with_fixed_array_local() Future<!i32> {
+    // 仅用字面量初始化，避免依赖 await 前「逐元素赋值」在状态机中的顺序（与 memcpy 字段修复无关）。
+    var buf: [u8: 4] = [9u8, 5u8, 0u8, 0u8];
+    const step: i32 = try @await ready(1);
+    const sum: i32 = (buf[0] as i32) + (buf[1] as i32);
+    return sum + step;
+}
+
+test "async_fn_state_struct_fixed_array_field_compiles" {
+    const f: Future<!i32> = await_with_fixed_array_local();
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = f.poll(&w);
+    var result: i32 = 0 - 1;
+    match p {
+        .Ready(ok_val) => { result = ok_val catch { 0 - 3; }; },
+        .Pending(_) => { result = 0 - 2; },
+    };
+    try assert_eq_i32(result, 15);
+}

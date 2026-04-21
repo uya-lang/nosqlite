@@ -1,0 +1,82 @@
+// 测试 @mc_ast 复杂语句支持
+use std.runtime.entry;
+// 验证 @mc_ast 是否能解析块语句、if 语句、while 循环等
+
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+mc block_stmt() stmt {
+    @mc_code(@mc_ast({
+        const x: i32 = 10;
+        const y: i32 = 20;
+    }));
+}
+
+mc block_with_params(a: expr, b: expr) stmt {
+    @mc_code(@mc_ast({
+        const sum: i32 = ${a} + ${b};
+        const diff: i32 = ${a} - ${b};
+    }));
+}
+
+mc if_stmt(cond: expr) stmt {
+    @mc_code(@mc_ast(
+        if ${cond} {
+            return 1;
+        }
+    ));
+}
+
+mc declare_const_block(name_val: expr) stmt {
+    @mc_code(@mc_ast({
+        const temp_c: i32 = ${name_val};
+    }));
+}
+
+mc declare_var_block(init_val: expr) stmt {
+    @mc_code(@mc_ast({
+        var temp_v: i32 = ${init_val};
+    }));
+}
+
+mc while_count(limit: expr) expr {
+    @mc_code(@mc_ast({
+        var count: i32 = 0;
+        while count < ${limit} {
+            count = count + 1;
+        }
+        count;
+    }));
+}
+
+mc nested_if_in_block(a: expr, b: expr) stmt {
+    @mc_code(@mc_ast({
+        if ${a} > ${b} {
+            return 1;
+        }
+        if ${a} < ${b} {
+            return 2;
+        }
+    }));
+}
+
+fn test_macro_complex_stmt() i32 {
+    block_stmt();
+    block_with_params(10, 5);
+    if_stmt(0 == 1);
+    declare_const_block(42);
+    declare_var_block(100);
+    const while_result: i32 = while_count(5);
+    if while_result != 5 {
+        return 11;
+    }
+    nested_if_in_block(5, 5);
+    return 0;
+}
+
+export fn main() i32 {
+    test_suite_begin("Macro Complex Stmt Tests");
+    run_test("macro complex stmt", test_macro_complex_stmt);
+    return test_suite_end();
+}

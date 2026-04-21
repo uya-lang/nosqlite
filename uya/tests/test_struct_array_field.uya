@@ -1,0 +1,115 @@
+// 结构体数组字段测试程序
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Data {
+    values: [i32: 3],
+    count: i32,
+}
+
+struct MultiArray {
+    arr1: [i32: 2],
+    arr2: [byte: 4],
+    count: i32,
+}
+
+struct Inner {
+    items: [i32: 2],
+}
+
+struct Outer {
+    inner: Inner,
+    size: i32,
+}
+
+fn process_array_field(d: Data) i32 {
+    var total: i32 = 0;
+    var i2: i32 = 0;
+    while i2 < @len(d.values) {
+        total = total + d.values[i2];
+        i2 = i2 + 1;
+    }
+    return total;
+}
+
+fn test_basic_array_field() !void {
+    var data: Data = Data{
+        values: [10, 20, 30],
+        count: 3,
+    };
+    try assert_eq_i32(data.values[0], 10);
+    try assert_eq_i32(data.values[1], 20);
+    try assert_eq_i32(data.values[2], 30);
+    try assert_eq_i32(data.count, 3);
+}
+
+fn test_modify_array_field() !void {
+    var data: Data = Data{ values: [10, 20, 30], count: 3 };
+    data.values[1] = 200;
+    try assert_eq_i32(data.values[1], 200);
+    data.count = 5;
+    try assert_eq_i32(data.count, 5);
+}
+
+fn test_array_field_sizeof() !void {
+    var data: Data = Data{ values: [10, 20, 30], count: 3 };
+    try assert_eq_i32(@size_of(Data), 16);
+    try assert_eq_i32(@size_of(data), 16);
+    try assert_eq_i32(@size_of(data.values), 12);
+}
+
+fn test_array_field_len() !void {
+    var data: Data = Data{ values: [10, 20, 30], count: 3 };
+    try assert_eq_i32(@len(data.values), 3);
+}
+
+fn test_array_field_in_loop() !void {
+    var data: Data = Data{ values: [10, 200, 30], count: 3 };
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    while i < @len(data.values) {
+        sum = sum + data.values[i];
+        i = i + 1;
+    }
+    try assert_eq_i32(sum, 240);
+}
+
+fn test_multi_array_field() !void {
+    var multi: MultiArray = MultiArray{
+        arr1: [1, 2],
+        arr2: [10, 20, 30, 40],
+        count: 2,
+    };
+    try assert_eq_i32(multi.arr1[0], 1);
+    try assert_eq_i32(multi.arr1[1], 2);
+    try assert_eq_i32(multi.arr2[0], 10);
+    try assert_eq_i32(multi.arr2[3], 40);
+}
+
+fn test_nested_array_field() !void {
+    var outer: Outer = Outer{
+        inner: Inner{ items: [10, 20] },
+        size: 2,
+    };
+    try assert_eq_i32(outer.inner.items[0], 10);
+    try assert_eq_i32(outer.inner.items[1], 20);
+    outer.inner.items[0] = 100;
+    try assert_eq_i32(outer.inner.items[0], 100);
+}
+
+export fn main() i32 {
+    test_suite_begin("Struct Array Field Tests");
+    run_test("basic array field", test_basic_array_field);
+    run_test("modify array field", test_modify_array_field);
+    run_test("array field sizeof", test_array_field_sizeof);
+    run_test("array field len", test_array_field_len);
+    run_test("array field in loop", test_array_field_in_loop);
+    run_test("multi array field", test_multi_array_field);
+    run_test("nested array field", test_nested_array_field);
+    return test_suite_end();
+}

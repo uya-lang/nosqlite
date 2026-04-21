@@ -1,0 +1,21 @@
+// 基本宏定义测试
+use std.runtime.entry;
+
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+mc simple_macro() expr {
+    const x: i32 = 42;
+    return x;
+}
+
+fn test_macro_basic() !void {
+    // 宏定义测试
+}
+
+export fn main() i32 {
+    test_suite_begin("Macro Basic Tests");
+    run_test("macro basic", test_macro_basic);
+    return test_suite_end();
+}

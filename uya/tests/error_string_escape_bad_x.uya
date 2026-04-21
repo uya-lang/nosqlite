@@ -1,0 +1,6 @@
+// 预期编译失败：\x 后十六进制位数不足
+
+fn main() i32 {
+    const s: *byte = "\x4G";
+    return 0;
+}

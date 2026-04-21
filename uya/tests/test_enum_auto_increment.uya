@@ -1,0 +1,43 @@
+// 枚举自动递增测试程序
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+enum Level {
+    ZERO,    // 0
+    ONE,     // 1
+    TWO,     // 2
+    THREE,   // 3
+    FOUR,    // 4
+    FIVE,    // 5
+}
+
+fn test_enum_order() !void {
+    try expect(Level.ZERO < Level.ONE);
+    try expect(Level.ONE < Level.TWO);
+    try expect(Level.TWO < Level.THREE);
+    try expect(Level.THREE < Level.FOUR);
+    try expect(Level.FOUR < Level.FIVE);
+}
+
+fn test_enum_equality() !void {
+    const level0: Level = Level.ZERO;
+    const level1: Level = Level.ONE;
+    const level2: Level = Level.TWO;
+    
+    try expect(level0 == Level.ZERO);
+    try expect(level1 == Level.ONE);
+    try expect(level2 == Level.TWO);
+}
+
+export fn main() i32 {
+    test_suite_begin("Enum Auto Increment Tests");
+    
+    run_test("enum order", test_enum_order);
+    run_test("enum equality", test_enum_equality);
+    
+    return test_suite_end();
+}

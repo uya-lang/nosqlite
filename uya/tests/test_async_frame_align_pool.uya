@@ -1,0 +1,38 @@
+// test_async_frame_align_pool.uya
+// 验证 @align(N) @async_fn 的帧在 AsyncFramePool 中分配后对齐正确，
+// 且含 @frame 字段的结构体布局不会导致未对齐访问。
+
+use std.async;
+use std.testing.expect;
+use std.testing.run_test;
+
+@align(64)
+@async_fn
+fn aligned_async() Future<!i32> {
+    return 42;
+}
+
+fn test_align_of_frame_type() void {
+    const a: i32 = @align_of(@frame(aligned_async));
+    expect(a == 64);
+}
+
+fn test_aligned_async_pool_alloc() void {
+    const f: Future<!i32> = aligned_async();
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = f.poll(&w);
+    var result: i32 = 0 - 1;
+    match p {
+        .Ready(ok_val) => { result = ok_val catch { 0 - 3; }; },
+        .Pending(_) => { result = 0 - 2; },
+    }
+    expect(result == 42);
+}
+
+test "align_of_frame_type" {
+    run_test("align_of_frame_type", test_align_of_frame_type);
+}
+
+test "aligned_async_pool_alloc" {
+    run_test("aligned_async_pool_alloc", test_aligned_async_pool_alloc);
+}

@@ -1,0 +1,24 @@
+// 测试 &const T 语法解析
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn check(s: &const byte) i32 {
+    return 0;
+}
+
+fn test_const_pointer_param() !void {
+    const result: i32 = check(null as &const byte);
+    try expect(result == 0);
+}
+
+export fn main() i32 {
+    test_suite_begin("Const Parser Tests");
+    
+    run_test("const pointer param", test_const_pointer_param);
+    
+    return test_suite_end();
+}

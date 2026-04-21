@@ -1,0 +1,46 @@
+// 测试函数调用位置和泛型参数位置的宏插值
+use std.runtime.entry;
+// 验证 ${func_name}() 和 Vec<${TypeArg}> 语法
+
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.testing.assert_eq_i32;
+
+// 测试 1：使用 @mc_code @mc_ast 的 ident 类型参数（已知可工作）
+mc call_func_mc(FuncName: ident, Arg: expr) expr {
+    @mc_code(@mc_ast(${FuncName}(${Arg})));
+}
+
+fn add_one(x: i32) i32 {
+    return x + 1;
+}
+
+fn sub_one(x: i32) i32 {
+    return x - 1;
+}
+
+fn test_func_name_with_mc() !void {
+    const a: i32 = call_func_mc(add_one, 5);
+    try assert_eq_i32(a, 6);
+    
+    const b: i32 = call_func_mc(sub_one, 10);
+    try assert_eq_i32(b, 9);
+}
+
+// 测试 2：expr 类型参数传递标识符（已知可工作）
+mc pass_expr(FuncName: expr, Arg: expr) expr {
+    @mc_code(@mc_ast(${FuncName}(${Arg})));
+}
+
+fn test_expr_param() !void {
+    const a: i32 = pass_expr(add_one, 5);
+    try assert_eq_i32(a, 6);
+}
+
+export fn main() i32 {
+    test_suite_begin("Macro Interp Position Tests");
+    run_test("func_name_with_mc", test_func_name_with_mc);
+    run_test("expr_param", test_expr_param);
+    return test_suite_end();
+}

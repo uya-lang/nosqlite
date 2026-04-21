@@ -1,0 +1,20 @@
+// test_multilevel_module.uya - 测试多级模块路径（std.io）
+use std.runtime.entry;
+
+// 须拉取定义模块，否则仅 `use std.io.file_open` 可能不合并 file.uya，catch 会按非 !T 解析失败
+use std.io.file;
+use std.io.File;
+use std.io.file_open;
+use std.io.file_close;
+
+export fn main() i32 {
+    const path: *const byte = "/dev/null" as *const byte;
+    var f: File = file_open(path, 0, 0) catch {
+        return 1;
+    };
+    file_close(&f) catch {
+        return 2;
+    };
+    return 0;
+}
+

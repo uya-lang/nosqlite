@@ -1,0 +1,18 @@
+// 泛型方法测试 - 最小版本
+use std.runtime.entry;
+
+struct Container {
+    value: i32,
+}
+
+Container {
+    fn get<T>(self: &Self) T {
+        return self.value as T;
+    }
+}
+
+export fn main() i32 {
+    var c: Container = Container{ value: 42 };
+    const v: i32 = c.get<i32>();
+    return 0;
+}

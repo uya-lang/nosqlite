@@ -1,0 +1,111 @@
+// 数组赋值测试程序
+use std.runtime.entry;
+// 测试数组的按值复制赋值
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn process_array(arr: [i32: 3]) i32 {
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    while i < @len(arr) {
+        sum = sum + arr[i];
+        i = i + 1;
+    }
+    arr[0] = 999;  // 修改数组元素（不影响原数组）
+    return sum;
+}
+
+fn create_array() [i32: 3] {
+    return [100, 200, 300];
+}
+
+fn test_i32_array_copy() !void {
+    var arr1: [i32: 3] = [1, 2, 3];
+    var arr2: [i32: 3] = arr1;  // 按值复制
+    try expect(arr2[0] == 1 && arr2[1] == 2 && arr2[2] == 3);
+    
+    arr1[0] = 100;
+    try expect(arr2[0] == 1);  // arr2 不应该被影响
+    
+    arr2[1] = 200;
+    try expect(arr1[1] == 2);  // arr1 不应该被影响
+}
+
+fn test_byte_array_copy() !void {
+    var arr3: [byte: 4] = [10, 20, 30, 40];
+    var arr4: [byte: 4] = arr3;
+    try expect(arr4[0] == 10 && arr4[1] == 20 && arr4[2] == 30 && arr4[3] == 40);
+    
+    arr3[0] = 100;
+    try expect(arr4[0] == 10);
+}
+
+fn test_struct_array_copy() !void {
+    var arr5: [Point: 2] = [
+        Point{ x: 1, y: 2 },
+        Point{ x: 3, y: 4 },
+    ];
+    var arr6: [Point: 2] = arr5;
+    
+    try expect(arr6[0].x == 1 && arr6[0].y == 2 && arr6[1].x == 3 && arr6[1].y == 4);
+    
+    arr5[0].x = 100;
+    try expect(arr6[0].x == 1);
+    
+    arr6[1].y = 200;
+    try expect(arr5[1].y == 4);
+}
+
+fn test_array_literal_copy() !void {
+    var arr7: [i32: 3] = [10, 20, 30];
+    var arr8: [i32: 3] = arr7;
+    try expect(arr8[0] == 10 && arr8[1] == 20 && arr8[2] == 30);
+}
+
+fn test_array_as_param() !void {
+    var arr11: [i32: 3] = [1, 2, 3];
+    var sum: i32 = process_array(arr11);
+    try assert_eq_i32(sum, 6);
+    try expect(arr11[0] == 1);  // arr11 不应该被函数修改
+}
+
+fn test_array_as_return() !void {
+    var arr12: [i32: 3] = create_array();
+    try expect(arr12[0] == 100 && arr12[1] == 200 && arr12[2] == 300);
+}
+
+fn test_multidim_array_copy() !void {
+    var arr13: [[i32: 2]: 2] = [
+        [1, 2],
+        [3, 4],
+    ];
+    var arr14: [[i32: 2]: 2] = arr13;
+    
+    try expect(arr14[0][0] == 1 && arr14[0][1] == 2 && arr14[1][0] == 3 && arr14[1][1] == 4);
+    
+    arr13[0][0] = 999;
+    try expect(arr14[0][0] == 1);
+}
+
+export fn main() i32 {
+    test_suite_begin("Array Assignment Tests");
+    
+    run_test("i32 array copy", test_i32_array_copy);
+    run_test("byte array copy", test_byte_array_copy);
+    run_test("struct array copy", test_struct_array_copy);
+    run_test("array literal copy", test_array_literal_copy);
+    run_test("array as param", test_array_as_param);
+    run_test("array as return", test_array_as_return);
+    run_test("multidim array copy", test_multidim_array_copy);
+    
+    return test_suite_end();
+}

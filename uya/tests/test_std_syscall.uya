@@ -1,0 +1,48 @@
+// test_std_syscall.uya
+use std.runtime.entry;
+// 测试 lib/libc 标准库模块（通过 use 导入）
+
+use libc.sys_write;
+use libc.sys_open;
+use libc.sys_close;
+use libc.sys_getpid;
+use libc.STDOUT_FILENO;
+use libc.O_CREAT;
+use libc.O_WRONLY;
+use libc.O_TRUNC;
+use libc.S_IRWXU;
+
+export fn main() i32 {
+    const msg1: *byte = "Hello from syscall wrappers!\n";
+    const len1: usize = 30;
+    _ = sys_write(STDOUT_FILENO as i32, msg1, len1) catch {
+        return 1;
+    };
+
+    const path: *byte = "/tmp/test_file.txt";
+    const fd_result: !i32 = sys_open(path, O_CREAT | O_WRONLY | O_TRUNC, S_IRWXU as i32);
+    const fd: i32 = fd_result catch {
+        return 2;
+    };
+
+    const msg2: *byte = "Writing via syscall!\n";
+    const len2: usize = 21;
+    _ = sys_write(fd, msg2, len2) catch {
+        _ = sys_close(fd);
+        return 3;
+    };
+
+    _ = sys_close(fd) catch {
+        return 4;
+    };
+
+    const pid_result: !i64 = sys_getpid();
+    const pid: i64 = pid_result catch {
+        return 5;
+    };
+    if pid <= 0 {
+        return 6;
+    }
+
+    return 0;
+}

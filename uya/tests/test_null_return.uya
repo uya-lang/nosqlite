@@ -1,0 +1,79 @@
+// null 字面量作为函数返回值测试程序
+// 测试 null 字面量在 return 语句中的使用，验证可以返回给任意类型的指针
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+struct Node {
+    value: i32,
+    next: &Node,
+}
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+// 全局变量用于测试返回指针
+var global_x: i32 = 42;
+
+// 返回各种类型的 null
+fn return_null_i32() &i32 { return null; }
+fn return_null_void() &void { return null; }
+fn return_null_node() &Node { return null; }
+fn return_null_point() &Point { return null; }
+fn return_null_usize() &usize { return null; }
+fn return_null_bool() &bool { return null; }
+fn return_null_byte() &byte { return null; }
+
+fn conditional_return_null(condition: bool) &i32 {
+    if condition { return null; }
+    global_x = 42;
+    return &global_x;
+}
+
+fn multiple_return_null(flag: i32) &Node {
+    if flag == 0 { return null; }
+    if flag == 1 { return null; }
+    return null;
+}
+
+test "test_null_i32" {
+    var ptr: &i32 = return_null_i32();
+    try assert_eq_i32(ptr == null, true);
+}
+
+test "test_null_void" {
+    var ptr: &void = return_null_void();
+    try assert_eq_i32(ptr == null, true);
+}
+
+test "test_null_struct" {
+    var node_ptr: &Node = return_null_node();
+    try assert_eq_i32(node_ptr == null, true);
+    
+    var point_ptr: &Point = return_null_point();
+    try assert_eq_i32(point_ptr == null, true);
+}
+
+test "test_null_basic_types" {
+    try assert_eq_i32(return_null_usize() == null, true);
+    try assert_eq_i32(return_null_bool() == null, true);
+    try assert_eq_i32(return_null_byte() == null, true);
+}
+
+test "test_conditional_return" {
+    var ptr1: &i32 = conditional_return_null(true);
+    try assert_eq_i32(ptr1 == null, true);
+    
+    var ptr2: &i32 = conditional_return_null(false);
+    try assert_eq_i32(ptr2 == null, false);
+    try assert_eq_i32(*ptr2, 42);
+}
+
+test "test_multiple_return_null" {
+    try assert_eq_i32(multiple_return_null(0) == null, true);
+    try assert_eq_i32(multiple_return_null(1) == null, true);
+    try assert_eq_i32(multiple_return_null(2) == null, true);
+}

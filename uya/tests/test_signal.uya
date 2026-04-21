@@ -1,0 +1,96 @@
+// test_signal.uya - signal 模块测试
+use std.runtime.entry;
+
+use libc.SIGINT;
+use libc.SIGTERM;
+use libc.SIGKILL;
+use libc.SIGSTOP;
+use libc.NSIG;
+use libc.SIG_DFL;
+use libc.SIG_IGN;
+use libc.SIG_ERR;
+use libc.sigset_t;
+use libc.sigemptyset;
+use libc.sigfillset;
+use libc.sigaddset;
+use libc.sigdelset;
+use libc.sigismember;
+
+// 导入测试框架
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// ============================================================
+// 信号常量测试
+// ============================================================
+
+fn test_signal_constants() !void {
+    // 验证标准信号编号
+    try assert_eq_i32(SIGINT, 2);
+    try assert_eq_i32(SIGTERM, 15);
+    try assert_eq_i32(SIGKILL, 9);
+    try assert_eq_i32(SIGSTOP, 19);
+    
+    // NSIG 应该大于标准信号编号
+    try expect(NSIG > SIGTERM);
+}
+
+// ============================================================
+// 信号集操作测试
+// ============================================================
+
+fn test_sigset_empty() !void {
+    var set: sigset_t = sigset_t{ val: 0 };
+    
+    var result: i32 = sigemptyset(&set);
+    try assert_eq_i32(result, 0);
+    try assert_eq_i32(set.val as i32, 0);
+}
+
+fn test_sigset_fill() !void {
+    var set: sigset_t = sigset_t{ val: 0 };
+    
+    var result: i32 = sigfillset(&set);
+    try assert_eq_i32(result, 0);
+    // 填充后应该有值
+    try expect(set.val != 0);
+}
+
+fn test_sigset_add_del() !void {
+    var set: sigset_t = sigset_t{ val: 0 };
+    sigemptyset(&set);
+    
+    // 添加信号
+    var result: i32 = sigaddset(&set, SIGINT);
+    try assert_eq_i32(result, 0);
+    
+    // 检查信号是否存在
+    result = sigismember(&set, SIGINT);
+    try assert_eq_i32(result, 1);
+    
+    // 删除信号
+    result = sigdelset(&set, SIGINT);
+    try assert_eq_i32(result, 0);
+    
+    // 再次检查
+    result = sigismember(&set, SIGINT);
+    try assert_eq_i32(result, 0);
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    test_suite_begin("libc.signal");
+
+    run_test("signal_constants", test_signal_constants);
+    run_test("sigset_empty", test_sigset_empty);
+    run_test("sigset_fill", test_sigset_fill);
+    run_test("sigset_add_del", test_sigset_add_del);
+
+    return test_suite_end();
+}

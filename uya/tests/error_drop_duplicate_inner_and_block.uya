@@ -1,0 +1,13 @@
+// 预期编译失败：drop 只能在结构体内部或方法块中定义（禁止顶层 fn drop(self: T) void）
+
+struct S {
+  fn drop(self: S) void {
+  }
+}
+
+fn drop(self: S) void {
+}
+
+fn main() i32 {
+  return 0;
+}

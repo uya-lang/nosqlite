@@ -1,0 +1,110 @@
+// test_syscall_dir.uya - syscall 层目录操作测试
+
+use libc.sys_stat;
+use libc.sys_lstat;
+use libc.sys_fstat;
+use libc.sys_readlink;
+use libc.sys_rename;
+use libc.sys_dup;
+use libc.sys_dup2;
+use libc.sys_chdir;
+use libc.sys_getcwd;
+use libc.sys_open;
+use libc.sys_close;
+use libc.sys_write;
+use libc.sys_unlink;
+use libc.Stat;
+use libc.O_RDONLY;
+use libc.O_WRONLY;
+use libc.O_CREAT;
+use libc.O_TRUNC;
+use libc.strlen;
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+test "sys_stat" {
+    const test_path: *byte = "/dev/null";
+    var stat_buf: Stat = Stat{};
+    
+    const result: i32 = try sys_stat(test_path, &stat_buf);
+    try expect(result == 0);
+    try expect(stat_buf.st_mode > 0);
+}
+
+test "sys_fstat" {
+    const fd: i32 = try sys_open("/dev/null", O_RDONLY as i32, 0);
+    try expect(fd >= 0);
+    
+    var stat_buf: Stat = Stat{};
+    const result: i32 = try sys_fstat(fd, &stat_buf);
+    try expect(result == 0);
+    try expect(stat_buf.st_mode > 0);
+    
+    try sys_close(fd);
+}
+
+test "sys_dup" {
+    const fd: i32 = try sys_open("/dev/null", O_RDONLY as i32, 0);
+    try expect(fd >= 0);
+    
+    const new_fd: i32 = try sys_dup(fd);
+    try expect(new_fd >= 0);
+    try expect(new_fd != fd);
+    
+    try sys_close(fd);
+    try sys_close(new_fd);
+}
+
+test "sys_dup2" {
+    const fd: i32 = try sys_open("/dev/null", O_RDONLY as i32, 0);
+    try expect(fd >= 0);
+    
+    const new_fd: i32 = try sys_dup2(fd, 10);
+    try expect(new_fd == 10);
+    
+    try sys_close(fd);
+    try sys_close(new_fd);
+}
+
+test "sys_rename" {
+    const old_path: *byte = "/tmp/uya_rename_test_old";
+    const new_path: *byte = "/tmp/uya_rename_test_new";
+    
+    const fd: i32 = try sys_open(
+        old_path,
+        (O_WRONLY | O_CREAT | O_TRUNC) as i32,
+        0o644
+    );
+    try expect(fd >= 0);
+    try sys_close(fd);
+    
+    const rename_result: i32 = try sys_rename(old_path, new_path);
+    try expect(rename_result == 0);
+    
+    try sys_unlink(new_path);
+}
+
+test "sys_chdir_getcwd" {
+    const test_dir: *byte = "/tmp";
+    
+    const chdir_result: i32 = try sys_chdir(test_dir);
+    try expect(chdir_result == 0);
+    
+    var buf: [byte: 256] = [];
+    const getcwd_result: isize = try sys_getcwd(&buf[0], 256);
+    try expect(getcwd_result > 0);
+    try expect(getcwd_result < 256 as isize);
+}
+
+test "sys_lstat" {
+    const test_path: *byte = "/tmp";
+    var stat_buf: Stat = Stat{};
+    
+    const result: i32 = try sys_lstat(test_path, &stat_buf);
+    try expect(result == 0);
+    try expect(stat_buf.st_mode > 0);
+}

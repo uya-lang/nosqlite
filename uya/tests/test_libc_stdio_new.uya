@@ -1,0 +1,375 @@
+// 测试新增的 libc stdio 函数
+// TDD 测试文件 - 避免字符串常量依赖
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+
+// ============================================================
+// sscanf 测试 - 使用数字验证
+// ============================================================
+
+test "sscanf_int" {
+    var x: i32 = 0;
+    const result: i32 = sscanf("12345", "%d", &x);
+    try assert_eq_i32(result, 1);
+    try assert_eq_i32(x, 12345);
+}
+
+test "sscanf_int_negative" {
+    var x: i32 = 0;
+    const result: i32 = sscanf("-42", "%d", &x);
+    try assert_eq_i32(result, 1);
+    try assert_eq_i32(x, 0 - 42);
+}
+
+test "sscanf_multiple" {
+    var a: i32 = 0;
+    var b: i32 = 0;
+    const result: i32 = sscanf("10 20", "%d %d", &a, &b);
+    try assert_eq_i32(result, 2);
+    try assert_eq_i32(a, 10);
+    try assert_eq_i32(b, 20);
+}
+
+// ============================================================
+// sprintf 新格式测试（含 %i/%o）
+// ============================================================
+
+test "sprintf_d_single" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%d", 42);
+    try assert_eq_i32(buf[0] as i32, 52);  // '4'
+    try assert_eq_i32(buf[1] as i32, 50);  // '2'
+    try assert_eq_i32(buf[2] as i32, 0);   // '\0'
+}
+
+test "sprintf_i_equivalent_to_d" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%d %i", 42, 42);
+    // 期望输出 "42 42"
+    try assert_eq_i32(buf[0] as i32, 52);  // '4'
+    try assert_eq_i32(buf[1] as i32, 50);  // '2'
+    try assert_eq_i32(buf[2] as i32, 32);  // ' '
+    try assert_eq_i32(buf[3] as i32, 52);  // '4'
+    try assert_eq_i32(buf[4] as i32, 50);  // '2'
+    try assert_eq_i32(buf[5] as i32, 0);   // '\0'
+}
+
+test "sprintf_octal" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%o %o", 8, 0);
+    // 期望输出 "10 0"
+    try assert_eq_i32(buf[0] as i32, 49);  // '1'
+    try assert_eq_i32(buf[1] as i32, 48);  // '0'
+    try assert_eq_i32(buf[2] as i32, 32);  // ' '
+    try assert_eq_i32(buf[3] as i32, 48);  // '0'
+    try assert_eq_i32(buf[4] as i32, 0);   // '\0'
+}
+
+test "sprintf_lld" {
+    var buf: [byte: 32] = [];
+    const val: i64 = 12345;
+    sprintf(&buf[0], "%lld", val);
+    try assert_eq_i32(buf[0] as i32, 49);  // '1'
+    try assert_eq_i32(buf[1] as i32, 50);  // '2'
+    try assert_eq_i32(buf[2] as i32, 51);  // '3'
+    try assert_eq_i32(buf[3] as i32, 52);  // '4'
+    try assert_eq_i32(buf[4] as i32, 53);  // '5'
+    try assert_eq_i32(buf[5] as i32, 0);   // '\0'
+}
+
+test "sprintf_n_writes_count" {
+    var buf: [byte: 32] = [];
+    var n: i32 = 0;
+    sprintf(&buf[0], "ab%n", &n);
+    try assert_eq_i32(n, 2);
+    try assert_eq_i32(buf[0] as i32, 97);  // 'a'
+    try assert_eq_i32(buf[1] as i32, 98);  // 'b'
+    try assert_eq_i32(buf[2] as i32, 0);  // '\0'
+}
+
+test "sprintf_hex_lower" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%x", 255);
+    // 验证输出是 "ff"
+    try assert_eq_i32(buf[0] as i32, 102);  // 'f'
+    try assert_eq_i32(buf[1] as i32, 102);  // 'f'
+    try assert_eq_i32(buf[2] as i32, 0);    // null terminator
+}
+
+test "sprintf_hex_upper" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%X", 255);
+    // 验证输出是 "FF"
+    try assert_eq_i32(buf[0] as i32, 70);  // 'F'
+    try assert_eq_i32(buf[1] as i32, 70);  // 'F'
+    try assert_eq_i32(buf[2] as i32, 0);   // null terminator
+}
+
+test "sprintf_hex_zero" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%x", 0);
+    try assert_eq_i32(buf[0] as i32, 48);  // '0'
+    try assert_eq_i32(buf[1] as i32, 0);   // null terminator
+}
+
+test "sprintf_char" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%c", 65);
+    try assert_eq_i32(buf[0] as i32, 65);  // 'A'
+    try assert_eq_i32(buf[1] as i32, 0);   // null terminator
+}
+
+test "sprintf_pointer" {
+    var buf: [byte: 32] = [];
+    const ptr: usize = 255;
+    sprintf(&buf[0], "%p", ptr);
+    // 指针格式: 0xff
+    try assert_eq_i32(buf[0] as i32, 48);  // '0'
+    try assert_eq_i32(buf[1] as i32, 120); // 'x'
+    try assert_eq_i32(buf[2] as i32, 102); // 'f'
+    try assert_eq_i32(buf[3] as i32, 102); // 'f'
+}
+
+// ============================================================
+// C99 格式说明符：flags、width、precision
+// ============================================================
+
+test "sprintf_width_right_align" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%5d", 42);
+    // 期望 "   42"（右对齐，宽度5）
+    try assert_eq_i32(buf[0] as i32, 32);  // ' '
+    try assert_eq_i32(buf[1] as i32, 32);
+    try assert_eq_i32(buf[2] as i32, 32);
+    try assert_eq_i32(buf[3] as i32, 52);  // '4'
+    try assert_eq_i32(buf[4] as i32, 50);  // '2'
+    try assert_eq_i32(buf[5] as i32, 0);
+}
+
+test "sprintf_flag_minus_left_align" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%-5d", 42);
+    // 期望 "42   "（左对齐）
+    try assert_eq_i32(buf[0] as i32, 52);  // '4'
+    try assert_eq_i32(buf[1] as i32, 50);  // '2'
+    try assert_eq_i32(buf[2] as i32, 32);
+    try assert_eq_i32(buf[3] as i32, 32);
+    try assert_eq_i32(buf[4] as i32, 32);
+    try assert_eq_i32(buf[5] as i32, 0);
+}
+
+test "sprintf_flag_zero_pad" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%05d", 42);
+    // 期望 "00042"
+    try assert_eq_i32(buf[0] as i32, 48);  // '0'
+    try assert_eq_i32(buf[1] as i32, 48);
+    try assert_eq_i32(buf[2] as i32, 48);
+    try assert_eq_i32(buf[3] as i32, 52);  // '4'
+    try assert_eq_i32(buf[4] as i32, 50);  // '2'
+    try assert_eq_i32(buf[5] as i32, 0);
+}
+
+test "sprintf_flag_plus" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%+d %+d", 42, 0 - 10);
+    // 期望 "+42 -10"
+    try assert_eq_i32(buf[0] as i32, 43);  // '+'
+    try assert_eq_i32(buf[1] as i32, 52);  // '4'
+    try assert_eq_i32(buf[2] as i32, 50);  // '2'
+    try assert_eq_i32(buf[3] as i32, 32);  // ' '
+    try assert_eq_i32(buf[4] as i32, 45);  // '-'
+    try assert_eq_i32(buf[5] as i32, 49);  // '1'
+    try assert_eq_i32(buf[6] as i32, 48);  // '0'
+    try assert_eq_i32(buf[7] as i32, 0);
+}
+
+test "sprintf_flag_space" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "% d", 42);
+    // 期望 " 42"（正数前加空格）
+    try assert_eq_i32(buf[0] as i32, 32);  // ' '
+    try assert_eq_i32(buf[1] as i32, 52);  // '4'
+    try assert_eq_i32(buf[2] as i32, 50);  // '2'
+    try assert_eq_i32(buf[3] as i32, 0);
+}
+
+test "sprintf_flag_hash_hex" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%#x %#X", 255, 255);
+    // 期望 "0xff 0XFF"
+    try assert_eq_i32(buf[0] as i32, 48);  // '0'
+    try assert_eq_i32(buf[1] as i32, 120); // 'x'
+    try assert_eq_i32(buf[2] as i32, 102); // 'f'
+    try assert_eq_i32(buf[3] as i32, 102); // 'f'
+    try assert_eq_i32(buf[4] as i32, 32);
+    try assert_eq_i32(buf[5] as i32, 48);  // '0'
+    try assert_eq_i32(buf[6] as i32, 88);  // 'X'
+    try assert_eq_i32(buf[7] as i32, 70);  // 'F'
+    try assert_eq_i32(buf[8] as i32, 70);  // 'F'
+    try assert_eq_i32(buf[9] as i32, 0);
+}
+
+test "sprintf_flag_hash_octal" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%#o", 8);
+    // 期望 "010"（八进制加前导0）
+    try assert_eq_i32(buf[0] as i32, 48);  // '0'
+    try assert_eq_i32(buf[1] as i32, 49);  // '1'
+    try assert_eq_i32(buf[2] as i32, 48);  // '0'
+    try assert_eq_i32(buf[3] as i32, 0);
+}
+
+test "sprintf_precision_string" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%.3s", "abcdef");
+    // 期望 "abc"
+    try assert_eq_i32(buf[0] as i32, 97);  // 'a'
+    try assert_eq_i32(buf[1] as i32, 98);  // 'b'
+    try assert_eq_i32(buf[2] as i32, 99);  // 'c'
+    try assert_eq_i32(buf[3] as i32, 0);
+}
+
+test "sprintf_precision_int" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%.5d", 42);
+    // 期望 "00042"（最少5位数字）
+    try assert_eq_i32(buf[0] as i32, 48);
+    try assert_eq_i32(buf[1] as i32, 48);
+    try assert_eq_i32(buf[2] as i32, 48);
+    try assert_eq_i32(buf[3] as i32, 52);
+    try assert_eq_i32(buf[4] as i32, 50);
+    try assert_eq_i32(buf[5] as i32, 0);
+}
+
+test "sprintf_width_precision_combined" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%6.3s", "ab");
+    // 宽度6，精度3（最多3字符），"ab" 只有2字符，右对齐补空格 -> "    ab"
+    try assert_eq_i32(buf[0] as i32, 32);
+    try assert_eq_i32(buf[1] as i32, 32);
+    try assert_eq_i32(buf[2] as i32, 32);
+    try assert_eq_i32(buf[3] as i32, 32);
+    try assert_eq_i32(buf[4] as i32, 97);  // 'a'
+    try assert_eq_i32(buf[5] as i32, 98);  // 'b'
+    try assert_eq_i32(buf[6] as i32, 0);
+}
+
+// ============================================================
+// C99 length: %zu %zd %jd %ju %hd %hu
+// ============================================================
+
+test "sprintf_zu_size_t" {
+    var buf: [byte: 32] = [];
+    const val: usize = 999;
+    sprintf(&buf[0], "%zu", val);
+    try assert_eq_i32(buf[0] as i32, 57);  // '9'
+    try assert_eq_i32(buf[1] as i32, 57);
+    try assert_eq_i32(buf[2] as i32, 57);
+    try assert_eq_i32(buf[3] as i32, 0);
+}
+
+test "sprintf_zd_positive" {
+    var buf: [byte: 32] = [];
+    const val: i64 = 123;
+    sprintf(&buf[0], "%zd", val);
+    try assert_eq_i32(buf[0] as i32, 49);  // '1'
+    try assert_eq_i32(buf[1] as i32, 50);  // '2'
+    try assert_eq_i32(buf[2] as i32, 51);  // '3'
+    try assert_eq_i32(buf[3] as i32, 0);
+}
+
+test "sprintf_zd_negative" {
+    var buf: [byte: 32] = [];
+    const val: i64 = 0 - 1;
+    sprintf(&buf[0], "%zd", val);
+    try assert_eq_i32(buf[0] as i32, 45);  // '-'
+    try assert_eq_i32(buf[1] as i32, 49);  // '1'
+    try assert_eq_i32(buf[2] as i32, 0);
+}
+
+test "sprintf_jd_ju" {
+    var buf: [byte: 64] = [];
+    const jd: i64 = 0 - 42;
+    const ju: u64 = 100;
+    sprintf(&buf[0], "%jd %ju", jd, ju);
+    try assert_eq_i32(buf[0] as i32, 45);  // '-'
+    try assert_eq_i32(buf[1] as i32, 52);  // '4'
+    try assert_eq_i32(buf[2] as i32, 50);  // '2'
+    try assert_eq_i32(buf[3] as i32, 32);
+    try assert_eq_i32(buf[4] as i32, 49);  // '1'
+    try assert_eq_i32(buf[5] as i32, 48);  // '0'
+    try assert_eq_i32(buf[6] as i32, 48);  // '0'
+    try assert_eq_i32(buf[7] as i32, 0);
+}
+
+test "sprintf_hd_hu" {
+    var buf: [byte: 32] = [];
+    const d: i32 = 0 - 1;
+    const u: u32 = 255;
+    sprintf(&buf[0], "%hd %hu", d, u);
+    // %hd -1 -> "-1", %hu 255 -> "255"
+    try assert_eq_i32(buf[0] as i32, 45);  // '-'
+    try assert_eq_i32(buf[1] as i32, 49);  // '1'
+    try assert_eq_i32(buf[2] as i32, 32);
+    try assert_eq_i32(buf[3] as i32, 50);  // '2'
+    try assert_eq_i32(buf[4] as i32, 53);  // '5'
+    try assert_eq_i32(buf[5] as i32, 53);  // '5'
+    try assert_eq_i32(buf[6] as i32, 0);
+}
+
+// ============================================================
+// C99 %a %A 十六进制浮点、浮点/%c width
+// ============================================================
+
+test "sprintf_a_hex_float" {
+    var buf: [byte: 64] = [];
+    const val: f64 = 1.0;
+    sprintf(&buf[0], "%a", val);
+    try assert_eq_i32(buf[0] as i32, 48);  // '0'
+    try assert_eq_i32(buf[1] as i32, 120); // 'x'
+    try assert_eq_i32(buf[2] as i32, 49);  // '1'
+    try assert_eq_i32(buf[3] as i32, 112); // 'p'
+    try assert_eq_i32(buf[4] as i32, 43);  // '+'
+    try assert_eq_i32(buf[5] as i32, 48);  // '0'
+    try assert_eq_i32(buf[6] as i32, 0);
+}
+
+test "sprintf_A_hex_float" {
+    var buf: [byte: 64] = [];
+    const val: f64 = 1.0;
+    sprintf(&buf[0], "%A", val);
+    try assert_eq_i32(buf[0] as i32, 48);  // '0'
+    try assert_eq_i32(buf[1] as i32, 88);  // 'X'
+    try assert_eq_i32(buf[2] as i32, 49);  // '1'
+    try assert_eq_i32(buf[3] as i32, 80);  // 'P'
+    try assert_eq_i32(buf[4] as i32, 43);  // '+'
+    try assert_eq_i32(buf[5] as i32, 48);  // '0'
+    try assert_eq_i32(buf[6] as i32, 0);
+}
+
+test "sprintf_float_width" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%8.2f", 3.14);
+    try assert_eq_i32(buf[0] as i32, 32);  // 右对齐，前导空格
+    try assert_eq_i32(buf[1] as i32, 32);
+    try assert_eq_i32(buf[2] as i32, 32);
+    try assert_eq_i32(buf[3] as i32, 32);
+    try assert_eq_i32(buf[4] as i32, 51);  // '3'
+    try assert_eq_i32(buf[5] as i32, 46);  // '.'
+    try assert_eq_i32(buf[6] as i32, 49);  // '1'
+    try assert_eq_i32(buf[7] as i32, 52);  // '4'
+    try assert_eq_i32(buf[8] as i32, 0);
+}
+
+test "sprintf_c_width" {
+    var buf: [byte: 32] = [];
+    sprintf(&buf[0], "%5c", 65);
+    try assert_eq_i32(buf[0] as i32, 32);
+    try assert_eq_i32(buf[1] as i32, 32);
+    try assert_eq_i32(buf[2] as i32, 32);
+    try assert_eq_i32(buf[3] as i32, 32);
+    try assert_eq_i32(buf[4] as i32, 65);  // 'A'
+    try assert_eq_i32(buf[5] as i32, 0);
+}

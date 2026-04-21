@@ -1,0 +1,67 @@
+// test_async_frame_type.uya
+// @frame(foo) 类型构造器基本使用验证
+
+use std.async;
+use std.testing.expect;
+
+@async_fn
+fn simple_async() Future<!i32> {
+    return 42;
+}
+
+// 正向测试：@frame 可以出现在普通函数的参数/返回类型中（按引用）
+fn uses_frame_ref(f: &@frame(simple_async)) i32 {
+    _ = f;
+    return 1;
+}
+
+// 正向测试：在 async 函数内部声明 @frame 类型变量（未初始化）
+// 同时通过 @await 调用 simple_async 以确保它被 codegen 标记为 reachable
+@async_fn
+fn async_frame_decl() Future<!i32> {
+    var frame: @frame(simple_async);
+    _ = &frame;
+    const _r: i32 = try @await simple_async();
+    _ = _r;
+    return 1;
+}
+
+// 正向测试：通过 & 引用传递 @frame 类型是允许的
+@async_fn
+fn async_frame_pass_by_ref() Future<!i32> {
+    var frame: @frame(simple_async);
+    const r: i32 = uses_frame_ref(&frame);
+    const _r: i32 = try @await simple_async();
+    _ = _r;
+    return r;
+}
+
+test "async_frame_type_declaration" {
+    const f: Future<!i32> = async_frame_decl();
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = f.poll(&w);
+    var result: i32 = 0 - 1;
+    match p {
+        .Ready(ok_val) => { result = ok_val catch { 0 - 3; }; },
+        .Pending(_) => { result = 0 - 2; },
+    }
+    expect(result == 1);
+}
+
+test "async_frame_type_pass_by_reference" {
+    const f: Future<!i32> = async_frame_pass_by_ref();
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = f.poll(&w);
+    var result: i32 = 0 - 1;
+    match p {
+        .Ready(ok_val) => { result = ok_val catch { 0 - 3; }; },
+        .Pending(_) => { result = 0 - 2; },
+    }
+    expect(result == 1);
+}
+
+test "async_frame_in_sync_fn_signature" {
+    var frame: @frame(simple_async);
+    const r: i32 = uses_frame_ref(&frame);
+    expect(r == 1);
+}

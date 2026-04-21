@@ -1,0 +1,100 @@
+// test_syscall_file.uya - syscall 层文件操作测试（简化版）
+// 使用 libc.syscall 模块测试基本文件操作
+
+use libc.sys_write;
+use libc.sys_read;
+use libc.sys_open;
+use libc.sys_close;
+use libc.sys_stat;
+use libc.sys_access;
+use libc.sys_mkdir;
+use libc.sys_rmdir;
+use libc.sys_unlink;
+use libc.Stat;
+use libc.O_RDONLY;
+use libc.O_WRONLY;
+use libc.O_CREAT;
+use libc.O_TRUNC;
+use libc.S_IRWXU;
+use libc.strlen;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_i64;
+use std.testing.expect;
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+test "sys_write_stdout" {
+    const msg: *byte = "Hello, syscall!\n";
+    const len: usize = strlen(msg);
+    const result: isize = try sys_write(1, msg, len);
+    try expect(result == len as isize);
+}
+
+test "sys_open_close" {
+    // 打开 /dev/null（应该总是成功）
+    const fd: i32 = try sys_open("/dev/null", O_RDONLY as i32, 0);
+    try expect(fd >= 0);
+    
+    // 关闭文件描述符
+    const close_result: i32 = try sys_close(fd);
+    try assert_eq_i32(close_result, 0);
+}
+
+test "sys_open_write_read_close" {
+    const test_path: *byte = "/tmp/uya_syscall_test";
+    const test_data: *byte = "testdata123";
+    const test_len: usize = 11;
+    
+    // 创建并写入文件
+    const fd_write: i32 = try sys_open(
+        test_path,
+        (O_WRONLY | O_CREAT | O_TRUNC) as i32,
+        0o644
+    );
+    try expect(fd_write >= 0);
+    
+    const write_result: isize = try sys_write(fd_write, test_data, test_len);
+    try expect(write_result == test_len as isize);
+    
+    try sys_close(fd_write);
+    
+    // 读取文件验证内容
+    var buf: [byte: 32] = [];
+    const fd_read: i32 = try sys_open(test_path, O_RDONLY as i32, 0);
+    try expect(fd_read >= 0);
+    
+    const read_result: isize = try sys_read(fd_read, &buf[0], 32);
+    try expect(read_result == test_len as isize);
+    
+    // 验证内容
+    var i: usize = 0;
+    while i < test_len {
+        try expect(buf[i] == test_data[i]);
+        i = i + 1;
+    }
+    
+    try sys_close(fd_read);
+    
+    // 清理测试文件
+    try sys_unlink(test_path);
+}
+
+test "sys_access" {
+    // /dev/null 应该总是存在
+    const exists: i32 = try sys_access("/dev/null", 0);  // F_OK = 0
+    try assert_eq_i32(exists, 0);
+}
+
+test "sys_mkdir_rmdir" {
+    const test_dir: *byte = "/tmp/uya_mkdir_test_12345";
+    
+    // 创建目录
+    const mkdir_result: i32 = try sys_mkdir(test_dir, 0o755);
+    try assert_eq_i32(mkdir_result, 0);
+    
+    // 删除目录
+    const rmdir_result: i32 = try sys_rmdir(test_dir);
+    try assert_eq_i32(rmdir_result, 0);
+}

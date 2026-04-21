@@ -1,0 +1,45 @@
+// test_error_id_builtin.uya - 验证 @error_id 可读取错误值数值 ID
+
+use libc.ENOENT;
+use std.testing.assert_eq_i32;
+
+error NamedFailure;
+error ExpectedOpenFailure;
+error ErrorIdMismatch;
+error UnexpectedSyscallErrno;
+error ZeroErrorId;
+
+const SYS_open: i64 = 2;
+const O_RDONLY: i64 = 0;
+
+fn fail_named() !i32 {
+    return error.NamedFailure;
+}
+
+test "error_id_named_error_matches_catch_value" {
+    const direct_id: u32 = @error_id(error.NamedFailure);
+    if direct_id == 0 {
+        return error.ZeroErrorId;
+    }
+
+    _ = fail_named() catch |err| {
+        if @error_id(err) != direct_id {
+            return error.ErrorIdMismatch;
+        }
+        return;
+    };
+
+    return error.NamedFailure;
+}
+
+test "error_id_syscall_errno_matches_enoent" {
+    const path: *byte = "/nonexistent/uya/error-id-path";
+    const result: !i64 = @syscall(SYS_open, path as i64, O_RDONLY, 0);
+
+    _ = result catch |err| {
+        try assert_eq_i32(@error_id(err) as i32, ENOENT);
+        return;
+    };
+
+    return error.ExpectedOpenFailure;
+}

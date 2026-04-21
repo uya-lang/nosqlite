@@ -1,0 +1,51 @@
+// 测试 @mc_type 自动生成 TypeInfo 结构体
+// 不需要手动定义 TypeInfo，编译器会自动生成
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+// 宏：获取类型信息
+mc get_type_info(T: type) expr {
+    @mc_type(T);
+}
+
+// 宏：获取类型大小
+mc get_size(T: type) expr {
+    const info: TypeInfo = @mc_type(T);
+    info.size;
+}
+
+// 宏：检查是否为整数类型
+mc is_int(T: type) expr {
+    const info: TypeInfo = @mc_type(T);
+    info.is_integer;
+}
+
+test "test_i32_type" {
+    const i32_info: TypeInfo = get_type_info(i32);
+    try assert_eq_i32(i32_info.size, 4);
+    try assert_eq_i32(i32_info.is_integer, true);
+}
+
+test "test_sizes" {
+    try assert_eq_i32(get_size(i64), 8);
+    try assert_eq_i32(get_size(i8), 1);
+}
+
+test "test_is_int" {
+    try assert_eq_i32(is_int(i32), true);
+}
+
+test "test_f64_type" {
+    const f64_info: TypeInfo = get_type_info(f64);
+    try assert_eq_i32(f64_info.size, 8);
+    try assert_eq_i32(f64_info.is_float, true);
+    try assert_eq_i32(f64_info.is_integer, false);
+}
+
+test "test_bool_type" {
+    const bool_info: TypeInfo = get_type_info(bool);
+    try assert_eq_i32(bool_info.size, 1);
+    try assert_eq_i32(bool_info.is_bool, true);
+}

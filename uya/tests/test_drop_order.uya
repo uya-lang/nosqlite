@@ -1,0 +1,39 @@
+// 测试 drop 顺序：离开作用域时按变量声明逆序调用 drop
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+var drop_seq: i32 = 0;
+
+struct A {
+  fn drop(self: A) void {
+    drop_seq = drop_seq * 10 + 1;
+  }
+}
+
+struct B {
+  fn drop(self: B) void {
+    drop_seq = drop_seq * 10 + 2;
+  }
+}
+
+fn test_drop_order() !void {
+  drop_seq = 0;
+  {
+    const a: A = A{};
+    const b: B = B{};
+  }
+  // 声明顺序 a, b -> 退出时先 drop b，再 drop a -> drop_seq 应为 21
+  try assert_eq_i32(drop_seq, 21);
+}
+
+export fn main() i32 {
+  test_suite_begin("Drop Order Tests");
+  
+  run_test("drop order", test_drop_order);
+  
+  return test_suite_end();
+}

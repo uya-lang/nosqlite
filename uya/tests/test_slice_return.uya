@@ -1,0 +1,34 @@
+// 测试函数返回切片类型 &[byte] 与 !&[byte]
+use std.runtime.entry;
+
+fn get_slice() &[byte] {
+    var buf: [byte: 4] = [];
+    buf[0] = 97;
+    buf[1] = 98;
+    buf[2] = 99;
+    buf[3] = 0;
+    return &buf[0: 4];
+}
+
+fn get_slice_or_err(ok: bool) !&[byte] {
+    var buf: [byte: 2] = [];
+    buf[0] = 49;
+    buf[1] = 50;
+    if ok {
+        return &buf[0: 2];
+    } else {
+        return error.NotFound;
+    }
+}
+
+export fn main() i32 {
+    const s: &[byte] = get_slice();
+    if @len(s) != 4 { return 1; }
+    if s.ptr[0] != 97 || s.ptr[1] != 98 { return 2; }
+
+    const s2: &[byte] = get_slice_or_err(true) catch { return 3; };
+    if @len(s2) != 2 { return 4; }
+
+    get_slice_or_err(false) catch |_| { return 0; };
+    return 5;
+}

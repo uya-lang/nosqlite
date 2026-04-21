@@ -1,0 +1,32 @@
+// 预期编译失败：未实现组合接口的方法
+
+interface IReader {
+    fn read(self: &Self) i32;
+}
+
+interface IWriter {
+    fn write(self: &Self, value: i32) void;
+}
+
+// 组合接口
+interface IReadWriter {
+    IReader;
+    IWriter;
+}
+
+// 结构体声明实现 IReadWriter，但只实现了 read，缺少 write
+struct Incomplete : IReadWriter {
+    data: i32,
+}
+
+Incomplete {
+    fn read(self: &Self) i32 {
+        return self.data;
+    }
+    // 缺少 write 方法的实现
+}
+
+fn main() i32 {
+    return 0;
+}
+

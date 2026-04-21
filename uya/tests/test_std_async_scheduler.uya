@@ -1,0 +1,601 @@
+// test_std_async_scheduler.uya - 测试 std.async_scheduler.Scheduler
+
+use std.async;
+use std.async_event;
+use std.async_scheduler;
+use std.testing.assert_eq_i32;
+use libc.syscall;
+
+fn ready(v: i32) Future<!i32> {
+    const p: Poll<!i32> = Poll<!i32>.Ready(ok<i32>(v));
+    return Future<!i32>{ state: p };
+}
+
+fn ready_u32(v: u32) Future<!u32> {
+    const p: Poll<!u32> = Poll<!u32>.Ready(ok<u32>(v));
+    return Future<!u32>{ state: p };
+}
+
+struct SchedulerFutureHolder {
+    future: Future<!i32>,
+}
+
+struct ImmediateReadyFuture : Future<!i32> {
+    value: i32,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        _ = waker;
+        return Poll<!i32>.Ready(ok<i32>(self.value));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+fn immediate_ready_future(v: i32) Future<!i32> {
+    return ImmediateReadyFuture{ value: v };
+}
+
+@async_fn
+fn add_async() Future<!i32> {
+    const a: i32 = try @await ready(10);
+    const b: i32 = try @await ready(20);
+    return a + b;
+}
+
+test "scheduler_run" {
+    var s: Scheduler = scheduler_new();
+    const result: i32 = try scheduler_run<i32>(&s, add_async());
+    try assert_eq_i32(result, 30);
+}
+
+test "scheduler_run_u32" {
+    var s: Scheduler = scheduler_new();
+    const result: u32 = try scheduler_run<u32>(&s, ready_u32(12 as u32));
+    try assert_eq_i32(result as i32, 12);
+}
+
+test "interface_field_method_call_after_array_access" {
+    var holders: [SchedulerFutureHolder: 1] = [
+        SchedulerFutureHolder{ future: immediate_ready_future(77) },
+    ];
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = holders[0].future.poll(&w);
+    var result: i32 = 0 - 3;
+    match p {
+        .Ready(v) => { result = v catch { 0 - 1; }; },
+        .Pending(_) => { result = 0 - 2; },
+    };
+    try assert_eq_i32(result, 77);
+}
+
+var scheduler_loop_poll_count: i32 = 0;
+var scheduler_wake_poll_count: i32 = 0;
+var scheduler_pair_loop_poll_count: i32 = 0;
+var scheduler_pair_register_count: i32 = 0;
+var scheduler_pair_task_poll_count_a: i32 = 0;
+var scheduler_pair_task_poll_count_b: i32 = 0;
+var scheduler_pair_registered_wakers: [usize: 8] = [];
+var scheduler_pair_registered_count: i32 = 0;
+var scheduler_queue_loop_poll_count: i32 = 0;
+var scheduler_queue_register_count: i32 = 0;
+var scheduler_queue_task_poll_counts: [i32: 3] = [];
+var scheduler_queue_registered_wakers: [usize: 8] = [];
+var scheduler_queue_registered_count: i32 = 0;
+var scheduler_interest_switch_poll_count: i32 = 0;
+var scheduler_interest_switch_waker_count: i32 = 0;
+var scheduler_interest_switch_seen_count: i32 = 0;
+var scheduler_interest_switch_seen: [i32: 4] = [];
+
+struct TestEventLoop : EventLoop {
+    fn register(self: &Self, fd: i32, interest: EventKind, waker: &Waker) !i32 {
+        _ = self;
+        _ = fd;
+        _ = interest;
+        _ = waker;
+        return 0;
+    }
+
+    fn deregister(self: &Self, fd: i32) !i32 {
+        _ = self;
+        _ = fd;
+        return 0;
+    }
+
+    fn poll(self: &Self, timeout_ms: i32) !i32 {
+        _ = self;
+        scheduler_loop_poll_count = scheduler_loop_poll_count + 1;
+        return timeout_ms;
+    }
+}
+
+struct ReadyAfterEventLoopPoll : Future<!i32> {
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        _ = self;
+        _ = waker;
+        if scheduler_loop_poll_count == 0 {
+            return Poll<!i32>.Pending({});
+        }
+        return Poll<!i32>.Ready(ok<i32>(99));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+struct WakeThenReadyWithoutEventLoopPoll : Future<!i32> {
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        _ = self;
+        if scheduler_wake_poll_count == 0 {
+            scheduler_wake_poll_count = scheduler_wake_poll_count + 1;
+            waker.wake();
+            return Poll<!i32>.Pending({});
+        }
+        scheduler_wake_poll_count = scheduler_wake_poll_count + 1;
+        return Poll<!i32>.Ready(ok<i32>(123));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+fn test_event_loop() EventLoop {
+    return TestEventLoop{};
+}
+
+fn pending_then_ready_future() Future<!i32> {
+    return ReadyAfterEventLoopPoll{};
+}
+
+fn wake_then_ready_future() Future<!i32> {
+    return WakeThenReadyWithoutEventLoopPoll{};
+}
+
+struct PairEventLoop : EventLoop {
+    fn register(self: &Self, fd: i32, interest: EventKind, waker: &Waker) !i32 {
+        _ = self;
+        _ = fd;
+        _ = interest;
+        scheduler_pair_register_count = scheduler_pair_register_count + 1;
+        scheduler_pair_registered_wakers[scheduler_pair_registered_count as usize] = (waker as &void) as usize;
+        scheduler_pair_registered_count = scheduler_pair_registered_count + 1;
+        return 0;
+    }
+
+    fn deregister(self: &Self, fd: i32) !i32 {
+        _ = self;
+        _ = fd;
+        return 0;
+    }
+
+    fn poll(self: &Self, timeout_ms: i32) !i32 {
+        _ = self;
+        _ = timeout_ms;
+        scheduler_pair_loop_poll_count = scheduler_pair_loop_poll_count + 1;
+        var i: i32 = 0;
+        while i < scheduler_pair_registered_count {
+            const w: &Waker = (scheduler_pair_registered_wakers[i as usize] as &void) as &Waker;
+            w.wake();
+            i = i + 1;
+        }
+        const woke_count: i32 = scheduler_pair_registered_count;
+        scheduler_pair_registered_count = 0;
+        return woke_count;
+    }
+}
+
+struct PendingOnReadableThenReady : Future<!i32> {
+    fd: i32,
+    value: i32,
+    task_id: i32,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        if self.task_id == 0 {
+            scheduler_pair_task_poll_count_a = scheduler_pair_task_poll_count_a + 1;
+        } else {
+            scheduler_pair_task_poll_count_b = scheduler_pair_task_poll_count_b + 1;
+        }
+
+        if scheduler_pair_loop_poll_count == 0 {
+            waker.wait_readable(self.fd);
+            return Poll<!i32>.Pending({});
+        }
+        return Poll<!i32>.Ready(ok<i32>(self.value));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+fn pair_event_loop() EventLoop {
+    return PairEventLoop{};
+}
+
+fn pending_on_readable_then_ready(fd: i32, value: i32, task_id: i32) Future<!i32> {
+    return PendingOnReadableThenReady{ fd: fd, value: value, task_id: task_id };
+}
+
+struct QueueEventLoop : EventLoop {
+    fn register(self: &Self, fd: i32, interest: EventKind, waker: &Waker) !i32 {
+        _ = self;
+        _ = fd;
+        _ = interest;
+        scheduler_queue_register_count = scheduler_queue_register_count + 1;
+        scheduler_queue_registered_wakers[scheduler_queue_registered_count as usize] = (waker as &void) as usize;
+        scheduler_queue_registered_count = scheduler_queue_registered_count + 1;
+        return 0;
+    }
+
+    fn deregister(self: &Self, fd: i32) !i32 {
+        _ = self;
+        _ = fd;
+        return 0;
+    }
+
+    fn poll(self: &Self, timeout_ms: i32) !i32 {
+        _ = self;
+        _ = timeout_ms;
+        scheduler_queue_loop_poll_count = scheduler_queue_loop_poll_count + 1;
+        var i: i32 = 0;
+        while i < scheduler_queue_registered_count {
+            const w: &Waker = (scheduler_queue_registered_wakers[i as usize] as &void) as &Waker;
+            w.wake();
+            i = i + 1;
+        }
+        const woke_count: i32 = scheduler_queue_registered_count;
+        scheduler_queue_registered_count = 0;
+        return woke_count;
+    }
+}
+
+struct QueuePendingOnReadableThenReady : Future<!i32> {
+    fd: i32,
+    value: i32,
+    task_id: i32,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        scheduler_queue_task_poll_counts[self.task_id as usize] = scheduler_queue_task_poll_counts[self.task_id as usize] + 1;
+        if scheduler_queue_loop_poll_count == 0 {
+            waker.wait_readable(self.fd);
+            return Poll<!i32>.Pending({});
+        }
+        return Poll<!i32>.Ready(ok<i32>(self.value));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+struct QueuePendingOnReadableThenReadyU32 : Future<!u32> {
+    fd: i32,
+    value: u32,
+    task_id: i32,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!u32> {
+        scheduler_queue_task_poll_counts[self.task_id as usize] = scheduler_queue_task_poll_counts[self.task_id as usize] + 1;
+        if scheduler_queue_loop_poll_count == 0 {
+            waker.wait_readable(self.fd);
+            return Poll<!u32>.Pending({});
+        }
+        return Poll<!u32>.Ready(ok<u32>(self.value));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+struct CancelAwareFuture : Future<!i32> {
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        _ = self;
+        if waker.is_cancelled() {
+            return Poll<!i32>.Ready(error.Cancelled);
+        }
+        return Poll<!i32>.Pending({});
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+struct ExternalWakeThenReady : Future<!i32> {
+    shared_flag: &i32,
+    child_pid: i32,
+    started: i32,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        if self.shared_flag != null && self.shared_flag[0] != 0 {
+            return Poll<!i32>.Ready(ok<i32>(321));
+        }
+        if self.started == 0 {
+            self.started = 1;
+            const fork_result: !i64 = sys_fork();
+            const child_pid: i64 = fork_result catch {
+                return Poll<!i32>.Ready(fork_result as! i32);
+            };
+            if child_pid == 0 {
+                const req: TimeSpec = TimeSpec{ tv_sec: 0, tv_nsec: 5 * 1000 * 1000 };
+                var rem: TimeSpec = TimeSpec{ tv_sec: 0, tv_nsec: 0 };
+                _ = sys_nanosleep(&req, &rem) catch {};
+                if self.shared_flag != null {
+                    self.shared_flag[0] = 1;
+                }
+                waker.wake();
+                sys_exit(0);
+            }
+            self.child_pid = child_pid as i32;
+        }
+        return Poll<!i32>.Pending({});
+    }
+
+    fn release(self: &Self) void {
+        if self.child_pid > 0 {
+            var status: i32 = 0;
+            _ = sys_waitpid(self.child_pid, &status, 0) catch {};
+            self.child_pid = 0;
+        }
+    }
+}
+
+struct InterestSwitchEventLoop : EventLoop {
+    fn register(self: &Self, fd: i32, interest: EventKind, waker: &Waker) !i32 {
+        _ = self;
+        if fd == 555 && scheduler_interest_switch_seen_count < 4 {
+            match interest {
+                .Readable(_) => {
+                    scheduler_interest_switch_seen[scheduler_interest_switch_seen_count as usize] = 1;
+                    scheduler_interest_switch_seen_count = scheduler_interest_switch_seen_count + 1;
+                },
+                .Writable(_) => {
+                    scheduler_interest_switch_seen[scheduler_interest_switch_seen_count as usize] = 2;
+                    scheduler_interest_switch_seen_count = scheduler_interest_switch_seen_count + 1;
+                },
+                .ReadWrite(_) => {
+                    scheduler_interest_switch_seen[scheduler_interest_switch_seen_count as usize] = 3;
+                    scheduler_interest_switch_seen_count = scheduler_interest_switch_seen_count + 1;
+                },
+            };
+        }
+        scheduler_interest_switch_waker_count = scheduler_interest_switch_waker_count + 1;
+        scheduler_pair_registered_wakers[(scheduler_interest_switch_waker_count - 1) as usize] = (waker as &void) as usize;
+        return 0;
+    }
+
+    fn deregister(self: &Self, fd: i32) !i32 {
+        _ = self;
+        _ = fd;
+        return 0;
+    }
+
+    fn poll(self: &Self, timeout_ms: i32) !i32 {
+        _ = self;
+        _ = timeout_ms;
+        scheduler_interest_switch_poll_count = scheduler_interest_switch_poll_count + 1;
+        var i: i32 = 0;
+        while i < scheduler_interest_switch_waker_count {
+            const w: &Waker = (scheduler_pair_registered_wakers[i as usize] as &void) as &Waker;
+            w.wake();
+            i = i + 1;
+        }
+        scheduler_interest_switch_waker_count = 0;
+        return 1;
+    }
+}
+
+struct ReadableThenWritableFuture : Future<!i32> {
+    fd: i32,
+    stage: i32,
+
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        if self.stage == 0 {
+            self.stage = 1;
+            waker.wait_readable(self.fd);
+            return Poll<!i32>.Pending({});
+        }
+        if self.stage == 1 {
+            self.stage = 2;
+            waker.wait_writable(self.fd);
+            return Poll<!i32>.Pending({});
+        }
+        return Poll<!i32>.Ready(ok<i32>(77));
+    }
+
+    fn release(self: &Self) void {
+        _ = self;
+    }
+}
+
+fn queue_event_loop() EventLoop {
+    return QueueEventLoop{};
+}
+
+fn queue_pending_on_readable_then_ready(fd: i32, value: i32, task_id: i32) Future<!i32> {
+    return QueuePendingOnReadableThenReady{ fd: fd, value: value, task_id: task_id };
+}
+
+fn queue_pending_on_readable_then_ready_u32(fd: i32, value: u32, task_id: i32) Future<!u32> {
+    return QueuePendingOnReadableThenReadyU32{ fd: fd, value: value, task_id: task_id };
+}
+
+test "scheduler_run_with_event_loop_polls_pending_future" {
+    scheduler_loop_poll_count = 0;
+
+    var s: Scheduler = scheduler_new();
+    const loop: EventLoop = test_event_loop();
+    const f: Future<!i32> = pending_then_ready_future();
+    const result: i32 = try scheduler_run_with_event_loop<i32>(&s, loop, f, 0);
+
+    try assert_eq_i32(result, 99);
+    try assert_eq_i32(scheduler_loop_poll_count, 1);
+}
+
+test "scheduler_run_with_event_loop_skips_poll_when_woken" {
+    scheduler_loop_poll_count = 0;
+    scheduler_wake_poll_count = 0;
+
+    var s: Scheduler = scheduler_new();
+    const loop: EventLoop = test_event_loop();
+    const f: Future<!i32> = wake_then_ready_future();
+    const result: i32 = try scheduler_run_with_event_loop<i32>(&s, loop, f, 0);
+
+    try assert_eq_i32(result, 123);
+    try assert_eq_i32(scheduler_wake_poll_count, 2);
+    try assert_eq_i32(scheduler_loop_poll_count, 0);
+}
+
+test "scheduler_run_pair_i32_with_shared_event_loop" {
+    scheduler_pair_loop_poll_count = 0;
+    scheduler_pair_register_count = 0;
+    scheduler_pair_task_poll_count_a = 0;
+    scheduler_pair_task_poll_count_b = 0;
+    scheduler_pair_registered_count = 0;
+
+    var s: Scheduler = scheduler_new();
+    const first: Future<!i32> = pending_on_readable_then_ready(101, 7, 0);
+    const second: Future<!i32> = pending_on_readable_then_ready(202, 9, 1);
+    const loop: EventLoop = pair_event_loop();
+    var first_result: i32 = 0;
+    var second_result: i32 = 0;
+    const completed: i32 = try scheduler_run_pair_i32_with_event_loop(&s, loop, first, second, &first_result, &second_result, 0);
+
+    try assert_eq_i32(completed, 2);
+    try assert_eq_i32(first_result, 7);
+    try assert_eq_i32(second_result, 9);
+    try assert_eq_i32(scheduler_pair_loop_poll_count, 1);
+    try assert_eq_i32(scheduler_pair_register_count, 4);
+    try assert_eq_i32(scheduler_pair_task_poll_count_a, 2);
+    try assert_eq_i32(scheduler_pair_task_poll_count_b, 2);
+}
+
+test "scheduler_run_task_queue_i32_with_shared_event_loop" {
+    scheduler_queue_loop_poll_count = 0;
+    scheduler_queue_register_count = 0;
+    scheduler_queue_registered_count = 0;
+    scheduler_queue_task_poll_counts[0] = 0;
+    scheduler_queue_task_poll_counts[1] = 0;
+    scheduler_queue_task_poll_counts[2] = 0;
+
+    var s: Scheduler = scheduler_new();
+    var queue: TaskQueue_i32 = task_queue_i32_new();
+    var first_impl: QueuePendingOnReadableThenReady = QueuePendingOnReadableThenReady{ fd: 301, value: 11, task_id: 0 };
+    var second_impl: QueuePendingOnReadableThenReady = QueuePendingOnReadableThenReady{ fd: 302, value: 13, task_id: 1 };
+    var third_impl: QueuePendingOnReadableThenReady = QueuePendingOnReadableThenReady{ fd: 303, value: 17, task_id: 2 };
+    const first: Future<!i32> = first_impl;
+    const second: Future<!i32> = second_impl;
+    const third: Future<!i32> = third_impl;
+    const first_idx: i32 = try queue.push(first);
+    const second_idx: i32 = try queue.push(second);
+    const third_idx: i32 = try queue.push(third);
+    const loop: EventLoop = queue_event_loop();
+    const completed: i32 = try scheduler_run_task_queue_i32_with_event_loop(&s, loop, &queue, 0);
+
+    try assert_eq_i32(first_idx, 0);
+    try assert_eq_i32(second_idx, 1);
+    try assert_eq_i32(third_idx, 2);
+    try assert_eq_i32(completed, 3);
+    try assert_eq_i32(queue.result(0), 11);
+    try assert_eq_i32(queue.result(1), 13);
+    try assert_eq_i32(queue.result(2), 17);
+    try assert_eq_i32(queue.is_done(0) as i32, 1);
+    try assert_eq_i32(queue.is_done(1) as i32, 1);
+    try assert_eq_i32(queue.is_done(2) as i32, 1);
+    try assert_eq_i32(scheduler_queue_loop_poll_count, 1);
+    try assert_eq_i32(scheduler_queue_register_count, 6);
+    try assert_eq_i32(scheduler_queue_task_poll_counts[0], 2);
+    try assert_eq_i32(scheduler_queue_task_poll_counts[1], 2);
+    try assert_eq_i32(scheduler_queue_task_poll_counts[2], 2);
+}
+
+test "scheduler_run_task_queue_generic_u32_with_shared_event_loop" {
+    scheduler_queue_loop_poll_count = 0;
+    scheduler_queue_register_count = 0;
+    scheduler_queue_registered_count = 0;
+    scheduler_queue_task_poll_counts[0] = 0;
+    scheduler_queue_task_poll_counts[1] = 0;
+
+    var s: Scheduler = scheduler_new();
+    var queue: TaskQueue_u32 = task_queue_u32_new();
+    const first: Future<!u32> = queue_pending_on_readable_then_ready_u32(401, 21 as u32, 0);
+    const second: Future<!u32> = queue_pending_on_readable_then_ready_u32(402, 34 as u32, 1);
+    const first_idx: i32 = try queue.push(first);
+    const second_idx: i32 = try queue.push(second);
+    const loop: EventLoop = queue_event_loop();
+    const completed: i32 = try scheduler_run_task_queue_u32_with_event_loop(&s, loop, &queue, 0);
+
+    try assert_eq_i32(first_idx, 0);
+    try assert_eq_i32(second_idx, 1);
+    try assert_eq_i32(completed, 2);
+    try assert_eq_i32(queue.result(0) as i32, 21);
+    try assert_eq_i32(queue.result(1) as i32, 34);
+    try assert_eq_i32(queue.is_done(0) as i32, 1);
+    try assert_eq_i32(queue.is_done(1) as i32, 1);
+    try assert_eq_i32(scheduler_queue_loop_poll_count, 1);
+    try assert_eq_i32(scheduler_queue_register_count, 4);
+}
+
+test "scheduler_run_task_queue_marks_cancelled_slots" {
+    var s: Scheduler = scheduler_new();
+    var queue: TaskQueue<i32> = task_queue_new<i32>();
+    const cancelled_future: Future<!i32> = CancelAwareFuture{};
+    const cancelled_idx: i32 = try queue.push(cancelled_future);
+    const ready_idx: i32 = try queue.push(ready(55));
+    _ = queue.cancel(cancelled_idx);
+    const loop: EventLoop = test_event_loop();
+    const completed: i32 = try scheduler_run_task_queue_with_event_loop<i32>(&s, loop, &queue, 0);
+
+    try assert_eq_i32(completed, 2);
+    try assert_eq_i32(queue.is_done(cancelled_idx) as i32, 1);
+    try assert_eq_i32(queue.is_cancelled(cancelled_idx) as i32, 1);
+    try assert_eq_i32(queue.error_id(cancelled_idx) as i32, @error_id(error.Cancelled) as i32);
+    try assert_eq_i32(queue.is_done(ready_idx) as i32, 1);
+    try assert_eq_i32(queue.result(ready_idx), 55);
+}
+
+test "scheduler_run_with_event_loop_handles_external_eventfd_wake" {
+    const map_result: !*void = sys_mmap(null as *void, @size_of(i32), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0 - 1, 0);
+    const shared_raw: *void = try map_result;
+    const shared_flag: &i32 = shared_raw as &i32;
+    shared_flag[0] = 0;
+    var s: Scheduler = scheduler_new();
+    var epoll_impl: LinuxEpoll = try linux_epoll_create(0);
+    defer {
+        _ = sys_close(epoll_impl.epfd) catch {};
+        _ = sys_munmap(shared_raw, @size_of(i32)) catch {};
+    }
+    const loop: EventLoop = epoll_impl;
+    var future_impl: ExternalWakeThenReady = ExternalWakeThenReady{ shared_flag: shared_flag, child_pid: 0, started: 0 };
+    const future: Future<!i32> = future_impl;
+    const result: i32 = try scheduler_run_with_event_loop<i32>(&s, loop, future, 1000);
+    future.release();
+
+    try assert_eq_i32(result, 321);
+    try assert_eq_i32(shared_flag[0], 1);
+}
+
+test "scheduler_run_with_event_loop_reregisters_same_fd_when_interest_changes" {
+    scheduler_interest_switch_poll_count = 0;
+    scheduler_interest_switch_waker_count = 0;
+    scheduler_interest_switch_seen_count = 0;
+    scheduler_interest_switch_seen[0] = 0;
+    scheduler_interest_switch_seen[1] = 0;
+    scheduler_interest_switch_seen[2] = 0;
+    scheduler_interest_switch_seen[3] = 0;
+
+    var s: Scheduler = scheduler_new();
+    const loop: EventLoop = InterestSwitchEventLoop{};
+    var future_impl: ReadableThenWritableFuture = ReadableThenWritableFuture{ fd: 555, stage: 0 };
+    const future: Future<!i32> = future_impl;
+    const result: i32 = try scheduler_run_with_event_loop<i32>(&s, loop, future, 0);
+
+    try assert_eq_i32(result, 77);
+    try assert_eq_i32(scheduler_interest_switch_poll_count, 2);
+    try assert_eq_i32(scheduler_interest_switch_seen_count, 2);
+    try assert_eq_i32(scheduler_interest_switch_seen[0], 1);
+    try assert_eq_i32(scheduler_interest_switch_seen[1], 2);
+}

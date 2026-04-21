@@ -1,0 +1,31 @@
+// SIMD：整数/浮点向量一元负号与整数向量按位取反
+type Vec4i32 = @vector(i32, 4);
+type Vec2f32 = @vector(f32, 2);
+type Mask4 = @mask(4);
+type Mask2 = @mask(2);
+
+export fn main() i32 {
+    const a: Vec4i32 = @vector.splat(5);
+    const neg: Vec4i32 = -a;
+    const ncmp: Mask4 = neg == @vector.splat(-5);
+    if @vector.all(ncmp) == false {
+        return 1;
+    }
+
+    const bits: Vec4i32 = @vector.splat(10);
+    const inv: Vec4i32 = ~bits;
+    const inv2: Vec4i32 = inv + @vector.splat(11);
+    const zcheck: Mask4 = inv2 == @vector.splat(0);
+    if @vector.all(zcheck) == false {
+        return 2;
+    }
+
+    const vf: Vec2f32 = @vector.splat(2.5f32);
+    const nf: Vec2f32 = -vf;
+    const fcmp: Mask2 = nf == @vector.splat(-2.5f32);
+    if @vector.all(fcmp) == false {
+        return 3;
+    }
+
+    return 0;
+}

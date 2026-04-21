@@ -1,0 +1,78 @@
+// 测试 to_json 多字段（i64, JsonStrView, bool, f64）编码与 parse 往返
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.value.JsonStrView;
+use std.json.parser.parse;
+use std.json.encoder.to_json;
+use std.json.encoder.json_object_find_index;
+use std.json.encoder.json_expect_i64;
+use std.json.encoder.json_expect_str;
+use std.json.encoder.json_expect_bool;
+use std.json.encoder.json_expect_f64;
+use std.json.errors;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+struct Record {
+    id: i64,
+    name: JsonStrView,
+    active: bool,
+    score: f64,
+}
+
+export fn main() i32 {
+    var arena_buf: [byte: 262144] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 262144);
+    var name_buf: [byte: 6] = [];
+    name_buf[0] = 104;
+    name_buf[1] = 101;
+    name_buf[2] = 108;
+    name_buf[3] = 108;
+    name_buf[4] = 111;
+    name_buf[5] = 0;
+    const r: Record = Record{ id: 100, name: JsonStrView{ ptr: &name_buf[0], len: 5 }, active: true, score: 3.14 };
+    const slice: &[byte] = to_json<Record>(&a, r) catch { return 1; };
+
+    const parsed: JsonValue = parse(&a, slice.ptr, slice.len) catch { return 2; };
+    match parsed {
+        .obj(o) => {
+            if o.len != 4 { return 3; }
+            var id_key: [byte: 2] = [];
+            id_key[0] = 105;
+            id_key[1] = 100;
+            var name_key: [byte: 4] = [];
+            name_key[0] = 110;
+            name_key[1] = 97;
+            name_key[2] = 109;
+            name_key[3] = 101;
+            var active_key: [byte: 6] = [];
+            active_key[0] = 97;
+            active_key[1] = 99;
+            active_key[2] = 116;
+            active_key[3] = 105;
+            active_key[4] = 118;
+            active_key[5] = 101;
+            var score_key: [byte: 5] = [];
+            score_key[0] = 115;
+            score_key[1] = 99;
+            score_key[2] = 111;
+            score_key[3] = 114;
+            score_key[4] = 101;
+            const id_idx: usize = json_object_find_index(&o, &id_key[0], 2) catch { return 5; };
+            const id_val: i64 = json_expect_i64(&o.pairs[id_idx].value) catch { return 6; };
+            if id_val != 100 { return 10; }
+            const name_idx: usize = json_object_find_index(&o, &name_key[0], 4) catch { return 7; };
+            const name_val: JsonStrView = json_expect_str(&o.pairs[name_idx].value) catch { return 8; };
+            if name_val.len != 5 || name_val.ptr[0] != 104 || name_val.ptr[1] != 101 || name_val.ptr[2] != 108 || name_val.ptr[3] != 108 || name_val.ptr[4] != 111 { return 11; }
+            const active_idx: usize = json_object_find_index(&o, &active_key[0], 6) catch { return 9; };
+            const active_val: bool = json_expect_bool(&o.pairs[active_idx].value) catch { return 14; };
+            if active_val != true { return 12; }
+            const score_idx: usize = json_object_find_index(&o, &score_key[0], 5) catch { return 15; };
+            const score_val: f64 = json_expect_f64(&o.pairs[score_idx].value) catch { return 16; };
+            if score_val < 3.13 || score_val > 3.15 { return 13; }
+        },
+        else => { return 4; },
+    }
+    return 0;
+}

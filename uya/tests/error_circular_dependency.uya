@@ -1,0 +1,12 @@
+// error_circular_dependency.uya - 测试循环依赖检测（预期编译失败）
+// 此文件导入 circular_a 和 circular_b，它们之间存在循环依赖
+
+use circular_a.func_a;
+use circular_b.helper_b;
+
+fn main() i32 {
+    const a: i32 = func_a();
+    const b: i32 = helper_b();
+    return a + b;
+}
+

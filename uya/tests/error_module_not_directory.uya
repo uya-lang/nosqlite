@@ -1,0 +1,10 @@
+// 测试 use 语句中 module 不是目录的情况（预期编译失败）
+// 此测试验证：当使用 use module.xxx; 时，如果 module 不是目录，编译器应该报错
+
+// 尝试使用一个文件名作为模块路径段（预期编译错误）
+// 假设 "arithmetic" 是 tests/ 目录下的一个文件，不是目录
+use arithmetic.some_func;
+
+fn main() i32 {
+    return 0;
+}

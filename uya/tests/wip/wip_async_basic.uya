@@ -1,0 +1,19 @@
+// 异步编程基础测试 - WIP
+// 测试 @async_fn 语法解析
+
+extern fn printf(fmt: *byte, ...) i32;
+
+// 简单的异步函数（返回类型暂时用 i32）
+@async_fn
+fn get_value() i32 {
+    return 42;
+}
+
+fn main() i32 {
+    printf("异步编程语法解析测试\n");
+    const val: i32 = get_value();
+    if val == 42 {
+        return 0;
+    }
+    return 1;
+}

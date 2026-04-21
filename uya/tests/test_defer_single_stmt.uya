@@ -1,0 +1,22 @@
+// defer 单条语句（非块）语法
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_defer_single_stmt() !void {
+    var x: i32 = 0;
+    defer x = 1;
+    // return 时执行 defer，x 变为 1
+    try expect(x == 0);  // return 前还是 0
+}
+
+export fn main() i32 {
+    test_suite_begin("Defer Single Stmt Tests");
+    
+    run_test("defer single stmt", test_defer_single_stmt);
+    
+    return test_suite_end();
+}

@@ -1,0 +1,124 @@
+use kernel.errors;
+use kernel.image;
+use kernel.payload;
+use std.crypto.sha256;
+use std.testing.assert_eq_i32;
+
+fn assert_common_payload_contract(hdr: &ImageHeader, expected_arch: ImageTargetArch, expected_bridge: ImageBridgeKind, expected_profile_id: u32, expected_code_size: u32, expected_rodata_size: u32, expected_data_size: u32, expected_bss_size: u32, expected_stack_hint: u32, expected_reloc_count: u32) !void {
+    try assert_eq_i32(hdr.format_version as i32, 2);
+    try assert_eq_i32(hdr.target_arch as i32, expected_arch as i32);
+    try assert_eq_i32(hdr.bridge_kind as i32, expected_bridge as i32);
+    try assert_eq_i32(hdr.profile_id as i32, expected_profile_id as i32);
+    try assert_eq_i32(hdr.code_size as i32, expected_code_size as i32);
+    try assert_eq_i32(hdr.rodata_size as i32, expected_rodata_size as i32);
+    try assert_eq_i32(hdr.data_size as i32, expected_data_size as i32);
+    try assert_eq_i32(hdr.bss_size as i32, expected_bss_size as i32);
+    try assert_eq_i32(hdr.stack_size_hint as i32, expected_stack_hint as i32);
+    try assert_eq_i32(hdr.reloc_count as i32, expected_reloc_count as i32);
+}
+
+test "payload_pack_to_uapp_roundtrip" {
+    var code: [byte: 4] = [115, 0, 0, 0];
+    var rodata: [byte: 4] = [65, 66, 67, 0];
+    var empty: [byte: 1] = [0];
+    var out: [byte: 256] = [];
+    const obj: PayloadObj = PayloadObj{
+        target_arch: ImageTargetArch.ita_rv32,
+        bridge_kind: ImageBridgeKind.ibk_trap,
+        build_mode: BUILD_MODE_CONTAINER,
+        profile_id: 3u32,
+        required_caps: 0u32,
+        flags: 0u32,
+        entry_offset: 0u32,
+        entry_va: IMAGE_HEADER_SIZE,
+        code_va: IMAGE_HEADER_SIZE,
+        rodata_va: IMAGE_HEADER_SIZE + 4u32,
+        data_va: IMAGE_HEADER_SIZE + 8u32,
+        code: code[0: 4],
+        rodata: rodata[0: 4],
+        data: empty[0: 0],
+        bss_size: 16u32,
+        stack_size_hint: 0u32,
+        relocs: empty[0: 0],
+        reloc_count: 0u32,
+    };
+
+    const total: u32 = try payload_pack_to_uapp(&obj, out[0: 256]);
+    try assert_eq_i32(total as i32, 184);
+
+    const hdr: ImageHeader = try image_validate(out[0: total as usize]);
+    try assert_common_payload_contract(&hdr, ImageTargetArch.ita_rv32, ImageBridgeKind.ibk_trap, 3u32, 4u32, 4u32, 0u32, 16u32, 0u32, 0u32);
+    try assert_eq_i32(hdr.entry_offset as i32, 0);
+    try assert_eq_i32(hdr.entry_va as i32, IMAGE_HEADER_SIZE as i32);
+    try assert_eq_i32(hdr.code_offset as i32, IMAGE_HEADER_SIZE as i32);
+    try assert_eq_i32(hdr.rodata_offset as i32, (IMAGE_HEADER_SIZE + 4u32) as i32);
+    try assert_eq_i32(hdr.code_va as i32, IMAGE_HEADER_SIZE as i32);
+}
+
+test "payload_pack_to_uapp_call_gate_contract_roundtrip" {
+    var code: [byte: 8] = [184, 7, 0, 0, 0, 195, 144, 144];
+    var rodata: [byte: 4] = [67, 71, 0, 0];
+    var data: [byte: 8] = [0, 0, 0, 0, 0, 0, 0, 0];
+    var relocs: [byte: 8] = [];
+    var out: [byte: 256] = [];
+    relocs[0] = (IMAGE_HEADER_SIZE + 12u32) as byte;
+    relocs[4] = (IMAGE_HEADER_SIZE + 8u32) as byte;
+    const obj: PayloadObj = PayloadObj{
+        target_arch: ImageTargetArch.ita_x86_64,
+        bridge_kind: ImageBridgeKind.ibk_call_gate,
+        build_mode: BUILD_MODE_CONTAINER,
+        profile_id: 1u32,
+        required_caps: 0u32,
+        flags: 0u32,
+        entry_offset: 0u32,
+        entry_va: IMAGE_HEADER_SIZE,
+        code_va: IMAGE_HEADER_SIZE,
+        rodata_va: IMAGE_HEADER_SIZE + 8u32,
+        data_va: IMAGE_HEADER_SIZE + 12u32,
+        code: code[0: 8],
+        rodata: rodata[0: 4],
+        data: data[0: 8],
+        bss_size: 8u32,
+        stack_size_hint: 65536u32,
+        relocs: relocs[0: 8],
+        reloc_count: 1u32,
+    };
+
+    const total: u32 = try payload_pack_to_uapp(&obj, out[0: 256]);
+    const hdr: ImageHeader = try image_validate(out[0: total as usize]);
+    try assert_common_payload_contract(&hdr, ImageTargetArch.ita_x86_64, ImageBridgeKind.ibk_call_gate, 1u32, 8u32, 4u32, 8u32, 8u32, 65536u32, 1u32);
+    try assert_eq_i32(hdr.data_va as i32, (IMAGE_HEADER_SIZE + 12u32) as i32);
+}
+
+test "payload_pack_to_uapp_softvm_contract_roundtrip" {
+    var code: [byte: 4] = [115, 0, 0, 0];
+    var rodata: [byte: 4] = [88, 84, 0, 0];
+    var data: [byte: 4] = [1, 2, 3, 4];
+    var empty: [byte: 1] = [0];
+    var out: [byte: 256] = [];
+    const obj: PayloadObj = PayloadObj{
+        target_arch: ImageTargetArch.ita_xtensa,
+        bridge_kind: ImageBridgeKind.ibk_trap,
+        build_mode: BUILD_MODE_CONTAINER,
+        profile_id: 5u32,
+        required_caps: 0u32,
+        flags: 0u32,
+        entry_offset: 0u32,
+        entry_va: IMAGE_HEADER_SIZE,
+        code_va: IMAGE_HEADER_SIZE,
+        rodata_va: IMAGE_HEADER_SIZE + 4u32,
+        data_va: IMAGE_HEADER_SIZE + 8u32,
+        code: code[0: 4],
+        rodata: rodata[0: 4],
+        data: data[0: 4],
+        bss_size: 4u32,
+        stack_size_hint: 0u32,
+        relocs: empty[0: 0],
+        reloc_count: 0u32,
+    };
+
+    const total: u32 = try payload_pack_to_uapp(&obj, out[0: 256]);
+    const hdr: ImageHeader = try image_validate(out[0: total as usize]);
+    try assert_common_payload_contract(&hdr, ImageTargetArch.ita_xtensa, ImageBridgeKind.ibk_trap, 5u32, 4u32, 4u32, 4u32, 4u32, 0u32, 0u32);
+    try assert_eq_i32(hdr.data_va as i32, (IMAGE_HEADER_SIZE + 8u32) as i32);
+}

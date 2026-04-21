@@ -1,0 +1,18 @@
+// test_https_bridge_safety.uya - HTTPS curl 桥接输入白名单测试
+
+use tls.https;
+use std.testing.assert_eq_i32;
+
+test "https_get_rejects_shell_unsafe_host" {
+    var host: [byte: 13] = "exa mple.com";
+    const out: !HttpsResponse = https_get(&host[0], 12, 443, &"/"[0: 1]);
+    match out {
+        error.InvalidRequest => {
+            return;
+        }
+        resp => {
+            _ = resp;
+            try assert_eq_i32(0, 1);
+        }
+    };
+}

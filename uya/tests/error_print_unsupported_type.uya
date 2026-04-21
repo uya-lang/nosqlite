@@ -1,0 +1,13 @@
+// error_print_unsupported_type.uya - @print 错误测试：不支持的类型
+// 预期：编译失败
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() i32 {
+    const p: Point = Point { x: 1, y: 2 };
+    @println(p);  // 结构体不支持直接打印
+    return 0;
+}

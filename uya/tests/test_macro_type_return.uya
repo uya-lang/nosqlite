@@ -1,0 +1,38 @@
+// 测试 type 返回标签的宏调用
+use std.runtime.entry;
+// 宏作为类型注解使用
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 定义返回 i32 类型的宏
+mc int_type() type {
+    @mc_code(@mc_ast(i32));
+}
+
+// 定义返回 bool 类型的宏
+mc bool_type() type {
+    @mc_code(@mc_ast(bool));
+}
+
+fn test_int_type_macro() !void {
+    // 使用宏作为类型注解
+    const x: int_type() = 42;
+    try assert_eq_i32(x, 42);
+}
+
+fn test_bool_type_macro() !void {
+    // 使用 bool 类型宏
+    const flag: bool_type() = true;
+    try expect(flag);
+}
+
+export fn main() i32 {
+    test_suite_begin("Macro Type Return Tests");
+    run_test("int type macro", test_int_type_macro);
+    run_test("bool type macro", test_bool_type_macro);
+    return test_suite_end();
+}

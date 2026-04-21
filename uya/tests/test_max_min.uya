@@ -1,0 +1,23 @@
+// 测试 max/min 关键字：类型极值（编译期常量，从上下文推断类型）
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+
+test "max value" {
+    const MAX: i32 = @max;
+    try assert_eq_i32(MAX, 2147483647);
+}
+
+test "min value" {
+    const MIN: i32 = @min;
+    try assert_eq_i32(MIN, -2147483647 - 1);
+}
+
+test "max in expression" {
+    const a: i32 = 10;
+    try expect(a < @max - 20);
+}
+
+test "min in expression" {
+    try expect(@min + 1 < 0);
+}

@@ -1,0 +1,14 @@
+use std.testing.assert_eq_i32;
+
+fn dead_string_interp_helper() i32 {
+    return 7;
+}
+
+fn live_string_interp_helper() i32 {
+    return 42;
+}
+
+test "function reachability keeps string interpolation callees" {
+    const msg: [i8: 64] = "v=${live_string_interp_helper()}\n";
+    try assert_eq_i32(msg[0] as i32, 'v' as i32);
+}

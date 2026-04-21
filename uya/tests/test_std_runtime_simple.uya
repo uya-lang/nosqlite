@@ -1,0 +1,20 @@
+// test_std_runtime_simple.uya - 简化测试 std.runtime 模块
+use std.runtime.entry;
+// 只测试 ptr_diff 函数
+
+use std.runtime.ptr_diff;
+
+export fn main() i32 {
+    // 测试 ptr_diff - 指针差计算
+    var arr: [i32: 10] = [];
+    const ptr1: &i32 = &arr[0];
+    const ptr2: &i32 = &arr[5];
+    const diff: i32 = ptr_diff(ptr1 as &byte, ptr2 as &byte);
+    const expected_diff: i32 = 0 - ((@size_of(i32) * 5) as i32);  // 负数，因为 ptr1 < ptr2
+    if diff != expected_diff {
+        return 1;  // 指针差计算错误
+    }
+    
+    return 0;
+}
+

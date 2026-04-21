@@ -1,0 +1,45 @@
+// 测试程序：验证 &array[index] 代码生成
+use std.runtime.entry;
+// 测试取数组元素地址的功能
+
+use std.testing.assert;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 全局数组变量用于测试返回指针（避免返回局部变量地址）
+var buffer: [byte: 100] = [];
+
+// ============================================================
+// 测试用例
+// ============================================================
+
+fn test_array_addr() &void {
+    const result: &void = &buffer[10] as &void;
+    return result;
+}
+
+fn test_array_addr_not_null() !void {
+    const ptr: &void = test_array_addr();
+    try assert(ptr != null, "array element address should not be null");
+}
+
+fn test_array_addr_offset() !void {
+    const ptr1: &byte = &buffer[0];
+    const ptr2: &byte = &buffer[10];
+    // ptr2 应该比 ptr1 大 10 个字节
+    try assert(ptr2 > ptr1, "buffer[10] should be after buffer[0]");
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export fn main() i32 {
+    test_suite_begin("Array Addr Tests");
+    
+    run_test("array_addr_not_null", test_array_addr_not_null);
+    run_test("array_addr_offset", test_array_addr_offset);
+    
+    return test_suite_end();
+}

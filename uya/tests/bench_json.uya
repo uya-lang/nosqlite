@@ -1,0 +1,198 @@
+// bench_json.uya - JSON 解析/编码性能基准
+// 内嵌负载 + sys_gettimeofday 墙钟微秒；输出间隔与解析/编码 MB/s（分母按 1e6 秒换算）。
+// 含三类 parse 场景：小对象、前导空白（exercise skip_ws）、长字符串（exercise parse_string 块路径）。
+// 运行：编译后执行；测试脚本以退出码 0 判定通过。
+//
+// 参考：docs/todo_json.md Benchmark / Phase 4。可选大文件：tests/scripts/fetch_json_benchmark_data.sh → tests/data/json/
+// 不用 clock()：生成的 C 对 bench 内 extern clock 不产出原型，会触发 -Wimplicit-function-declaration。
+// 用 Linux x86-64 gettimeofday 直接 @syscall，避免 use libc.syscall（会连带拉入 stdio/stdlib 大模块导致类型检查失败）。
+
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.parser.parse;
+use std.json.encoder.encode_to;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.mem.arena.arena_reset;
+
+extern "libc" fn printf(fmt: *byte, ...) i32;
+
+struct BenchTv {
+    tv_sec: i64,
+    tv_usec: i64,
+}
+
+const SYS_GETTIMEOFDAY: i64 = 96;
+const USEC_PER_SEC: i64 = 1000000;
+
+fn bench_usec_now() i64 {
+    var tv: BenchTv = BenchTv{ tv_sec: 0, tv_usec: 0 };
+    const gr: !i64 = @syscall(SYS_GETTIMEOFDAY, (&tv) as i64, 0);
+    _ = gr catch { return 0; };
+    return tv.tv_sec * USEC_PER_SEC + tv.tv_usec;
+}
+
+// 可变缓冲区：parse 签名为 &byte，避免 C 侧 const uint8_t* 传入 uint8_t* 的 -Wdiscarded-qualifiers
+// 内嵌 JSON：{"id":42,"name":"abc"} 与 test_json_struct_roundtrip 对齐
+var PAYLOAD: [byte: 24] = [
+    123, 34, 105, 100, 34, 58, 52, 50, 44, 34, 110, 97, 109, 101, 34, 58, 34, 97, 98, 99, 34, 125
+];
+const PAYLOAD_LEN: usize = 22;
+const PARSE_ITERATIONS: i32 = 50000;
+const ENCODE_ITERATIONS: i32 = 50000;
+
+const LEAD_WS: usize = 64;
+const STR_INNER: usize = 96;
+// 栈数组维度须为字面量：避免 codegen 对 (const 表达式) 求错大小
+const BUF_WS_CAP: usize = 88;
+const BUF_STR_CAP: usize = 104;
+const PARSE_WS_ITER: i32 = 30000;
+const PARSE_STR_ITER: i32 = 20000;
+const ENCODE_STR_ITER: i32 = 25000;
+
+const MB_F: f64 = 1048576.0;
+
+export fn main() i32 {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 65536);
+
+    var out_buf: [byte: 256] = [];
+
+    // 预热：小负载 parse + encode
+    const v: JsonValue = parse(&a, &PAYLOAD[0], PAYLOAD_LEN) catch { return 1; };
+    const enc_out: usize = encode_to(&v, &out_buf[0], 256) catch { return 2; };
+    arena_reset(&a);
+
+    // --- parse：小对象 ---
+    var start: i64 = bench_usec_now();
+    var i: i32 = 0;
+    while i < PARSE_ITERATIONS {
+        arena_reset(&a);
+        const _v: JsonValue = parse(&a, &PAYLOAD[0], PAYLOAD_LEN) catch { return 3; };
+        i = i + 1;
+    }
+    var end: i64 = bench_usec_now();
+    const parse_ticks: i64 = end - start;
+    const parse_total_bytes: i64 = (PAYLOAD_LEN as i64) * (PARSE_ITERATIONS as i64);
+    var parse_sec: f64 = 1.0;
+    if parse_ticks > 0 {
+        parse_sec = (parse_ticks as f64) / (USEC_PER_SEC as f64);
+    }
+    const parse_mbs: f64 = (parse_total_bytes as f64) / (parse_sec * MB_F);
+
+    // --- encode（仍用小对象结果）---
+    start = bench_usec_now();
+    i = 0;
+    while i < ENCODE_ITERATIONS {
+        const _n: usize = encode_to(&v, &out_buf[0], 256) catch { return 4; };
+        i = i + 1;
+    }
+    end = bench_usec_now();
+    const encode_ticks: i64 = end - start;
+    const enc_total_bytes: i64 = (enc_out as i64) * (ENCODE_ITERATIONS as i64);
+    var enc_sec: f64 = 1.0;
+    if encode_ticks > 0 {
+        enc_sec = (encode_ticks as f64) / (USEC_PER_SEC as f64);
+    }
+    const enc_mbs: f64 = (enc_total_bytes as f64) / (enc_sec * MB_F);
+
+    printf("bench_json: compact parse %d x %zu bytes => %ld usec (%.4f MB/s)\n" as *byte,
+           PARSE_ITERATIONS, PAYLOAD_LEN, parse_ticks, parse_mbs);
+    printf("bench_json: encode %d x ~%zu B out => %ld usec (%.4f MB/s)\n" as *byte,
+           ENCODE_ITERATIONS, enc_out, encode_ticks, enc_mbs);
+
+    // --- 前导空白 + 同一小对象（skip_ws 向量路径）---
+    var buf_ws: [byte: BUF_WS_CAP] = [];
+    var bi: usize = 0;
+    while bi < LEAD_WS {
+        buf_ws[bi] = 32;
+        bi = bi + 1;
+    }
+    var pi: usize = 0;
+    while pi < PAYLOAD_LEN {
+        buf_ws[LEAD_WS + pi] = PAYLOAD[pi];
+        pi = pi + 1;
+    }
+    const ws_len: usize = LEAD_WS + PAYLOAD_LEN;
+    _ = parse(&a, &buf_ws[0], ws_len) catch { return 5; };
+    arena_reset(&a);
+
+    start = bench_usec_now();
+    i = 0;
+    while i < PARSE_WS_ITER {
+        arena_reset(&a);
+        const _w: JsonValue = parse(&a, &buf_ws[0], ws_len) catch { return 6; };
+        i = i + 1;
+    }
+    end = bench_usec_now();
+    const ws_ticks: i64 = end - start;
+    const ws_total_bytes: i64 = (ws_len as i64) * (PARSE_WS_ITER as i64);
+    var ws_sec: f64 = 1.0;
+    if ws_ticks > 0 {
+        ws_sec = (ws_ticks as f64) / (USEC_PER_SEC as f64);
+    }
+    const ws_mbs: f64 = (ws_total_bytes as f64) / (ws_sec * MB_F);
+    printf("bench_json: ws+compact parse %d x %zu bytes => %ld usec (%.4f MB/s)\n" as *byte,
+           PARSE_WS_ITER, ws_len, ws_ticks, ws_mbs);
+
+    // --- 长字符串值 {"k":"aaa..."}（parse_string 无转义块路径）；6 + 96 + 2 == BUF_STR_CAP ---
+    const str_hdr: usize = 6;
+    var buf_str: [byte: BUF_STR_CAP] = [];
+    buf_str[0] = 123;
+    buf_str[1] = 34;
+    buf_str[2] = 107;
+    buf_str[3] = 34;
+    buf_str[4] = 58;
+    buf_str[5] = 34;
+    var si: usize = 0;
+    while si < STR_INNER {
+        buf_str[str_hdr + si] = 97;
+        si = si + 1;
+    }
+    buf_str[str_hdr + STR_INNER] = 34;
+    buf_str[str_hdr + STR_INNER + 1] = 125;
+    const str_len: usize = str_hdr + STR_INNER + 2;
+    _ = parse(&a, &buf_str[0], str_len) catch { return 7; };
+    arena_reset(&a);
+
+    start = bench_usec_now();
+    i = 0;
+    while i < PARSE_STR_ITER {
+        arena_reset(&a);
+        const _s: JsonValue = parse(&a, &buf_str[0], str_len) catch { return 8; };
+        i = i + 1;
+    }
+    end = bench_usec_now();
+    const str_ticks: i64 = end - start;
+    const str_total_bytes: i64 = (str_len as i64) * (PARSE_STR_ITER as i64);
+    var str_sec: f64 = 1.0;
+    if str_ticks > 0 {
+        str_sec = (str_ticks as f64) / (USEC_PER_SEC as f64);
+    }
+    const str_mbs: f64 = (str_total_bytes as f64) / (str_sec * MB_F);
+    printf("bench_json: long-str parse %d x %zu bytes => %ld usec (%.4f MB/s)\n" as *byte,
+           PARSE_STR_ITER, str_len, str_ticks, str_mbs);
+
+    // --- 长字符串 JsonValue 编码（json_write_str_view 向量安全段）---
+    const str_val: JsonValue = parse(&a, &buf_str[0], str_len) catch { return 9; };
+    const enc_str_len: usize = encode_to(&str_val, &out_buf[0], 256) catch { return 10; };
+    start = bench_usec_now();
+    i = 0;
+    while i < ENCODE_STR_ITER {
+        const _es: usize = encode_to(&str_val, &out_buf[0], 256) catch { return 11; };
+        i = i + 1;
+    }
+    end = bench_usec_now();
+    const enc_str_ticks: i64 = end - start;
+    const enc_str_total: i64 = (enc_str_len as i64) * (ENCODE_STR_ITER as i64);
+    var enc_str_sec: f64 = 1.0;
+    if enc_str_ticks > 0 {
+        enc_str_sec = (enc_str_ticks as f64) / (USEC_PER_SEC as f64);
+    }
+    const enc_str_mbs: f64 = (enc_str_total as f64) / (enc_str_sec * MB_F);
+    printf("bench_json: long-str encode %d x ~%zu B out => %ld usec (%.4f MB/s)\n" as *byte,
+           ENCODE_STR_ITER, enc_str_len, enc_str_ticks, enc_str_mbs);
+
+    return 0;
+}

@@ -1,0 +1,33 @@
+use std.core.option.Option;
+use std.core.option.option_is_some_i32;
+use std.core.option.option_is_none_i32;
+use std.core.option.option_unwrap_or_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+
+test "option_some_none_and_unwrap_or" {
+    const a: Option<i32> = Option<i32>.Some(123);
+    const b: Option<i32> = Option<i32>.None();
+
+    try assert_eq_bool(option_is_some_i32(a), true);
+    try assert_eq_bool(option_is_none_i32(a), false);
+
+    try assert_eq_bool(option_is_some_i32(b), false);
+    try assert_eq_bool(option_is_none_i32(b), true);
+
+    try assert_eq_i32(option_unwrap_or_i32(a, 0), 123);
+    try assert_eq_i32(option_unwrap_or_i32(b, 456), 456);
+}
+
+test "option_match_some_branch" {
+    const o: Option<i32> = Option<i32>.Some(7);
+    var out: i32 = -1;
+
+    match o {
+        .Some(v) => { out = v; },
+        .None(_) => { out = -1; },
+    };
+
+    try assert_eq_i32(out, 7);
+}
+

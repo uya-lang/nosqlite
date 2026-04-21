@@ -1,0 +1,18 @@
+// 验证 microapp 模式下的顶层函数可达性
+
+fn dead_internal() i32 {
+    return 1;
+}
+
+export fn kept_exported() i32 {
+    return 2;
+}
+
+fn live_helper() i32 {
+    return kept_exported();
+}
+
+export fn main() i32 {
+    _ = live_helper();
+    return 0;
+}

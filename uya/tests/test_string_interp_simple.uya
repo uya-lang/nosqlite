@@ -1,0 +1,12 @@
+// 测试简单字符串插值
+
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.assert_true;
+
+test "test_string_interp" {
+    const x: i32 = 42;
+    const msg: [i8: 32] = "x=${x}\n";
+    // 验证编译正确，字符串插值在编译时展开
+    try assert_eq_i32(msg[0] == 120, true);  // 'x'
+}

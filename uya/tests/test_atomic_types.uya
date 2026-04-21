@@ -1,0 +1,42 @@
+// 原子类型支持多种整数类型测试，规范 uya.md §13
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_atomic_i32() !void {
+    var a32: atomic i32 = 100;
+    a32 += 50;
+    try expect(a32 == 150);
+}
+
+fn test_atomic_u32() !void {
+    var u32_val: atomic u32 = 200;
+    u32_val += 100;
+    try expect(u32_val == 300);
+}
+
+fn test_atomic_i64() !void {
+    var a64: atomic i64 = 1000;
+    a64 += 500;
+    try expect(a64 == 1500);
+}
+
+fn test_atomic_u64() !void {
+    var u64_val: atomic u64 = 2000;
+    u64_val += 1000;
+    try expect(u64_val == 3000);
+}
+
+export fn main() i32 {
+    test_suite_begin("Atomic Types Tests");
+    
+    run_test("atomic i32", test_atomic_i32);
+    run_test("atomic u32", test_atomic_u32);
+    run_test("atomic i64", test_atomic_i64);
+    run_test("atomic u64", test_atomic_u64);
+    
+    return test_suite_end();
+}

@@ -1,0 +1,7 @@
+// test_asm_void_output.uya - @asm 无输出测试
+
+test "asm void output" {
+    @asm {
+        "nop" ();
+    }
+}

@@ -1,0 +1,22 @@
+// error_async_await_in_while_cond.uya
+// 预期：编译失败，@await 出现在 while 循环条件中
+
+use std.async;
+
+struct S : Future<!i32> {
+    fn poll(self: &Self, waker: &Waker) Poll<!i32> {
+        _ = waker;
+        return Poll<!i32>.Ready(ok<i32>(1));
+    }
+}
+fn s() Future<!i32> { return S{}; }
+
+@async_fn
+fn await_in_while_condition() Future<!i32> {
+    while try @await s() > 0 {
+        // body
+    }
+    return 0;
+}
+
+fn main() i32 { return 0; }

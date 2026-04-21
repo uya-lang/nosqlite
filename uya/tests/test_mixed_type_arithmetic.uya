@@ -1,0 +1,142 @@
+// 混合类型算术运算测试程序
+use std.runtime.entry;
+// 测试 i32 和 usize 混合运算
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn add_usize(a: usize, b: usize) usize {
+    return a + b;
+}
+
+fn test_i32_plus_usize() !void {
+    var i32_val: i32 = 10;
+    var usize_val: usize = 20 as usize;
+    var result: usize = (i32_val as usize) + usize_val;
+    try expect(result == 30 as usize);
+}
+
+fn test_usize_plus_i32() !void {
+    var i32_val: i32 = 10;
+    var usize_val: usize = 20 as usize;
+    var result: usize = usize_val + (i32_val as usize);
+    try expect(result == 30 as usize);
+}
+
+fn test_i32_minus_usize() !void {
+    var i32_val: i32 = 10;
+    var result: usize = (i32_val as usize) - (5 as usize);
+    try expect(result == 5 as usize);
+}
+
+fn test_usize_minus_i32() !void {
+    var i32_val: i32 = 10;
+    var usize_val: usize = 20 as usize;
+    var result: usize = usize_val - (i32_val as usize);
+    try expect(result == 10 as usize);
+}
+
+fn test_i32_mul_usize() !void {
+    var i32_val: i32 = 10;
+    var usize_val: usize = 20 as usize;
+    var result: usize = (i32_val as usize) * usize_val;
+    try expect(result == 200 as usize);
+}
+
+fn test_usize_mul_i32() !void {
+    var i32_val: i32 = 10;
+    var usize_val: usize = 20 as usize;
+    var result: usize = usize_val * (i32_val as usize);
+    try expect(result == 200 as usize);
+}
+
+fn test_i32_div_usize() !void {
+    var i32_val: i32 = 20;
+    var usize_val: usize = 4 as usize;
+    var result: usize = (i32_val as usize) / usize_val;
+    try expect(result == 5 as usize);
+}
+
+fn test_usize_div_i32() !void {
+    var i32_val: i32 = 20;
+    var usize_val: usize = 4 as usize;
+    var result: usize = usize_val / (i32_val as usize);
+    try expect(result == 0 as usize);
+}
+
+fn test_i32_mod_usize() !void {
+    var i32_val: i32 = 17;
+    var usize_val: usize = 5 as usize;
+    var result: usize = (i32_val as usize) % usize_val;
+    try expect(result == 2 as usize);
+}
+
+fn test_usize_mod_i32() !void {
+    var i32_val: i32 = 17;
+    var usize_val: usize = 5 as usize;
+    var result: usize = usize_val % (i32_val as usize);
+    try expect(result == 5 as usize);
+}
+
+fn test_complex_mixed() !void {
+    var i32_val: i32 = 5;
+    var usize_val: usize = 3 as usize;
+    var result: usize = ((i32_val as usize) + usize_val) * (2 as usize);
+    try expect(result == 16 as usize);
+}
+
+fn test_mixed_in_function_call() !void {
+    var i32_val: i32 = 10;
+    var usize_val: usize = 20 as usize;
+    var result: usize = add_usize(i32_val as usize, usize_val);
+    try expect(result == 30 as usize);
+}
+
+fn test_mixed_in_condition() !void {
+    var i32_val: i32 = 10;
+    var usize_val: usize = 20 as usize;
+    try expect((i32_val as usize) < usize_val);
+}
+
+fn test_two_i32() !void {
+    var i32_val1: i32 = 10;
+    var i32_val2: i32 = 20;
+    var result: i32 = i32_val1 + i32_val2;
+    try expect(result == 30);
+}
+
+fn test_two_usize() !void {
+    var usize_val1: usize = 15 as usize;
+    var usize_val2: usize = 5 as usize;
+    var result: usize = usize_val1 + usize_val2;
+    try expect(result == 20 as usize);
+}
+
+fn test_sizeof_usize() !void {
+    var ptr_size: i32 = @size_of(&i32);
+    var usize_size: i32 = @size_of(usize);
+    try expect(usize_size == ptr_size);
+}
+
+export fn main() i32 {
+    test_suite_begin("Mixed Type Arithmetic Tests");
+    run_test("i32 + usize", test_i32_plus_usize);
+    run_test("usize + i32", test_usize_plus_i32);
+    run_test("i32 - usize", test_i32_minus_usize);
+    run_test("usize - i32", test_usize_minus_i32);
+    run_test("i32 * usize", test_i32_mul_usize);
+    run_test("usize * i32", test_usize_mul_i32);
+    run_test("i32 / usize", test_i32_div_usize);
+    run_test("usize / i32", test_usize_div_i32);
+    run_test("i32 % usize", test_i32_mod_usize);
+    run_test("usize % i32", test_usize_mod_i32);
+    run_test("complex mixed", test_complex_mixed);
+    run_test("mixed in function call", test_mixed_in_function_call);
+    run_test("mixed in condition", test_mixed_in_condition);
+    run_test("two i32", test_two_i32);
+    run_test("two usize", test_two_usize);
+    run_test("sizeof usize", test_sizeof_usize);
+    return test_suite_end();
+}

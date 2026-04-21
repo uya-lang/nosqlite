@@ -1,0 +1,54 @@
+// 测试 union 值类型结构体变体的嵌套依赖
+use std.runtime.entry;
+// 模拟 ASTNodeData 的复杂情况：结构体包含其他结构体字段
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+// 内层结构体（模拟 ASTNode 的基本字段）
+struct Location {
+    line: i32,
+    column: i32,
+}
+
+// 中间结构体（模拟 AST*Data 包含 Location 字段）
+struct ProgramData {
+    name: &byte,
+    location: Location,
+    decl_count: i32,
+}
+
+struct BinaryExprData {
+    location: Location,
+    op: i32,
+}
+
+// Union 包含值类型结构体变体
+union NodeData {
+    program: ProgramData,
+    binary_expr: BinaryExprData,
+}
+
+fn test_union_nested_deps() !void {
+    var pd: ProgramData = ProgramData{ 
+        name: "test" as &byte, 
+        location: Location{ line: 10, column: 20 },
+        decl_count: 5 
+    };
+    var nd: NodeData = NodeData.program(pd);
+    
+    const result: i32 = match nd {
+        .program(p) => p.location.line + p.location.column + p.decl_count,
+        .binary_expr(b) => b.location.line + b.op,
+    };
+    try assert_eq_i32(result, 35);  // 10 + 20 + 5
+}
+
+export fn main() i32 {
+    test_suite_begin("Union Nested Deps Tests");
+    run_test("union nested deps", test_union_nested_deps);
+    return test_suite_end();
+}

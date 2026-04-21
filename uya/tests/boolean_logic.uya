@@ -1,0 +1,39 @@
+// 布尔逻辑测试
+// 测试布尔类型、逻辑运算符（&&, ||, !）和比较运算符
+
+use std.testing.expect;
+
+fn is_positive(n: i32) bool {
+    return n > 0;
+}
+
+fn is_even(n: i32) bool {
+    return (n % 2) == 0;
+}
+
+test "test_is_positive" {
+    try expect(is_positive(10));
+    try expect(!is_positive(-5));
+    try expect(!is_positive(0));
+}
+
+test "test_is_even" {
+    try expect(is_even(10));
+    try expect(!is_even(7));
+}
+
+test "test_logical_or" {
+    const x: i32 = 10;
+    const pos: bool = is_positive(x);
+    try expect(false || pos);
+}
+
+test "test_logical_and" {
+    try expect(true && true);
+    try expect(!(true && false));
+}
+
+test "test_logical_not" {
+    try expect(!false);
+    try expect(!!true);
+}

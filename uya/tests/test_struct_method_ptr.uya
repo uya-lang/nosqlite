@@ -1,0 +1,31 @@
+// 结构体方法 + 指针 receiver：通过 &T 调用
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Box {
+  n: i32
+}
+
+Box {
+  fn get(self: &Self) i32 {
+    return self.n;
+  }
+}
+
+fn test_ptr_receiver() !void {
+  var b: Box = Box{ n: 42 };
+  const ptr: &Box = &b;
+  const n: i32 = ptr.get();
+  try assert_eq_i32(n, 42);
+}
+
+export fn main() i32 {
+  test_suite_begin("Struct Method Ptr Tests");
+  run_test("ptr receiver", test_ptr_receiver);
+  return test_suite_end();
+}

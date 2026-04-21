@@ -1,0 +1,28 @@
+// 重复数组字面量 [value: N]
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+fn test_zero_repeat() !void {
+    var arr: [i32: 5] = [0: 5];
+    try assert_eq_i32(arr[0], 0);
+    try assert_eq_i32(arr[4], 0);
+}
+
+fn test_value_repeat() !void {
+    var arr: [i32: 5] = [42: 5];
+    try assert_eq_i32(arr[0], 42);
+    try assert_eq_i32(arr[4], 42);
+}
+
+export fn main() i32 {
+    test_suite_begin("Array Repeat Tests");
+    
+    run_test("zero repeat", test_zero_repeat);
+    run_test("value repeat", test_value_repeat);
+    
+    return test_suite_end();
+}

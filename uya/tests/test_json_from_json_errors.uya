@@ -1,0 +1,28 @@
+// 测试 std.json from_json 相关错误路径：json_object_find_index 缺 key 返回 MissingField
+use std.runtime.entry;
+use std.json.value.JsonValue;
+use std.json.parser.parse;
+use std.json.encoder.json_object_find_index;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+
+export fn main() i32 {
+    var arena_buf: [byte: 8192] = [];
+    var a: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&a, &arena_buf[0], 8192);
+
+    // {} 空对象，按 key "x" 取 value 应返回 error.MissingField
+    var buf: [byte: 8] = [];
+    buf[0] = 123;
+    buf[1] = 125;
+    const v: JsonValue = parse(&a, &buf[0], 2) catch { return 1; };
+    match v {
+        .obj(o) => {
+            var kx: [byte: 1] = [];
+            kx[0] = 120;
+            json_object_find_index(&o, &kx[0], 1) catch { return 0; };
+            return 2;
+        },
+        else => { return 3; },
+    }
+}

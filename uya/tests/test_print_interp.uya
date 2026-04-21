@@ -1,0 +1,63 @@
+// test_print_interp.uya - @print/@println 字符串插值测试
+use std.runtime.entry;
+// 测试 @print/@println 与字符串插值的结合
+
+export fn main() i32 {
+    // 基础整数插值
+    const a: i32 = 42;
+    const b: i32 = 100;
+    @println("a = ${a}");
+    @println("a = ${a}, b = ${b}");
+    @println("sum = ${a + b}");
+    @println("diff = ${a - b}");
+    @println("product = ${a * b}");
+    
+    // 浮点数插值
+    const f1: f64 = 3.14159;
+    const f2: f64 = 2.71828;
+    @println("f1 = ${f1}");
+    @println("f1 = ${f1}, f2 = ${f2}");
+    @println("f1 + f2 = ${f1 + f2}");
+    
+    // 浮点数格式化
+    @println("f1 = ${f1:.0f}");      // 无小数
+    @println("f1 = ${f1:.2f}");      // 2位小数
+    @println("f1 = ${f1:.4f}");      // 4位小数
+    
+    // 布尔插值
+    const flag1: bool = true;
+    const flag2: bool = false;
+    @println("flag1 = ${flag1}");
+    @println("flag2 = ${flag2}");
+    @println("flag1 && flag2 = ${flag1 && flag2}");
+    @println("flag1 || flag2 = ${flag1 || flag2}");
+    
+    // 十六进制格式
+    const hex_num: i32 = 255;
+    @println("hex = ${hex_num:#x}");   // 小写十六进制
+    @println("HEX = ${hex_num:#X}");   // 大写十六进制
+    @println("hex padded = ${hex_num:#06x}"); // 带前导零
+    
+    // 八进制格式
+    @println("octal = ${hex_num:#o}");
+    
+    // 多变量复杂表达式
+    const x: i32 = 10;
+    const y: i32 = 20;
+    const z: i32 = 30;
+    @println("x=${x}, y=${y}, z=${z}");
+    @println("x+y+z=${x + y + z}");
+    @println("x*y=${x * y}, y*z=${y * z}");
+    
+    // @print 不换行插值
+    @print("Name: ");
+    @print("Uya");
+    @print(", Version: ");
+    @print("0.5.5");
+    @println(""); // 换行
+    
+    // 连续插值
+    @println("${a}${b}${a + b}");
+    
+    return 0;
+}

@@ -1,0 +1,32 @@
+// 结构体内定义多个方法
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Calc {
+  acc: i32,
+  fn add(self: &Self, x: i32) void {
+    self.acc = self.acc + x;
+  },
+  fn get(self: &Self) i32 {
+    return self.acc;
+  }
+}
+
+fn test_inner_multi_methods() !void {
+  var c: Calc = Calc{ acc: 0 };
+  c.add(10);
+  c.add(20);
+  const n: i32 = c.get();
+  try assert_eq_i32(n, 30);
+}
+
+export fn main() i32 {
+  test_suite_begin("Struct Inner Method Multi Tests");
+  run_test("inner multi methods", test_inner_multi_methods);
+  return test_suite_end();
+}

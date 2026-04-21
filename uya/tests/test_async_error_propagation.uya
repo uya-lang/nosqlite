@@ -1,0 +1,37 @@
+// test_async_error_propagation.uya
+// 验证 try @await 会把子 future 的 Ready(error) 直接传播给外层 Future<!T>。
+
+use std.async;
+use std.testing.expect;
+
+error Foo;
+
+fn err_ready_i32() Future<!i32> {
+    const p: Poll<!i32> = Poll<!i32>.Ready(error.Foo);
+    return Future<!i32>{ state: p };
+}
+
+@async_fn
+fn await_err_ready_should_propagate() Future<!i32> {
+    const _f: i32 = try @await err_ready_i32();
+    _ = _f;
+    return 1;
+}
+
+test "await_ready_error_propagates" {
+    const f: Future<!i32> = await_err_ready_should_propagate();
+    const w: Waker = Waker{};
+    const p: Poll<!i32> = f.poll(&w);
+    var got_error: bool = false;
+    match p {
+        .Ready(r) => {
+            _ = r catch {
+                got_error = true;
+                0;
+            };
+        },
+        .Pending(_) => { },
+    };
+    try expect(got_error);
+}
+

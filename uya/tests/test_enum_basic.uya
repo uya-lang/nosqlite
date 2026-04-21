@@ -1,0 +1,14 @@
+// 枚举类型基本测试
+
+use std.testing.expect;
+
+enum Color {
+    RED,
+    GREEN,
+    BLUE,
+}
+
+test "enum value" {
+    const c: Color = Color.RED;
+    try expect(c == Color.RED);
+}

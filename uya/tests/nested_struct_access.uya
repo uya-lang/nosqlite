@@ -1,0 +1,81 @@
+// 嵌套结构体访问测试
+use std.runtime.entry;
+// 测试深层嵌套的结构体字段访问
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Rect {
+    top_left: Point,
+    bottom_right: Point,
+}
+
+struct Box {
+    rect: Rect,
+    depth: i32,
+}
+
+fn get_point_x(p: Point) i32 {
+    return p.x;
+}
+
+fn get_rect_width(r: Rect) i32 {
+    return r.bottom_right.x - r.top_left.x;
+}
+
+fn test_nested_access() !void {
+    const p1: Point = Point{ x: 10, y: 20 };
+    const p2: Point = Point{ x: 50, y: 60 };
+    const rect: Rect = Rect{ top_left: p1, bottom_right: p2 };
+    const box: Box = Box{ rect: rect, depth: 30 };
+    
+    try assert_eq_i32(box.rect.top_left.x, 10);
+    try assert_eq_i32(box.rect.bottom_right.y, 60);
+    
+    const width: i32 = box.rect.bottom_right.x - box.rect.top_left.x;
+    try assert_eq_i32(width, 40);
+}
+
+fn test_struct_assignment_access() !void {
+    const p1: Point = Point{ x: 10, y: 20 };
+    const p2: Point = Point{ x: 50, y: 60 };
+    const rect: Rect = Rect{ top_left: p1, bottom_right: p2 };
+    const box: Box = Box{ rect: rect, depth: 30 };
+    
+    var new_box: Box = box;
+    try assert_eq_i32(new_box.rect.top_left.x, 10);
+    try assert_eq_i32(new_box.rect.bottom_right.y, 60);
+}
+
+fn test_func_nested_param() !void {
+    const p1: Point = Point{ x: 10, y: 20 };
+    const p2: Point = Point{ x: 50, y: 60 };
+    const rect: Rect = Rect{ top_left: p1, bottom_right: p2 };
+    const box: Box = Box{ rect: rect, depth: 30 };
+    
+    var new_box: Box = box;
+    const rect_width: i32 = get_rect_width(new_box.rect);
+    try assert_eq_i32(rect_width, 40);
+}
+
+fn test_func_nested_access() !void {
+    const px: Point = Point{ x: 10, y: 20 };
+    const x: i32 = get_point_x(px);
+    try assert_eq_i32(x, 10);
+}
+
+export fn main() i32 {
+    test_suite_begin("Nested Struct Access Tests");
+    run_test("nested access", test_nested_access);
+    run_test("struct assignment access", test_struct_assignment_access);
+    run_test("func nested param", test_func_nested_param);
+    run_test("func nested access", test_func_nested_access);
+    return test_suite_end();
+}

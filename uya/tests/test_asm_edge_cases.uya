@@ -1,0 +1,106 @@
+// test_asm_edge_cases.uya - @asm 边界情况测试
+
+// 测试空指令字符串
+test "asm empty instruction" {
+    var x: i32 = 0;
+    @asm {
+        "" (-> x);
+    }
+}
+
+// 测试最大输入数量（8个）
+test "asm max inputs" {
+    var a1: i32 = 1;
+    var a2: i32 = 2;
+    var a3: i32 = 3;
+    var a4: i32 = 4;
+    var a5: i32 = 5;
+    var a6: i32 = 6;
+    var a7: i32 = 7;
+    var a8: i32 = 8;
+    var result: i32 = 0;
+    @asm {
+        "nop" (a1, a2, a3, a4, a5, a6, a7, a8, -> result);
+    }
+}
+
+// 测试最大输出数量（8个）
+test "asm max outputs" {
+    var a1: i32 = 0;
+    var a2: i32 = 0;
+    var a3: i32 = 0;
+    var a4: i32 = 0;
+    var a5: i32 = 0;
+    var a6: i32 = 0;
+    var a7: i32 = 0;
+    var a8: i32 = 0;
+    @asm {
+        "nop" (-> a1, a2, a3, a4, a5, a6, a7, a8);
+    }
+}
+
+// 测试最大输入输出组合
+test "asm max inputs and outputs" {
+    var a1: i32 = 1;
+    var a2: i32 = 2;
+    var a3: i32 = 3;
+    var a4: i32 = 4;
+    var o1: i32 = 0;
+    var o2: i32 = 0;
+    var o3: i32 = 0;
+    var o4: i32 = 0;
+    @asm {
+        "nop" (a1, a2, a3, a4, -> o1, o2, o3, o4);
+    }
+}
+
+// 测试最大 clobber 数量
+test "asm many clobbers" {
+    var x: i32 = 0;
+    @asm {
+        "nop" (-> x);
+    } clobbers = ["rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "memory"];
+}
+
+// 测试 if 语句中使用 @asm
+test "asm in if" {
+    var x: i32 = 0;
+    if true {
+        @asm {
+            "nop" (-> x);
+        }
+    }
+}
+
+// 测试 while 语句中使用 @asm
+test "asm in while" {
+    var i: i32 = 0;
+    var count: i32 = 0;
+    while i < 3 {
+        @asm {
+            "nop" (count, -> count);
+        }
+        i = i + 1;
+    }
+}
+
+// 测试 for 循环中使用 @asm
+test "asm in for" {
+    var total: i32 = 0;
+    for 0..3 |i| {
+        @asm {
+            "nop" (total, i, -> total);
+        }
+    }
+}
+
+// 测试 defer 后使用 @asm
+test "asm after defer" {
+    var x: i32 = 0;
+    defer {
+        x = 0;
+    }
+    @asm {
+        "nop" (-> x);
+    }
+}
