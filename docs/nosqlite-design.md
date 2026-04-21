@@ -440,6 +440,14 @@ SnapshotPressurePolicy {
    新建流式 cursor 可以失败并返回 `error.SnapshotPressure`
 3. 超过 `cursor_lease_ms`
    `QueryCursor.next()` 可返回 `error.CursorExpired`
+4. 超过 `hard_retired_bytes`
+   新写事务不得继续无限制提交；实现必须选择“阻塞等待回收”或返回 `error.SnapshotPressure`
+
+写侧规则：
+
+- 生产配置下，`hard_retired_bytes` 是写路径硬约束，不只是读路径告警
+- 当 retired 资源超过 hard limit 时，写者必须被 backpressure，而不是继续制造更多 retired 页面
+- 只有 checkpoint / 回收让 retired 资源回落到安全区后，普通写事务才可恢复
 
 设计意图：
 
@@ -472,6 +480,46 @@ v1.5 增加二级索引：
 - 复合索引
 - GIN
 - HASH
+
+#### 6.5.1 数值索引键规范
+
+二级索引上的数值排序和等值判断，必须与执行器里的无损数值比较规则一致。
+
+因此，v1.5 若支持对数值 path 建索引，必须先定义 canonical numeric key encoding。
+
+```text
+IndexKey {
+  key_kind:    u8        // NULL / BOOL / STRING / NUMBER / ...
+  payload_len: u32
+  payload:     [byte: payload_len]
+}
+```
+
+对于 `NUMBER`：
+
+```text
+NumericKeyPayload {
+  sign:        u8        // 0 = negative, 1 = zero, 2 = positive
+  scale:       i32       // 10 进制小数位偏移
+  ndigits:     u32
+  digits:      [byte: ndigits]   // 规范化十进制数字串，无前导零
+}
+```
+
+规范化规则：
+
+1. `INT64`
+   转成十进制整数后再进入 canonical encoding
+2. `NUMBER_TEXT`
+   解析为无损十进制 / bigint 表示，再进入 canonical encoding
+3. `1`、`1.0`、`1e0`
+   若语义相等，则必须产生相同的 `NumericKeyPayload`
+
+这保证：
+
+- 索引等值查找和执行器等值比较一致
+- 数值 `ORDER BY` 的索引顺序与执行器排序一致
+- 不会因为 `INT64` / `NUMBER_TEXT` 双表示而出现语义分叉
 
 ### 6.6 Uya 特性落地策略
 
@@ -768,6 +816,26 @@ MetaPage {
 - 不兼容升级：必须通过显式 upgrade 路径完成
 - 不兼容升级后的降级不保证可行；回滚依赖升级前备份/快照
 
+### 7.2.2 校验和协议
+
+量产格式必须固定 checksum 协议，避免不同实现各自解释。
+
+v1 统一规则：
+
+- 算法：`CRC32`（IEEE），直接复用 `std.crypto.crc32`
+- 适用对象：`MetaPage`、`PageHeader + page body`、`WalHeader`、`WalPageWrite`、`WalCommit`、`CatalogRoot`
+- 校验时：对象内 `checksum` 字段先置零，再对其余字节做 CRC32
+- 校验失败：默认 fail-fast；不得静默忽略并继续运行
+
+策略：
+
+1. `MetaPage` 校验失败
+   尝试另一份 meta；若两份都失败，则拒绝打开
+2. WAL 记录校验失败
+   启动恢复时截断到最后一条完整且已校验通过的记录边界
+3. 数据页校验失败
+   查询直接返回数据损坏错误，不得伪造空结果
+
 ### 7.3 通用页头
 
 ```text
@@ -827,6 +895,28 @@ RecordCell {
 ### 8.1 WAL 记录类型
 
 v1 WAL 采用 redo-only after-image。
+
+WAL 文件头：
+
+```text
+WalHeader {
+  magic:              [byte: 4]   // "NSWL"
+  format_version:     u32
+  min_reader_version: u32
+  feature_flags:      u64
+  page_size:          u32
+  header_checksum:    u32
+}
+```
+
+打开数据库时必须同时校验：
+
+1. 主文件 `MetaPage.format_version`
+2. `WalHeader.format_version`
+3. 两者 `page_size` 一致
+4. 两者的必需 `feature_flags` 都被当前二进制支持
+
+若不满足以上条件，必须 fail-fast，禁止“尽量恢复”。
 
 记录类型：
 

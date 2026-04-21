@@ -55,6 +55,7 @@
 - [ ] 为锁与 pin 路径补 `drop` 自动释放
 - [ ] 定义 `SnapshotPressurePolicy`
 - [ ] 定义 cursor lease 语义
+- [ ] 实现 snapshot pressure 对写侧的 backpressure
 - [ ] 实现空闲页链表
 - [ ] 实现 slotted page 插入
 - [ ] 实现 slotted page 读回
@@ -64,6 +65,7 @@
 
 - [ ] 增加 `fsync/fdatasync` OS 封装
 - [ ] 定义 WAL 文件头
+- [ ] 在 WAL 文件头中加入 `format_version/min_reader_version/feature_flags`
 - [ ] 定义 `BEGIN/PAGE_WRITE/COMMIT/CHECKPOINT` 记录
 - [ ] 定义 `WalCommit` 中的数据库级元数据
 - [ ] 定义 `WalBatch`
@@ -73,6 +75,7 @@
 - [ ] 实现 `fdatasync(wal)` durability barrier
 - [ ] 实现 `fdatasync(db)` durability barrier
 - [ ] 为 open/commit/recovery 路径补 `errdefer`
+- [ ] 固定 checksum 算法与覆盖范围
 - [ ] 实现启动恢复扫描
 - [ ] 实现仅重放已提交事务
 - [ ] 实现 `meta.commit_lsn` 之后的 redo
@@ -101,6 +104,7 @@
 
 - [ ] 定义 B+Tree 内部页格式
 - [ ] 定义 B+Tree 叶子页格式
+- [ ] 定义 canonical numeric index key encoding
 - [ ] 实现叶子查找
 - [ ] 实现叶子插入
 - [ ] 实现叶子分裂
@@ -174,6 +178,7 @@
 - [ ] 实现 `hard_retired_bytes` 限流/拒绝策略
 - [ ] 实现 cursor lease 到期失效
 - [ ] 确认提交期间旧读者不中断
+- [ ] 验证 hard snapshot pressure 下写侧会 backpressure
 - [ ] 编写“长查询 + 并发提交”测试
 
 ## Phase 10 - 写路径 v1
@@ -220,6 +225,8 @@
 - [ ] 验证 snapshot pressure 触发后资源仍保持有界
 - [ ] 验证 checkpoint 策略能把 WAL 控制在策略阈值内
 - [ ] 验证大整数 / 精确小数不会发生静默降精度
+- [ ] 验证数值索引顺序与执行器比较语义一致
+- [ ] 验证 WAL/header/page checksum 失败时 fail-fast 或安全截断
 - [ ] 增加文档示例
 - [ ] 增加 API 使用示例
 - [ ] 完成 v1 里程碑验收
