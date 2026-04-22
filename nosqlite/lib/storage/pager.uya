@@ -1,6 +1,33 @@
 // lib.storage - pager 策略与状态骨架
 // 模块路径：lib/storage/pager.uya → use lib.storage;
 
+use std.mem.mem.mem_copy;
+use std.mem.mem.mem_set;
+use std.string.strlen;
+use osal.File;
+use osal.os_open;
+use osal.os_close;
+use osal.os_read;
+use osal.os_write;
+use osal.os_seek;
+use osal.os_unlink;
+use libc.O_RDONLY;
+use libc.O_RDWR;
+use libc.O_CREAT;
+use libc.O_EXCL;
+use libc.SEEK_SET;
+use lib.core.NOSQLITE_FORMAT_VERSION_V1;
+use lib.core.NOSQLITE_META_SLOT_A;
+use lib.core.NOSQLITE_META_SLOT_B;
+use lib.core.NOSQLITE_PAGE_SIZE_DEFAULT;
+use lib.core.page_size_is_supported;
+
+export error PagerPathTooLong;
+export error PagerBadPageSize;
+export error PagerIoError;
+export error PagerNoValidMeta;
+export error PagerInvalidWalHeader;
+
 export struct SnapshotPressurePolicy {
     soft_retired_bytes: u64,
     hard_retired_bytes: u64,
@@ -26,6 +53,344 @@ export struct PagerStats {
     retired_views: u32,
     retired_bytes: u64,
     wal_bytes: u64,
+}
+
+export struct PagerOpenInfo {
+    meta: MetaPage,
+    wal_header: WalHeader,
+}
+
+const NOSQLITE_FILE_MODE: u32 = 0o644;
+const NOSQLITE_PATH_BUF_SIZE: usize = 512;
+const NOSQLITE_INITIAL_PAGE_COUNT: u32 = 3;
+const NOSQLITE_INITIAL_CATALOG_ROOT: u32 = 2;
+
+export fn pager_db_extension() &[byte] {
+    return &".nsq"[0: 4];
+}
+
+export fn pager_wal_extension() &[byte] {
+    return &".wal"[0: 4];
+}
+
+fn pager_build_path(stem: &const byte, ext: &[byte], out: &[byte]) !void {
+    if stem == null || out.ptr == null {
+        return error.PagerPathTooLong;
+    }
+    const stem_len: usize = strlen(stem);
+    if out.len < stem_len + ext.len + 1 {
+        return error.PagerPathTooLong;
+    }
+    if stem_len > 0 {
+        _ = mem_copy(out.ptr, stem, stem_len);
+    }
+    if ext.len > 0 {
+        _ = mem_copy(&out.ptr[stem_len], ext.ptr, ext.len);
+    }
+    out.ptr[stem_len + ext.len] = 0 as byte;
+}
+
+export fn pager_build_db_path(stem: &const byte, out: &[byte]) !void {
+    try pager_build_path(stem, pager_db_extension(), out);
+}
+
+export fn pager_build_wal_path(stem: &const byte, out: &[byte]) !void {
+    try pager_build_path(stem, pager_wal_extension(), out);
+}
+
+export fn pager_next_meta_slot(slot: u32) !u32 {
+    if slot == NOSQLITE_META_SLOT_A {
+        return NOSQLITE_META_SLOT_B;
+    }
+    if slot == NOSQLITE_META_SLOT_B {
+        return NOSQLITE_META_SLOT_A;
+    }
+    return error.PagerNoValidMeta;
+}
+
+fn pager_make_initial_meta(page_size: u32) MetaPage {
+    var magic: [byte: 4] = [];
+    magic[0] = 78 as byte;
+    magic[1] = 83 as byte;
+    magic[2] = 81 as byte;
+    magic[3] = 76 as byte;
+    var meta: MetaPage = MetaPage{
+        magic: magic,
+        format_version: NOSQLITE_FORMAT_VERSION_V1,
+        min_reader_version: NOSQLITE_FORMAT_VERSION_V1,
+        feature_flags: 0,
+        page_size: page_size,
+        generation: 1,
+        commit_lsn: 0,
+        checkpoint_lsn: 0,
+        page_count: NOSQLITE_INITIAL_PAGE_COUNT,
+        catalog_root: NOSQLITE_INITIAL_CATALOG_ROOT,
+        freelist_head: 0,
+        active_meta_slot: NOSQLITE_META_SLOT_A,
+        checksum: 0,
+    };
+    meta_page_finalize_checksum(&meta);
+    return meta;
+}
+
+fn pager_make_initial_wal_header(page_size: u32) WalHeader {
+    var magic: [byte: 4] = [];
+    magic[0] = 78 as byte;
+    magic[1] = 83 as byte;
+    magic[2] = 87 as byte;
+    magic[3] = 76 as byte;
+    var header: WalHeader = WalHeader{
+        magic: magic,
+        format_version: NOSQLITE_FORMAT_VERSION_V1,
+        min_reader_version: NOSQLITE_FORMAT_VERSION_V1,
+        feature_flags: 0,
+        page_size: page_size,
+        header_checksum: 0,
+    };
+    wal_header_finalize_checksum(&header);
+    return header;
+}
+
+fn pager_copy_meta(page: &MetaPage) MetaPage {
+    var magic: [byte: 4] = [];
+    if page != null {
+        magic[0] = page.magic[0];
+        magic[1] = page.magic[1];
+        magic[2] = page.magic[2];
+        magic[3] = page.magic[3];
+    }
+    if page == null {
+        return MetaPage{};
+    }
+    return MetaPage{
+        magic: magic,
+        format_version: page.format_version,
+        min_reader_version: page.min_reader_version,
+        feature_flags: page.feature_flags,
+        page_size: page.page_size,
+        generation: page.generation,
+        commit_lsn: page.commit_lsn,
+        checkpoint_lsn: page.checkpoint_lsn,
+        page_count: page.page_count,
+        catalog_root: page.catalog_root,
+        freelist_head: page.freelist_head,
+        active_meta_slot: page.active_meta_slot,
+        checksum: page.checksum,
+    };
+}
+
+fn pager_open_file(path: &const byte, flags: i64, mode: u32) !File {
+    const fd: i32 = os_open(path, flags, mode) catch {
+        return error.PagerIoError;
+    };
+    return File{
+        fd: fd,
+        owns_fd: true,
+    };
+}
+
+fn pager_seek_exact(file: &File, offset: i64) !void {
+    _ = os_seek(file, offset, SEEK_SET) catch {
+        return error.PagerIoError;
+    };
+}
+
+fn pager_write_all(file: &File, data: &[byte]) !void {
+    if file == null || data.ptr == null {
+        return error.PagerIoError;
+    }
+    var written: usize = 0;
+    while written < data.len {
+        const n: usize = os_write(file, &data.ptr[written], data.len - written) catch {
+            return error.PagerIoError;
+        };
+        if n == 0 {
+            return error.PagerIoError;
+        }
+        written = written + n;
+    }
+}
+
+fn pager_read_exact(file: &File, data: &[byte]) !void {
+    if file == null || data.ptr == null {
+        return error.PagerIoError;
+    }
+    var filled: usize = 0;
+    while filled < data.len {
+        const n: usize = os_read(file, &data.ptr[filled], data.len - filled) catch {
+            return error.PagerIoError;
+        };
+        if n == 0 {
+            return error.PagerIoError;
+        }
+        filled = filled + n;
+    }
+}
+
+fn pager_read_meta_at(file: &File, offset: i64) !MetaPage {
+    var buf: [byte: 68] = [];
+    try pager_seek_exact(file, offset);
+    try pager_read_exact(file, buf[0: meta_page_encoded_size()]);
+    return meta_page_decode(buf[0: meta_page_encoded_size()]);
+}
+
+fn pager_read_wal_header(file: &File) !WalHeader {
+    var buf: [byte: 28] = [];
+    try pager_seek_exact(file, 0);
+    try pager_read_exact(file, buf[0: wal_header_encoded_size()]);
+    return wal_header_decode(buf[0: wal_header_encoded_size()]);
+}
+
+fn pager_meta_valid_for_slot(page: &MetaPage, slot: u32) bool {
+    return meta_page_supported(page) &&
+        meta_page_checksum_valid(page) &&
+        meta_page_slot_matches_physical(page, slot);
+}
+
+fn pager_probe_meta_b_only(db: &File) !MetaPage {
+    const meta_b_4k: MetaPage = pager_read_meta_at(db, NOSQLITE_PAGE_SIZE_DEFAULT as i64) catch {
+        const meta_b_8k: MetaPage = pager_read_meta_at(db, 8192) catch {
+            return error.PagerNoValidMeta;
+        };
+        if !pager_meta_valid_for_slot(&meta_b_8k, NOSQLITE_META_SLOT_B) {
+            return error.PagerNoValidMeta;
+        }
+        return meta_b_8k;
+    };
+    if pager_meta_valid_for_slot(&meta_b_4k, NOSQLITE_META_SLOT_B) {
+        return meta_b_4k;
+    }
+    const meta_b_8k: MetaPage = pager_read_meta_at(db, 8192) catch {
+        return error.PagerNoValidMeta;
+    };
+    if !pager_meta_valid_for_slot(&meta_b_8k, NOSQLITE_META_SLOT_B) {
+        return error.PagerNoValidMeta;
+    }
+    return meta_b_8k;
+}
+
+export fn pager_select_latest_meta(meta_a: &MetaPage, meta_b: &MetaPage) !MetaPage {
+    const a_ok: bool = pager_meta_valid_for_slot(meta_a, NOSQLITE_META_SLOT_A);
+    const b_ok: bool = pager_meta_valid_for_slot(meta_b, NOSQLITE_META_SLOT_B);
+    if a_ok && b_ok {
+        if meta_b.generation > meta_a.generation {
+            return pager_copy_meta(meta_b);
+        }
+        if meta_a.generation > meta_b.generation {
+            return pager_copy_meta(meta_a);
+        }
+        if meta_b.commit_lsn > meta_a.commit_lsn {
+            return pager_copy_meta(meta_b);
+        }
+        return pager_copy_meta(meta_a);
+    }
+    if a_ok {
+        return pager_copy_meta(meta_a);
+    }
+    if b_ok {
+        return pager_copy_meta(meta_b);
+    }
+    return error.PagerNoValidMeta;
+}
+
+fn pager_probe_selected_meta(db: &File) !MetaPage {
+    const meta_a: MetaPage = pager_read_meta_at(db, 0) catch {
+        return try pager_probe_meta_b_only(db);
+    };
+    if !pager_meta_valid_for_slot(&meta_a, NOSQLITE_META_SLOT_A) {
+        return try pager_probe_meta_b_only(db);
+    }
+    const meta_b: MetaPage = pager_read_meta_at(db, meta_a.page_size as i64) catch {
+        return meta_a;
+    };
+    return (pager_select_latest_meta(&meta_a, &meta_b) catch {
+        return meta_a;
+    });
+}
+
+export fn pager_create_at_stem(stem: &const byte, page_size: u32) !PagerOpenInfo {
+    if !page_size_is_supported(page_size) {
+        return error.PagerBadPageSize;
+    }
+
+    var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    var wal_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
+    try pager_build_wal_path(stem, wal_path[0: NOSQLITE_PATH_BUF_SIZE]);
+
+    var db: File = try pager_open_file(&db_path[0], O_RDWR | O_CREAT | O_EXCL, NOSQLITE_FILE_MODE);
+    errdefer {
+        _ = os_close(&db) catch {};
+        _ = os_unlink(&db_path[0]) catch {};
+    }
+
+    var wal: File = try pager_open_file(&wal_path[0], O_RDWR | O_CREAT | O_EXCL, NOSQLITE_FILE_MODE);
+    errdefer {
+        _ = os_close(&wal) catch {};
+        _ = os_unlink(&wal_path[0]) catch {};
+    }
+
+    const meta: MetaPage = pager_make_initial_meta(page_size);
+    const wal_header: WalHeader = pager_make_initial_wal_header(page_size);
+
+    var page_buf: [byte: 8192] = [];
+    const page_bytes: &[byte] = page_buf[0: page_size as usize];
+    _ = mem_set(page_bytes.ptr, 0, page_bytes.len);
+    try meta_page_encode(&meta, page_bytes);
+    try pager_write_all(&db, page_bytes);
+
+    _ = mem_set(page_bytes.ptr, 0, page_bytes.len);
+    try pager_write_all(&db, page_bytes);
+
+    _ = mem_set(page_bytes.ptr, 0, page_bytes.len);
+    try pager_write_all(&db, page_bytes);
+
+    var wal_buf: [byte: 28] = [];
+    const wal_bytes: &[byte] = wal_buf[0: wal_header_encoded_size()];
+    try wal_header_encode(&wal_header, wal_bytes);
+    try pager_write_all(&wal, wal_bytes);
+
+    try os_close(&wal);
+    try os_close(&db);
+
+    return PagerOpenInfo{
+        meta: meta,
+        wal_header: wal_header,
+    };
+}
+
+export fn pager_open_at_stem(stem: &const byte) !PagerOpenInfo {
+    var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    var wal_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
+    try pager_build_wal_path(stem, wal_path[0: NOSQLITE_PATH_BUF_SIZE]);
+
+    var db: File = try pager_open_file(&db_path[0], O_RDONLY, 0);
+    errdefer {
+        _ = os_close(&db) catch {};
+    }
+
+    var wal: File = try pager_open_file(&wal_path[0], O_RDONLY, 0);
+    errdefer {
+        _ = os_close(&wal) catch {};
+    }
+
+    const meta: MetaPage = try pager_probe_selected_meta(&db);
+    const wal_header: WalHeader = try pager_read_wal_header(&wal);
+    if !wal_header_supported(&wal_header) ||
+        !wal_header_checksum_valid(&wal_header) ||
+        !wal_header_page_size_matches(&wal_header, meta.page_size) ||
+        wal_header.feature_flags != meta.feature_flags {
+        return error.PagerInvalidWalHeader;
+    }
+
+    try os_close(&wal);
+    try os_close(&db);
+
+    return PagerOpenInfo{
+        meta: meta,
+        wal_header: wal_header,
+    };
 }
 
 export fn snapshot_pressure_soft(policy: &SnapshotPressurePolicy, status: &SnapshotPressureStatus) bool {

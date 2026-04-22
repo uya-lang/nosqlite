@@ -6,6 +6,10 @@ use lib.core.NOSQLITE_META_SLOT_A;
 use lib.core.NOSQLITE_META_SLOT_B;
 use lib.core.page_size_is_supported;
 
+export error MetaPageInvalidBuffer;
+
+export const META_PAGE_ENCODED_SIZE: usize = 68;
+
 export struct MetaPage {
     magic: [byte: 4],
     format_version: u32,
@@ -26,6 +30,10 @@ export fn meta_page_size() usize {
     return @size_of(MetaPage) as usize;
 }
 
+export fn meta_page_encoded_size() usize {
+    return META_PAGE_ENCODED_SIZE;
+}
+
 export fn meta_page_slot_valid(slot: u32) bool {
     return slot == NOSQLITE_META_SLOT_A || slot == NOSQLITE_META_SLOT_B;
 }
@@ -42,6 +50,121 @@ export fn meta_page_supported(page: &MetaPage) bool {
     return meta_page_magic_valid(page) &&
         page.format_version == NOSQLITE_FORMAT_VERSION_V1 &&
         page.min_reader_version <= NOSQLITE_FORMAT_VERSION_V1 &&
+        page.feature_flags == 0 &&
         page_size_is_supported(page.page_size) &&
         meta_page_slot_valid(page.active_meta_slot);
+}
+
+export fn meta_page_slot_matches_physical(page: &MetaPage, physical_slot: u32) bool {
+    return page != null && page.active_meta_slot == physical_slot;
+}
+
+fn meta_page_store_u32_le(out: &[byte], off: usize, value: u32) void {
+    out.ptr[off] = ((value & 255u32) as! byte).value;
+    out.ptr[off + 1] = (((value >> 8) & 255u32) as! byte).value;
+    out.ptr[off + 2] = (((value >> 16) & 255u32) as! byte).value;
+    out.ptr[off + 3] = (((value >> 24) & 255u32) as! byte).value;
+}
+
+fn meta_page_store_u64_le(out: &[byte], off: usize, value: u64) void {
+    out.ptr[off] = ((value & 255u64) as! byte).value;
+    out.ptr[off + 1] = (((value >> 8) & 255u64) as! byte).value;
+    out.ptr[off + 2] = (((value >> 16) & 255u64) as! byte).value;
+    out.ptr[off + 3] = (((value >> 24) & 255u64) as! byte).value;
+    out.ptr[off + 4] = (((value >> 32) & 255u64) as! byte).value;
+    out.ptr[off + 5] = (((value >> 40) & 255u64) as! byte).value;
+    out.ptr[off + 6] = (((value >> 48) & 255u64) as! byte).value;
+    out.ptr[off + 7] = (((value >> 56) & 255u64) as! byte).value;
+}
+
+fn meta_page_load_u32_le(data: &[byte], off: usize) u32 {
+    return (data.ptr[off] as u32) |
+        ((data.ptr[off + 1] as u32) << 8) |
+        ((data.ptr[off + 2] as u32) << 16) |
+        ((data.ptr[off + 3] as u32) << 24);
+}
+
+fn meta_page_load_u64_le(data: &[byte], off: usize) u64 {
+    return (data.ptr[off] as u64) |
+        ((data.ptr[off + 1] as u64) << 8) |
+        ((data.ptr[off + 2] as u64) << 16) |
+        ((data.ptr[off + 3] as u64) << 24) |
+        ((data.ptr[off + 4] as u64) << 32) |
+        ((data.ptr[off + 5] as u64) << 40) |
+        ((data.ptr[off + 6] as u64) << 48) |
+        ((data.ptr[off + 7] as u64) << 56);
+}
+
+fn meta_page_encode_inner(page: &MetaPage, out: &[byte], checksum: u32) !void {
+    if page == null || out.ptr == null || out.len < META_PAGE_ENCODED_SIZE {
+        return error.MetaPageInvalidBuffer;
+    }
+    out.ptr[0] = page.magic[0];
+    out.ptr[1] = page.magic[1];
+    out.ptr[2] = page.magic[2];
+    out.ptr[3] = page.magic[3];
+    meta_page_store_u32_le(out, 4, page.format_version);
+    meta_page_store_u32_le(out, 8, page.min_reader_version);
+    meta_page_store_u64_le(out, 12, page.feature_flags);
+    meta_page_store_u32_le(out, 20, page.page_size);
+    meta_page_store_u64_le(out, 24, page.generation);
+    meta_page_store_u64_le(out, 32, page.commit_lsn);
+    meta_page_store_u64_le(out, 40, page.checkpoint_lsn);
+    meta_page_store_u32_le(out, 48, page.page_count);
+    meta_page_store_u32_le(out, 52, page.catalog_root);
+    meta_page_store_u32_le(out, 56, page.freelist_head);
+    meta_page_store_u32_le(out, 60, page.active_meta_slot);
+    meta_page_store_u32_le(out, 64, checksum);
+}
+
+export fn meta_page_encode(page: &MetaPage, out: &[byte]) !void {
+    try meta_page_encode_inner(page, out, page.checksum);
+}
+
+export fn meta_page_decode(data: &[byte]) !MetaPage {
+    if data.ptr == null || data.len < META_PAGE_ENCODED_SIZE {
+        return error.MetaPageInvalidBuffer;
+    }
+    var magic: [byte: 4] = [];
+    magic[0] = data.ptr[0];
+    magic[1] = data.ptr[1];
+    magic[2] = data.ptr[2];
+    magic[3] = data.ptr[3];
+    return MetaPage{
+        magic: magic,
+        format_version: meta_page_load_u32_le(data, 4),
+        min_reader_version: meta_page_load_u32_le(data, 8),
+        feature_flags: meta_page_load_u64_le(data, 12),
+        page_size: meta_page_load_u32_le(data, 20),
+        generation: meta_page_load_u64_le(data, 24),
+        commit_lsn: meta_page_load_u64_le(data, 32),
+        checkpoint_lsn: meta_page_load_u64_le(data, 40),
+        page_count: meta_page_load_u32_le(data, 48),
+        catalog_root: meta_page_load_u32_le(data, 52),
+        freelist_head: meta_page_load_u32_le(data, 56),
+        active_meta_slot: meta_page_load_u32_le(data, 60),
+        checksum: meta_page_load_u32_le(data, 64),
+    };
+}
+
+export fn meta_page_compute_checksum(page: &MetaPage) u32 {
+    if page == null {
+        return 0;
+    }
+    var buf: [byte: META_PAGE_ENCODED_SIZE] = [];
+    _ = meta_page_encode_inner(page, buf[0: META_PAGE_ENCODED_SIZE], 0) catch {
+        return 0;
+    };
+    return checksum_bytes(buf[0: META_PAGE_ENCODED_SIZE]);
+}
+
+export fn meta_page_finalize_checksum(page: &MetaPage) void {
+    if page == null {
+        return;
+    }
+    page.checksum = meta_page_compute_checksum(page);
+}
+
+export fn meta_page_checksum_valid(page: &MetaPage) bool {
+    return page != null && page.checksum == meta_page_compute_checksum(page);
 }

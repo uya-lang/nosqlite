@@ -19,12 +19,13 @@ export const SLOT_FLAG_NONE: u16 = 0;
 export const SLOT_FLAG_USED: u16 = 1;
 export const SLOT_FLAG_TOMBSTONE: u16 = 2;
 
-export struct RecordCellHeader {
-    doc_id: u64,
-    created_at: u64,
-    updated_at: u64,
-    doc_len: u32,
-}
+// 用显式偏移量冻结磁盘布局，避免把尚未实际使用的 header struct
+// 直接暴露给当前 codegen/C 路径。
+export const RECORD_CELL_DOC_ID_OFF: usize = 0;
+export const RECORD_CELL_CREATED_AT_OFF: usize = 8;
+export const RECORD_CELL_UPDATED_AT_OFF: usize = 16;
+export const RECORD_CELL_DOC_LEN_OFF: usize = 24;
+export const RECORD_CELL_HEADER_SIZE: usize = 28;
 
 export struct SlottedPageCellView {
     ptr: &byte,
@@ -33,7 +34,7 @@ export struct SlottedPageCellView {
 }
 
 export fn record_cell_header_size() usize {
-    return @size_of(RecordCellHeader) as usize;
+    return RECORD_CELL_HEADER_SIZE;
 }
 
 export fn slotted_page_required_bytes(payload_len: usize) usize {

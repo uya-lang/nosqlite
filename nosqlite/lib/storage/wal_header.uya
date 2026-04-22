@@ -4,6 +4,10 @@
 use lib.core.NOSQLITE_FORMAT_VERSION_V1;
 use lib.core.page_size_is_supported;
 
+export error WalHeaderInvalidBuffer;
+
+export const WAL_HEADER_ENCODED_SIZE: usize = 28;
+
 export struct WalHeader {
     magic: [byte: 4],
     format_version: u32,
@@ -15,6 +19,10 @@ export struct WalHeader {
 
 export fn wal_header_size() usize {
     return @size_of(WalHeader) as usize;
+}
+
+export fn wal_header_encoded_size() usize {
+    return WAL_HEADER_ENCODED_SIZE;
 }
 
 export fn wal_header_magic_valid(header: &WalHeader) bool {
@@ -29,9 +37,106 @@ export fn wal_header_supported(header: &WalHeader) bool {
     return wal_header_magic_valid(header) &&
         header.format_version == NOSQLITE_FORMAT_VERSION_V1 &&
         header.min_reader_version <= NOSQLITE_FORMAT_VERSION_V1 &&
+        header.feature_flags == 0 &&
         page_size_is_supported(header.page_size);
 }
 
 export fn wal_header_page_size_matches(header: &WalHeader, page_size: u32) bool {
     return header != null && header.page_size == page_size;
+}
+
+fn wal_header_store_u32_le(out: &[byte], off: usize, value: u32) void {
+    out.ptr[off] = ((value & 255u32) as! byte).value;
+    out.ptr[off + 1] = (((value >> 8) & 255u32) as! byte).value;
+    out.ptr[off + 2] = (((value >> 16) & 255u32) as! byte).value;
+    out.ptr[off + 3] = (((value >> 24) & 255u32) as! byte).value;
+}
+
+fn wal_header_store_u64_le(out: &[byte], off: usize, value: u64) void {
+    out.ptr[off] = ((value & 255u64) as! byte).value;
+    out.ptr[off + 1] = (((value >> 8) & 255u64) as! byte).value;
+    out.ptr[off + 2] = (((value >> 16) & 255u64) as! byte).value;
+    out.ptr[off + 3] = (((value >> 24) & 255u64) as! byte).value;
+    out.ptr[off + 4] = (((value >> 32) & 255u64) as! byte).value;
+    out.ptr[off + 5] = (((value >> 40) & 255u64) as! byte).value;
+    out.ptr[off + 6] = (((value >> 48) & 255u64) as! byte).value;
+    out.ptr[off + 7] = (((value >> 56) & 255u64) as! byte).value;
+}
+
+fn wal_header_load_u32_le(data: &[byte], off: usize) u32 {
+    return (data.ptr[off] as u32) |
+        ((data.ptr[off + 1] as u32) << 8) |
+        ((data.ptr[off + 2] as u32) << 16) |
+        ((data.ptr[off + 3] as u32) << 24);
+}
+
+fn wal_header_load_u64_le(data: &[byte], off: usize) u64 {
+    return (data.ptr[off] as u64) |
+        ((data.ptr[off + 1] as u64) << 8) |
+        ((data.ptr[off + 2] as u64) << 16) |
+        ((data.ptr[off + 3] as u64) << 24) |
+        ((data.ptr[off + 4] as u64) << 32) |
+        ((data.ptr[off + 5] as u64) << 40) |
+        ((data.ptr[off + 6] as u64) << 48) |
+        ((data.ptr[off + 7] as u64) << 56);
+}
+
+fn wal_header_encode_inner(header: &WalHeader, out: &[byte], checksum: u32) !void {
+    if header == null || out.ptr == null || out.len < WAL_HEADER_ENCODED_SIZE {
+        return error.WalHeaderInvalidBuffer;
+    }
+    out.ptr[0] = header.magic[0];
+    out.ptr[1] = header.magic[1];
+    out.ptr[2] = header.magic[2];
+    out.ptr[3] = header.magic[3];
+    wal_header_store_u32_le(out, 4, header.format_version);
+    wal_header_store_u32_le(out, 8, header.min_reader_version);
+    wal_header_store_u64_le(out, 12, header.feature_flags);
+    wal_header_store_u32_le(out, 20, header.page_size);
+    wal_header_store_u32_le(out, 24, checksum);
+}
+
+export fn wal_header_encode(header: &WalHeader, out: &[byte]) !void {
+    try wal_header_encode_inner(header, out, header.header_checksum);
+}
+
+export fn wal_header_decode(data: &[byte]) !WalHeader {
+    if data.ptr == null || data.len < WAL_HEADER_ENCODED_SIZE {
+        return error.WalHeaderInvalidBuffer;
+    }
+    var magic: [byte: 4] = [];
+    magic[0] = data.ptr[0];
+    magic[1] = data.ptr[1];
+    magic[2] = data.ptr[2];
+    magic[3] = data.ptr[3];
+    return WalHeader{
+        magic: magic,
+        format_version: wal_header_load_u32_le(data, 4),
+        min_reader_version: wal_header_load_u32_le(data, 8),
+        feature_flags: wal_header_load_u64_le(data, 12),
+        page_size: wal_header_load_u32_le(data, 20),
+        header_checksum: wal_header_load_u32_le(data, 24),
+    };
+}
+
+export fn wal_header_compute_checksum(header: &WalHeader) u32 {
+    if header == null {
+        return 0;
+    }
+    var buf: [byte: WAL_HEADER_ENCODED_SIZE] = [];
+    _ = wal_header_encode_inner(header, buf[0: WAL_HEADER_ENCODED_SIZE], 0) catch {
+        return 0;
+    };
+    return checksum_bytes(buf[0: WAL_HEADER_ENCODED_SIZE]);
+}
+
+export fn wal_header_finalize_checksum(header: &WalHeader) void {
+    if header == null {
+        return;
+    }
+    header.header_checksum = wal_header_compute_checksum(header);
+}
+
+export fn wal_header_checksum_valid(header: &WalHeader) bool {
+    return header != null && header.header_checksum == wal_header_compute_checksum(header);
 }

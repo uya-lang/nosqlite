@@ -1,0 +1,72 @@
+use libc.unlink;
+
+use lib.core.types;
+use lib.storage.meta_page;
+use lib.storage.wal_header;
+use lib.storage.checksum;
+use lib.storage.pager;
+
+const TEST_STEM: *const byte = "/tmp/nosqlite_storage_pager_runtime" as *const byte;
+
+fn cleanup_paths() i32 {
+    var db_path: [byte: 128] = [];
+    var wal_path: [byte: 128] = [];
+    _ = pager_build_db_path(TEST_STEM, db_path[0: 128]) catch {
+        return 1;
+    };
+    _ = pager_build_wal_path(TEST_STEM, wal_path[0: 128]) catch {
+        return 2;
+    };
+    _ = unlink(&db_path[0] as *const byte);
+    _ = unlink(&wal_path[0] as *const byte);
+    return 0;
+}
+
+fn main() i32 {
+    if cleanup_paths() != 0 {
+        return 1;
+    }
+
+    const created: PagerOpenInfo = pager_create_at_stem(TEST_STEM, NOSQLITE_PAGE_SIZE_DEFAULT) catch {
+        _ = cleanup_paths();
+        return 2;
+    };
+    const opened: PagerOpenInfo = pager_open_at_stem(TEST_STEM) catch {
+        _ = cleanup_paths();
+        return 3;
+    };
+
+    if created.meta.page_size != NOSQLITE_PAGE_SIZE_DEFAULT {
+        _ = cleanup_paths();
+        return 4;
+    }
+    if opened.meta.active_meta_slot != NOSQLITE_META_SLOT_A {
+        _ = cleanup_paths();
+        return 5;
+    }
+    if opened.meta.page_count != 3u32 {
+        _ = cleanup_paths();
+        return 6;
+    }
+    if opened.meta.catalog_root != 2u32 {
+        _ = cleanup_paths();
+        return 7;
+    }
+    if opened.meta.checksum == 0u32 {
+        _ = cleanup_paths();
+        return 8;
+    }
+    if opened.wal_header.page_size != opened.meta.page_size {
+        _ = cleanup_paths();
+        return 9;
+    }
+    if opened.wal_header.header_checksum == 0u32 {
+        _ = cleanup_paths();
+        return 10;
+    }
+
+    if cleanup_paths() != 0 {
+        return 11;
+    }
+    return 0;
+}

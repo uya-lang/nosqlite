@@ -1,6 +1,7 @@
 use std.testing.assert_eq_bool;
 use std.testing.assert_eq_i32;
 use std.testing.assert_eq_u64;
+use std.string.strlen;
 
 use lib.core.types;
 use lib.storage.header;
@@ -94,6 +95,10 @@ test "nosqlite_storage_meta_page_slot_and_support" {
     bad_magic.magic[0] = 88 as byte;
     try assert_eq_bool(meta_page_magic_valid(&bad_magic), false);
     try assert_eq_bool(meta_page_supported(&bad_magic), false);
+
+    var bad_flags: MetaPage = make_meta(0, NOSQLITE_PAGE_SIZE_DEFAULT, NOSQLITE_FORMAT_VERSION_V1);
+    bad_flags.feature_flags = 1;
+    try assert_eq_bool(meta_page_supported(&bad_flags), false);
 }
 
 test "nosqlite_storage_wal_header_support_and_match" {
@@ -111,6 +116,10 @@ test "nosqlite_storage_wal_header_support_and_match" {
     bad_magic.magic[3] = 88 as byte;
     try assert_eq_bool(wal_header_magic_valid(&bad_magic), false);
     try assert_eq_bool(wal_header_supported(&bad_magic), false);
+
+    var bad_flags: WalHeader = make_wal_header(NOSQLITE_PAGE_SIZE_DEFAULT, NOSQLITE_FORMAT_VERSION_V1);
+    bad_flags.feature_flags = 1;
+    try assert_eq_bool(wal_header_supported(&bad_flags), false);
 }
 
 test "nosqlite_storage_page_space_helpers" {
@@ -221,4 +230,92 @@ test "nosqlite_storage_checksum_crc32_known_vector" {
     try assert_eq_u64(checksum_bytes(data) as u64, expected);
     try assert_eq_bool(checksum_matches(data, expected as u32), true);
     try assert_eq_bool(checksum_matches(data, 0), false);
+}
+
+test "nosqlite_storage_meta_page_checksum_and_codec" {
+    var page: MetaPage = make_meta(NOSQLITE_META_SLOT_A, NOSQLITE_PAGE_SIZE_DEFAULT, NOSQLITE_FORMAT_VERSION_V1);
+    page.generation = 42;
+    page.commit_lsn = 7;
+    page.page_count = 3;
+    page.catalog_root = 2;
+    meta_page_finalize_checksum(&page);
+
+    try assert_eq_i32(meta_page_encoded_size() as i32, 68);
+    try assert_eq_bool(meta_page_checksum_valid(&page), true);
+    try assert_eq_bool(meta_page_slot_matches_physical(&page, NOSQLITE_META_SLOT_A), true);
+    try assert_eq_bool(meta_page_slot_matches_physical(&page, NOSQLITE_META_SLOT_B), false);
+
+    var encoded: [byte: 68] = [];
+    try meta_page_encode(&page, encoded[0: meta_page_encoded_size()]);
+    const decoded: MetaPage = try meta_page_decode(encoded[0: meta_page_encoded_size()]);
+    try assert_eq_bool(meta_page_checksum_valid(&decoded), true);
+    try assert_eq_u64(decoded.generation, 42u64);
+    try assert_eq_u64(decoded.commit_lsn, 7u64);
+    try assert_eq_i32(decoded.page_count as i32, 3);
+    try assert_eq_i32(decoded.catalog_root as i32, 2);
+}
+
+test "nosqlite_storage_wal_header_checksum_and_codec" {
+    var header: WalHeader = make_wal_header(NOSQLITE_PAGE_SIZE_DEFAULT, NOSQLITE_FORMAT_VERSION_V1);
+    wal_header_finalize_checksum(&header);
+
+    try assert_eq_i32(wal_header_encoded_size() as i32, 28);
+    try assert_eq_bool(wal_header_checksum_valid(&header), true);
+
+    var encoded: [byte: 28] = [];
+    try wal_header_encode(&header, encoded[0: wal_header_encoded_size()]);
+    const decoded: WalHeader = try wal_header_decode(encoded[0: wal_header_encoded_size()]);
+    try assert_eq_bool(wal_header_checksum_valid(&decoded), true);
+    try assert_eq_i32(decoded.page_size as i32, NOSQLITE_PAGE_SIZE_DEFAULT as i32);
+    try assert_eq_i32(decoded.format_version as i32, NOSQLITE_FORMAT_VERSION_V1 as i32);
+}
+
+test "nosqlite_storage_pager_meta_selection" {
+    var meta_a: MetaPage = make_meta(NOSQLITE_META_SLOT_A, NOSQLITE_PAGE_SIZE_DEFAULT, NOSQLITE_FORMAT_VERSION_V1);
+    meta_a.generation = 5;
+    meta_a.commit_lsn = 11;
+    meta_page_finalize_checksum(&meta_a);
+
+    var meta_b: MetaPage = make_meta(NOSQLITE_META_SLOT_B, NOSQLITE_PAGE_SIZE_DEFAULT, NOSQLITE_FORMAT_VERSION_V1);
+    meta_b.generation = 9;
+    meta_b.commit_lsn = 10;
+    meta_page_finalize_checksum(&meta_b);
+
+    const selected_b: MetaPage = try pager_select_latest_meta(&meta_a, &meta_b);
+    try assert_eq_u64(selected_b.generation, 9u64);
+
+    meta_b.checksum = meta_b.checksum + 1;
+    const selected_a: MetaPage = try pager_select_latest_meta(&meta_a, &meta_b);
+    try assert_eq_u64(selected_a.generation, 5u64);
+
+    meta_a.checksum = meta_a.checksum + 1;
+    const no_meta: !MetaPage = pager_select_latest_meta(&meta_a, &meta_b);
+    _ = no_meta catch {
+        return;
+    };
+    return error.AssertionFailed;
+}
+
+test "nosqlite_storage_pager_path_and_rotation_helpers" {
+    try assert_eq_i32((try pager_next_meta_slot(NOSQLITE_META_SLOT_A)) as i32, NOSQLITE_META_SLOT_B as i32);
+    try assert_eq_i32((try pager_next_meta_slot(NOSQLITE_META_SLOT_B)) as i32, NOSQLITE_META_SLOT_A as i32);
+
+    var db_path: [byte: 96] = [];
+    var wal_path: [byte: 96] = [];
+    const stem: &const byte = "/tmp/nosqlite_unit_path";
+    const stem_len: usize = strlen(stem);
+
+    try pager_build_db_path(stem, db_path[0: 96]);
+    try pager_build_wal_path(stem, wal_path[0: 96]);
+
+    try assert_eq_bool(byte_slices_equal(db_path[0: stem_len], stem[0: stem_len]), true);
+    try assert_eq_i32(db_path[stem_len] as i32, 46);
+    try assert_eq_i32(db_path[stem_len + 1] as i32, 110);
+    try assert_eq_i32(db_path[stem_len + 2] as i32, 115);
+    try assert_eq_i32(db_path[stem_len + 3] as i32, 113);
+    try assert_eq_bool(byte_slices_equal(wal_path[0: stem_len], stem[0: stem_len]), true);
+    try assert_eq_i32(wal_path[stem_len] as i32, 46);
+    try assert_eq_i32(wal_path[stem_len + 1] as i32, 119);
+    try assert_eq_i32(wal_path[stem_len + 2] as i32, 97);
+    try assert_eq_i32(wal_path[stem_len + 3] as i32, 108);
 }

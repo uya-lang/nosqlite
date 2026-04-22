@@ -31,7 +31,7 @@
 - [ ] 定义生产配置轮廓：开发 / 量产
 - [x] 定义公共测试入口和最小 smoke test
 - [ ] 写一份 TDD 执行说明，约定每个模块先测后写
-- [ ] 约定数据库文件扩展名与目录布局
+- [x] 约定数据库文件扩展名与目录布局
 - [ ] 写一份最小 API 草案并固定命名
 
 ## Phase 1 - 文档编码层
@@ -61,14 +61,14 @@
 - [x] 定义 `format_version`
 - [x] 定义 `min_reader_version`
 - [x] 定义 `feature_flags`
-- [ ] 定义双 Meta 页轮换规则
+- [x] 定义双 Meta 页轮换规则
 - [x] 定义 `active_meta_slot` 语义
 - [x] 定义通用 `PageHeader`
 - [ ] 定义 `WriterLockGuard`
 - [ ] 定义 `PagePin`
-- [ ] 实现数据库新建流程
-- [ ] 实现数据库打开与头校验
-- [ ] 实现 Meta A / Meta B 选择逻辑
+- [x] 实现数据库新建流程
+- [x] 实现数据库打开与头校验
+- [x] 实现 Meta A / Meta B 选择逻辑
 - [ ] 实现页读取
 - [ ] 实现页写回
 - [ ] 实现页校验和
