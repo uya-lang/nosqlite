@@ -12,6 +12,9 @@ use lib.storage.slotted_page;
 use lib.storage.pager;
 use lib.storage.checksum;
 
+var writer_guard_drop_releases: i32 = 0;
+var page_pin_drop_releases: i32 = 0;
+
 fn byte_slices_equal(a: &[byte], b: &[byte]) bool {
     if a.len != b.len {
         return false;
@@ -367,4 +370,107 @@ test "nosqlite_storage_pager_path_and_rotation_helpers" {
     try assert_eq_i32(wal_path[stem_len + 1] as i32, 119);
     try assert_eq_i32(wal_path[stem_len + 2] as i32, 97);
     try assert_eq_i32(wal_path[stem_len + 3] as i32, 108);
+}
+
+test "nosqlite_storage_page_table_publish_and_dirty_copy" {
+    var raw: [byte: 4096] = [];
+    const page_buf: &[byte] = raw[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try slotted_page_init(page_buf, PageType.DATA);
+    _ = try slotted_page_insert_copy(page_buf, &"abc"[0: 3]);
+
+    var frame: PageFrame = try page_frame_init_copy(2u32, 10u64, page_buf, NOSQLITE_PAGE_SIZE_DEFAULT);
+    try assert_eq_i32(page_frame_capacity() as i32, NOSQLITE_PAGE_SIZE_MAX_V1 as i32);
+    try assert_eq_bool(page_frame_is_private_dirty(&frame), true);
+    try assert_eq_bool(page_frame_is_read_only(&frame), false);
+
+    var table: PageTable = page_table_init(1u64);
+    try page_table_insert_frame(&table, &frame);
+    try assert_eq_i32(page_table_entry_count(&table) as i32, 1);
+    try assert_eq_bool(page_table_is_immutable(&table), false);
+
+    page_table_publish(&table);
+    try assert_eq_bool(page_table_is_immutable(&table), true);
+
+    var published: PageFrame = try page_table_lookup_frame(&table, 2u32);
+    try assert_eq_bool(page_frame_is_read_only(&published), true);
+    const original: byte = try page_frame_read_byte(&published, page_body_offset());
+
+    const write_published: !void = page_frame_write_byte(&published, page_body_offset(), 77 as byte);
+    _ = write_published catch {
+        var dirty: PageFrame = try page_table_private_dirty_copy(&table, 2u32, 11u64);
+        try assert_eq_bool(page_frame_is_private_dirty(&dirty), true);
+        try page_frame_write_byte(&dirty, page_body_offset(), 77 as byte);
+        try assert_eq_i32((try page_frame_read_byte(&dirty, page_body_offset())) as i32, 77);
+        try assert_eq_i32((try page_frame_read_byte(&published, page_body_offset())) as i32, original as i32);
+
+        const immutable_insert: !void = page_table_insert_frame(&table, &dirty);
+        _ = immutable_insert catch {
+            return;
+        };
+        return error.AssertionFailed;
+    };
+    return error.AssertionFailed;
+}
+
+test "nosqlite_storage_guard_drop_auto_release" {
+    writer_guard_drop_releases = 0;
+    page_pin_drop_releases = 0;
+
+    {
+        const guard: WriterLockGuard = writer_lock_guard_acquire_tracked(9u64, 1u64, &writer_guard_drop_releases);
+        try assert_eq_bool(writer_lock_guard_is_held(&guard), true);
+    }
+    try assert_eq_i32(writer_guard_drop_releases, 1);
+
+    {
+        var pin: PagePin = page_pin_acquire_tracked(2u32, 3u64, 4u64, false, &page_pin_drop_releases);
+        try assert_eq_bool(page_pin_is_held(&pin), true);
+        page_pin_release(&pin);
+    }
+    try assert_eq_i32(page_pin_drop_releases, 1);
+
+    {
+        const pin2: PagePin = page_pin_acquire_tracked(2u32, 3u64, 4u64, true, &page_pin_drop_releases);
+        try assert_eq_bool(page_pin_is_writable(&pin2), true);
+    }
+    try assert_eq_i32(page_pin_drop_releases, 2);
+}
+
+test "nosqlite_storage_cursor_lease_and_snapshot_backpressure" {
+    const policy: SnapshotPressurePolicy = SnapshotPressurePolicy{
+        soft_retired_bytes: 256u64,
+        hard_retired_bytes: 1024u64,
+        max_retired_views: 4u32,
+        cursor_lease_ms: 30000u64,
+    };
+    const soft_status: SnapshotPressureStatus = SnapshotPressureStatus{
+        retired_bytes: 300u64,
+        retired_views: 1u32,
+    };
+    const hard_status: SnapshotPressureStatus = SnapshotPressureStatus{
+        retired_bytes: 2048u64,
+        retired_views: 4u32,
+    };
+
+    const lease: CursorLease = cursor_lease_start(&policy, 1000u64);
+    try assert_eq_u64(lease.opened_at_ms, 1000u64);
+    try assert_eq_u64(lease.deadline_ms, 31000u64);
+    try assert_eq_bool(cursor_lease_is_expired(&lease, 30999u64), false);
+    try assert_eq_bool(cursor_lease_is_expired(&lease, 31000u64), true);
+    try assert_eq_u64(cursor_lease_remaining_ms(&lease, 2000u64), 29000u64);
+
+    const expired: !void = cursor_lease_validate(&lease, 31000u64);
+    _ = expired catch {
+        try assert_eq_bool(snapshot_pressure_cursor_can_open(&policy, &soft_status), true);
+        try assert_eq_bool(snapshot_pressure_cursor_can_open(&policy, &hard_status), false);
+        try assert_eq_bool(snapshot_pressure_should_backpressure_writes(&policy, &soft_status), false);
+        try assert_eq_bool(snapshot_pressure_should_backpressure_writes(&policy, &hard_status), true);
+
+        const blocked: !void = snapshot_pressure_require_write_ok(&policy, &hard_status);
+        _ = blocked catch {
+            return;
+        };
+        return error.AssertionFailed;
+    };
+    return error.AssertionFailed;
 }

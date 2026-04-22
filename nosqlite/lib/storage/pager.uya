@@ -20,6 +20,7 @@ use lib.core.NOSQLITE_FORMAT_VERSION_V1;
 use lib.core.NOSQLITE_META_SLOT_A;
 use lib.core.NOSQLITE_META_SLOT_B;
 use lib.core.NOSQLITE_PAGE_SIZE_DEFAULT;
+use lib.core.NOSQLITE_PAGE_SIZE_MAX_V1;
 use lib.core.page_size_is_supported;
 
 export error PagerPathTooLong;
@@ -30,6 +31,12 @@ export error PagerInvalidWalHeader;
 export error PagerInvalidPageId;
 export error PagerInvalidPageBuffer;
 export error PagerInvalidPageChecksum;
+export error PagerPageTableFull;
+export error PagerPageTableImmutable;
+export error PagerPageNotFound;
+export error PagerPageFrameReadOnly;
+export error SnapshotPressure;
+export error CursorExpired;
 
 export struct SnapshotPressurePolicy {
     soft_retired_bytes: u64,
@@ -67,6 +74,11 @@ export struct WriterLockGuard {
     owner_txn_id: u64,
     lock_gen: u64,
     held: bool,
+    release_counter: &i32,
+
+    fn drop(self: WriterLockGuard) void {
+        writer_lock_guard_release_counter_bump(self.release_counter, self.held);
+    },
 }
 
 export struct PagePin {
@@ -75,6 +87,42 @@ export struct PagePin {
     view_gen: u64,
     writable: bool,
     held: bool,
+    release_counter: &i32,
+
+    fn drop(self: PagePin) void {
+        page_pin_release_counter_bump(self.release_counter, self.held);
+    },
+}
+
+export enum PageFrameState {
+    PRIVATE_DIRTY,
+    PUBLISHED_READ_ONLY,
+}
+
+export struct PageFrame {
+    page_id: u32,
+    page_size: u32,
+    page_lsn: u64,
+    state: PageFrameState,
+    bytes: [byte: 8192],
+}
+
+export struct PageTableEntry {
+    present: bool,
+    page_id: u32,
+    frame: PageFrame,
+}
+
+export struct PageTable {
+    generation: u64,
+    immutable: bool,
+    entry_count: u16,
+    entries: [PageTableEntry: 16],
+}
+
+export struct CursorLease {
+    opened_at_ms: u64,
+    deadline_ms: u64,
 }
 
 const NOSQLITE_FILE_MODE: u32 = 0o644;
@@ -91,6 +139,22 @@ export fn writer_lock_guard_acquire(owner_txn_id: u64, lock_gen: u64) WriterLock
         owner_txn_id: owner_txn_id,
         lock_gen: lock_gen,
         held: true,
+        release_counter: null,
+    };
+}
+
+fn writer_lock_guard_release_counter_bump(release_counter: &i32, held: bool) void {
+    if held && release_counter != null {
+        release_counter[0] = release_counter[0] + 1;
+    }
+}
+
+export fn writer_lock_guard_acquire_tracked(owner_txn_id: u64, lock_gen: u64, release_counter: &i32) WriterLockGuard {
+    return WriterLockGuard{
+        owner_txn_id: owner_txn_id,
+        lock_gen: lock_gen,
+        held: true,
+        release_counter: release_counter,
     };
 }
 
@@ -102,6 +166,9 @@ export fn writer_lock_guard_release(guard: &WriterLockGuard) void {
     if guard == null {
         return;
     }
+    if guard.held && guard.release_counter != null {
+        guard.release_counter[0] = guard.release_counter[0] + 1;
+    }
     guard.held = false;
 }
 
@@ -112,6 +179,24 @@ export fn page_pin_acquire(page_id: u32, page_lsn: u64, view_gen: u64, writable:
         view_gen: view_gen,
         writable: writable,
         held: true,
+        release_counter: null,
+    };
+}
+
+fn page_pin_release_counter_bump(release_counter: &i32, held: bool) void {
+    if held && release_counter != null {
+        release_counter[0] = release_counter[0] + 1;
+    }
+}
+
+export fn page_pin_acquire_tracked(page_id: u32, page_lsn: u64, view_gen: u64, writable: bool, release_counter: &i32) PagePin {
+    return PagePin{
+        page_id: page_id,
+        page_lsn: page_lsn,
+        view_gen: view_gen,
+        writable: writable,
+        held: true,
+        release_counter: release_counter,
     };
 }
 
@@ -131,7 +216,208 @@ export fn page_pin_release(pin: &PagePin) void {
     if pin == null {
         return;
     }
+    if pin.held && pin.release_counter != null {
+        pin.release_counter[0] = pin.release_counter[0] + 1;
+    }
     pin.held = false;
+}
+
+export fn page_frame_capacity() usize {
+    return NOSQLITE_PAGE_SIZE_MAX_V1 as usize;
+}
+
+export fn page_frame_as_slice(frame: &PageFrame) &[byte] {
+    if frame == null {
+        return &""[0: 0];
+    }
+    return frame.bytes[0: frame.page_size as usize];
+}
+
+export fn page_frame_is_read_only(frame: &PageFrame) bool {
+    return frame != null && frame.state == PageFrameState.PUBLISHED_READ_ONLY;
+}
+
+export fn page_frame_is_private_dirty(frame: &PageFrame) bool {
+    return frame != null && frame.state == PageFrameState.PRIVATE_DIRTY;
+}
+
+export fn page_frame_init_copy(page_id: u32, page_lsn: u64, page_buf: &[byte], page_size: u32) !PageFrame {
+    if !page_size_is_supported(page_size) || !page_buffer_size_matches(page_buf, page_size) {
+        return error.PagerInvalidPageBuffer;
+    }
+    var frame: PageFrame = PageFrame{};
+    frame.page_id = page_id;
+    frame.page_size = page_size;
+    frame.page_lsn = page_lsn;
+    frame.state = PageFrameState.PRIVATE_DIRTY;
+    _ = mem_set(&frame.bytes[0], 0 as byte, page_frame_capacity());
+    _ = mem_copy(&frame.bytes[0], page_buf.ptr, page_size as usize);
+    return frame;
+}
+
+export fn page_frame_read_byte(frame: &PageFrame, off: usize) !byte {
+    if frame == null || off >= frame.page_size as usize {
+        return error.PagerInvalidPageBuffer;
+    }
+    const view: &[byte] = frame.bytes[0: frame.page_size as usize];
+    return view.ptr[off];
+}
+
+export fn page_frame_write_byte(frame: &PageFrame, off: usize, value: byte) !void {
+    if frame == null || off >= frame.page_size as usize {
+        return error.PagerInvalidPageBuffer;
+    }
+    if page_frame_is_read_only(frame) {
+        return error.PagerPageFrameReadOnly;
+    }
+    const view: &[byte] = frame.bytes[0: frame.page_size as usize];
+    view.ptr[off] = value;
+}
+
+export fn page_frame_publish(frame: &PageFrame) void {
+    if frame == null {
+        return;
+    }
+    frame.state = PageFrameState.PUBLISHED_READ_ONLY;
+}
+
+export fn page_frame_clone_private_dirty(frame: &PageFrame, new_page_lsn: u64) !PageFrame {
+    if frame == null || !page_size_is_supported(frame.page_size) {
+        return error.PagerInvalidPageBuffer;
+    }
+    var clone: PageFrame = PageFrame{};
+    clone.page_id = frame.page_id;
+    clone.page_size = frame.page_size;
+    clone.page_lsn = new_page_lsn;
+    clone.state = PageFrameState.PRIVATE_DIRTY;
+    _ = mem_set(&clone.bytes[0], 0 as byte, page_frame_capacity());
+    _ = mem_copy(&clone.bytes[0], &frame.bytes[0], frame.page_size as usize);
+    return clone;
+}
+
+export fn page_table_init(generation: u64) PageTable {
+    return PageTable{
+        generation: generation,
+        immutable: false,
+        entry_count: 0,
+        entries: [],
+    };
+}
+
+export fn page_table_is_immutable(table: &PageTable) bool {
+    return table != null && table.immutable;
+}
+
+export fn page_table_entry_count(table: &PageTable) u16 {
+    if table == null {
+        return 0u16;
+    }
+    return table.entry_count;
+}
+
+export fn page_table_insert_frame(table: &PageTable, frame: &PageFrame) !void {
+    if table == null || frame == null {
+        return error.PagerInvalidPageBuffer;
+    }
+    if table.immutable {
+        return error.PagerPageTableImmutable;
+    }
+    var i: usize = 0;
+    while i < table.entry_count as usize {
+        if table.entries[i].present && table.entries[i].page_id == frame.page_id {
+            table.entries[i].frame = frame[0];
+            return;
+        }
+        i = i + 1;
+    }
+    if table.entry_count as usize >= @len(table.entries) {
+        return error.PagerPageTableFull;
+    }
+    const slot: usize = table.entry_count as usize;
+    if slot >= @len(table.entries) {
+        return error.PagerPageTableFull;
+    }
+    table.entries[slot].present = true;
+    table.entries[slot].page_id = frame.page_id;
+    table.entries[slot].frame = frame[0];
+    table.entry_count = table.entry_count + 1;
+}
+
+export fn page_table_lookup_frame(table: &PageTable, page_id: u32) !PageFrame {
+    if table == null {
+        return error.PagerPageNotFound;
+    }
+    var i: usize = 0;
+    while i < table.entry_count as usize {
+        if table.entries[i].present && table.entries[i].page_id == page_id {
+            return table.entries[i].frame;
+        }
+        i = i + 1;
+    }
+    return error.PagerPageNotFound;
+}
+
+export fn page_table_publish(table: &PageTable) void {
+    if table == null {
+        return;
+    }
+    var i: usize = 0;
+    while i < table.entry_count as usize {
+        if table.entries[i].present {
+            page_frame_publish(&table.entries[i].frame);
+        }
+        i = i + 1;
+    }
+    table.immutable = true;
+}
+
+export fn page_table_private_dirty_copy(table: &PageTable, page_id: u32, new_page_lsn: u64) !PageFrame {
+    const frame: PageFrame = try page_table_lookup_frame(table, page_id);
+    return page_frame_clone_private_dirty(&frame, new_page_lsn);
+}
+
+export fn cursor_lease_start(policy: &SnapshotPressurePolicy, now_ms: u64) CursorLease {
+    if policy == null {
+        return CursorLease{
+            opened_at_ms: now_ms,
+            deadline_ms: now_ms,
+        };
+    }
+    return CursorLease{
+        opened_at_ms: now_ms,
+        deadline_ms: now_ms + policy.cursor_lease_ms,
+    };
+}
+
+export fn cursor_lease_is_expired(lease: &CursorLease, now_ms: u64) bool {
+    return lease != null && now_ms >= lease.deadline_ms;
+}
+
+export fn cursor_lease_remaining_ms(lease: &CursorLease, now_ms: u64) u64 {
+    if lease == null || now_ms >= lease.deadline_ms {
+        return 0u64;
+    }
+    return lease.deadline_ms - now_ms;
+}
+
+export fn cursor_lease_validate(lease: &CursorLease, now_ms: u64) !void {
+    if cursor_lease_is_expired(lease, now_ms) {
+        return error.CursorExpired;
+    }
+}
+
+export fn snapshot_pressure_cursor_can_open(policy: &SnapshotPressurePolicy, status: &SnapshotPressureStatus) bool {
+    return !snapshot_pressure_hard(policy, status);
+}
+
+export fn snapshot_pressure_should_backpressure_writes(policy: &SnapshotPressurePolicy, status: &SnapshotPressureStatus) bool {
+    return snapshot_pressure_hard(policy, status);
+}
+
+export fn snapshot_pressure_require_write_ok(policy: &SnapshotPressurePolicy, status: &SnapshotPressureStatus) !void {
+    if snapshot_pressure_should_backpressure_writes(policy, status) {
+        return error.SnapshotPressure;
+    }
 }
 
 export fn pager_wal_extension() &[byte] {

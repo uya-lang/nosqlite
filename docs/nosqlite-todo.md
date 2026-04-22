@@ -72,13 +72,13 @@
 - [x] 实现页读取
 - [x] 实现页写回
 - [x] 实现页校验和
-- [ ] 定义 page table 抽象
-- [ ] 实现已发布页帧只读规则
-- [ ] 实现私有脏页副本
-- [ ] 为锁与 pin 路径补 `drop` 自动释放
+- [x] 定义 page table 抽象
+- [x] 实现已发布页帧只读规则
+- [x] 实现私有脏页副本
+- [x] 为锁与 pin 路径补 `drop` 自动释放
 - [x] 定义 `SnapshotPressurePolicy`
-- [ ] 定义 cursor lease 语义
-- [ ] 实现 snapshot pressure 对写侧的 backpressure
+- [x] 定义 cursor lease 语义
+- [x] 实现 snapshot pressure 对写侧的 backpressure
 - [x] 实现空闲页链表
 - [x] 实现 slotted page 插入
 - [x] 实现 slotted page 读回
