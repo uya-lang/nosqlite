@@ -34,3 +34,4 @@
 - `nosqlite/test_storage_page_basics.uya` -> `tests/storage/`
 - `nosqlite/test_storage_pager_runtime.uya` -> `tests/storage/`
 - `nosqlite/test_storage_slotted_page_runtime.uya` -> `tests/storage/`
+- `nosqlite/test_storage_wal_runtime.uya` -> `tests/storage/`

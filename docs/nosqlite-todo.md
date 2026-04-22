@@ -87,29 +87,29 @@
 ## Phase 3 - WAL 与恢复
 
 - [x] 先写失败测试：WAL 头校验、已提交事务 redo、坏记录截断
-- [ ] 增加 `fsync/fdatasync` OS 封装
+- [x] 增加 `fsync/fdatasync` OS 封装
 - [x] 定义 WAL 文件头
 - [x] 在 WAL 文件头中加入 `format_version/min_reader_version/feature_flags`
-- [ ] 定义 `BEGIN/PAGE_WRITE/COMMIT/CHECKPOINT` 记录
-- [ ] 定义 `WalCommit` 中的数据库级元数据
-- [ ] 定义 `WalBatch`
-- [ ] 定义 `CheckpointPolicy`
-- [ ] 实现 WAL 追加写
-- [ ] 实现事务提交时的 WAL 刷写顺序
-- [ ] 实现 `fdatasync(wal)` durability barrier
-- [ ] 实现 `fdatasync(db)` durability barrier
-- [ ] 为 open/commit/recovery 路径补 `errdefer`
-- [ ] 固定 checksum 算法与覆盖范围
-- [ ] 实现启动恢复扫描
-- [ ] 实现仅重放已提交事务
-- [ ] 实现 `meta.commit_lsn` 之后的 redo
-- [ ] 实现基于 `page_lsn` 的 redo 判定
-- [ ] 实现 checkpoint
-- [ ] 实现 WAL 截断
-- [ ] 实现 `wal_soft_limit_bytes` 触发 checkpoint
-- [ ] 实现 `wal_hard_limit_bytes` 强制 checkpoint
-- [ ] 编写断电恢复测试
-- [ ] 编写 WAL 截断损坏测试
+- [x] 定义 `BEGIN/PAGE_WRITE/COMMIT/CHECKPOINT` 记录
+- [x] 定义 `WalCommit` 中的数据库级元数据
+- [x] 定义 `WalBatch`
+- [x] 定义 `CheckpointPolicy`
+- [x] 实现 WAL 追加写
+- [x] 实现事务提交时的 WAL 刷写顺序
+- [x] 实现 `fdatasync(wal)` durability barrier
+- [x] 实现 `fdatasync(db)` durability barrier
+- [x] 为 open/commit/recovery 路径补 `errdefer`
+- [x] 固定 checksum 算法与覆盖范围
+- [x] 实现启动恢复扫描
+- [x] 实现仅重放已提交事务
+- [x] 实现 `meta.commit_lsn` 之后的 redo
+- [x] 实现基于 `page_lsn` 的 redo 判定
+- [x] 实现 checkpoint
+- [x] 实现 WAL 截断
+- [x] 实现 `wal_soft_limit_bytes` 触发 checkpoint
+- [x] 实现 `wal_hard_limit_bytes` 强制 checkpoint
+- [x] 编写断电恢复测试
+- [x] 编写 WAL 截断损坏测试
 
 ## Phase 4 - Catalog
 

@@ -68,6 +68,16 @@ fn make_wal_header(page_size: u32, min_reader_version: u32) WalHeader {
     };
 }
 
+fn make_commit(txn_id: u64, commit_lsn: u64, page_count: u32) WalCommit {
+    return WalCommit{
+        txn_id: txn_id,
+        commit_lsn: commit_lsn,
+        catalog_root: 2u32,
+        page_count: page_count,
+        freelist_head: 0u32,
+    };
+}
+
 test "nosqlite_core_page_size_support_matrix" {
     try assert_eq_bool(page_size_is_supported(NOSQLITE_PAGE_SIZE_DEFAULT), true);
     try assert_eq_bool(page_size_is_supported(NOSQLITE_PAGE_SIZE_MAX_V1), true);
@@ -319,6 +329,78 @@ test "nosqlite_storage_wal_header_checksum_and_codec" {
     try assert_eq_bool(wal_header_checksum_valid(&decoded), true);
     try assert_eq_i32(decoded.page_size as i32, NOSQLITE_PAGE_SIZE_DEFAULT as i32);
     try assert_eq_i32(decoded.format_version as i32, NOSQLITE_FORMAT_VERSION_V1 as i32);
+}
+
+test "nosqlite_storage_wal_record_codec_and_batch" {
+    var raw: [byte: 4096] = [];
+    const page_buf: &[byte] = raw[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try slotted_page_init(page_buf, PageType.DATA);
+    _ = try slotted_page_insert_copy(page_buf, &"wal"[0: 3]);
+    const hdr: &PageHeader = page_header_from_buf(page_buf);
+    hdr.page_lsn = 11u64;
+    _ = try page_checksum_finalize(page_buf);
+
+    const begin: WalBegin = WalBegin{ txn_id: 7u64 };
+    var begin_buf: [byte: 20] = [];
+    const begin_used: usize = try wal_encode_begin(&begin, begin_buf[0: 20]);
+    try assert_eq_i32(begin_used as i32, wal_begin_record_size() as i32);
+    const decoded_begin: WalBegin = try wal_decode_begin(begin_buf[0: begin_used]);
+    try assert_eq_u64(decoded_begin.txn_id, 7u64);
+
+    var page_buf_encoded: [byte: WAL_RECORD_MAX_ENCODED_SIZE] = [];
+    const page_used: usize = try wal_encode_page_write(7u64, 2u32, 11u64, page_buf, page_buf_encoded[0: WAL_RECORD_MAX_ENCODED_SIZE]);
+    try assert_eq_bool(wal_record_checksum_valid(page_buf_encoded[0: page_used]), true);
+    const decoded_page: WalPageWriteView = try wal_decode_page_write(page_buf_encoded[0: page_used]);
+    try assert_eq_u64(decoded_page.txn_id, 7u64);
+    try assert_eq_i32(decoded_page.page_id as i32, 2);
+    try assert_eq_u64(decoded_page.page_lsn, 11u64);
+    try assert_eq_i32(decoded_page.page_size as i32, NOSQLITE_PAGE_SIZE_DEFAULT as i32);
+    try assert_eq_bool(decoded_page.payload_checksum == checksum_bytes(page_buf), true);
+    try assert_eq_i32(slotted_page_slot_count(decoded_page.payload) as i32, 1);
+
+    const commit: WalCommit = make_commit(7u64, 11u64, 3u32);
+    var commit_buf: [byte: 40] = [];
+    const commit_used: usize = try wal_encode_commit(&commit, commit_buf[0: 40]);
+    const decoded_commit: WalCommit = try wal_decode_commit(commit_buf[0: commit_used]);
+    try assert_eq_u64(decoded_commit.commit_lsn, 11u64);
+    try assert_eq_i32(decoded_commit.page_count as i32, 3);
+
+    const checkpoint: WalCheckpoint = WalCheckpoint{
+        txn_id: 7u64,
+        commit_lsn: 11u64,
+        checkpoint_lsn: 11u64,
+        catalog_root: 2u32,
+        page_count: 3u32,
+        freelist_head: 0u32,
+    };
+    var checkpoint_buf: [byte: 48] = [];
+    const checkpoint_used: usize = try wal_encode_checkpoint(&checkpoint, checkpoint_buf[0: 48]);
+    const decoded_checkpoint: WalCheckpoint = try wal_decode_checkpoint(checkpoint_buf[0: checkpoint_used]);
+    try assert_eq_u64(decoded_checkpoint.checkpoint_lsn, 11u64);
+
+    var batch: WalBatch = wal_batch_init(7u64, 11u64);
+    try wal_batch_append_begin(&batch);
+    try wal_batch_append_page(&batch, 2u32, 11u64, page_buf);
+    try wal_batch_append_commit(&batch, &commit);
+    try assert_eq_i32(wal_batch_record_count(&batch) as i32, 3);
+    try assert_eq_bool(wal_batch_used_bytes(&batch) > 0usize, true);
+    const extracted: WalCommit = try wal_batch_extract_commit(&batch);
+    try assert_eq_u64(extracted.commit_lsn, 11u64);
+    try assert_eq_i32(extracted.page_count as i32, 3);
+}
+
+test "nosqlite_storage_checkpoint_policy_ratio_and_interval" {
+    const checkpoint_policy: CheckpointPolicy = CheckpointPolicy{
+        wal_soft_limit_bytes: 64u64,
+        wal_hard_limit_bytes: 256u64,
+        wal_vs_db_ratio_milli: 250u32,
+        max_checkpoint_interval_ms: 60000u64,
+    };
+    try assert_eq_bool(checkpoint_should_trigger_ratio(&checkpoint_policy, 256u64, 1024u64), true);
+    try assert_eq_bool(checkpoint_should_trigger_ratio(&checkpoint_policy, 255u64, 2048u64), false);
+    try assert_eq_bool(checkpoint_should_trigger_interval(&checkpoint_policy, 60000u64, true), true);
+    try assert_eq_bool(checkpoint_should_trigger_interval(&checkpoint_policy, 59999u64, true), false);
+    try assert_eq_bool(checkpoint_should_trigger_interval(&checkpoint_policy, 60000u64, false), false);
 }
 
 test "nosqlite_storage_pager_meta_selection" {

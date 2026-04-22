@@ -1,0 +1,270 @@
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_u64;
+
+use libc.unlink;
+use libc.O_RDWR;
+use libc.SEEK_END;
+
+use osal.File;
+use osal.os_open;
+use osal.os_close;
+use osal.os_write;
+use osal.os_seek;
+use osal.os_fdatasync;
+
+use lib.core.types;
+use lib.storage.header;
+use lib.storage.wal_header;
+use lib.storage.page;
+use lib.storage.checksum;
+use lib.storage.pager;
+use lib.storage.slotted_page;
+
+const TEST_STEM_REDO: *const byte = "/tmp/nosqlite_storage_wal_redo" as *const byte;
+const TEST_STEM_UNCOMMITTED: *const byte = "/tmp/nosqlite_storage_wal_uncommitted" as *const byte;
+const TEST_STEM_TRUNCATE: *const byte = "/tmp/nosqlite_storage_wal_truncate" as *const byte;
+const TEST_STEM_PAGE_LSN: *const byte = "/tmp/nosqlite_storage_wal_page_lsn" as *const byte;
+const TEST_STEM_CHECKPOINT: *const byte = "/tmp/nosqlite_storage_wal_checkpoint" as *const byte;
+const TEST_STEM_SOFT_LIMIT: *const byte = "/tmp/nosqlite_storage_wal_soft_limit" as *const byte;
+const WAL_HEADER_BYTES: u64 = 28u64;
+
+fn byte_slices_equal(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn cleanup_stem(stem: &const byte) !void {
+    var db_path: [byte: 128] = [];
+    var wal_path: [byte: 128] = [];
+    try pager_build_db_path(stem, db_path[0: 128]);
+    try pager_build_wal_path(stem, wal_path[0: 128]);
+    _ = unlink(&db_path[0] as *const byte);
+    _ = unlink(&wal_path[0] as *const byte);
+}
+
+fn make_commit(txn_id: u64, commit_lsn: u64) WalCommit {
+    return WalCommit{
+        txn_id: txn_id,
+        commit_lsn: commit_lsn,
+        catalog_root: 2u32,
+        page_count: 3u32,
+        freelist_head: 0u32,
+    };
+}
+
+fn init_page(page_buf: &[byte], payload: &[byte], page_lsn: u64) !void {
+    try slotted_page_init(page_buf, PageType.DATA);
+    _ = try slotted_page_insert_copy(page_buf, payload);
+    const hdr: &PageHeader = page_header_from_buf(page_buf);
+    hdr.page_lsn = page_lsn;
+    _ = try page_checksum_finalize(page_buf);
+}
+
+fn assert_page_payload(stem: &const byte, expected: &[byte]) !void {
+    var read_raw: [byte: 4096] = [];
+    const read_buf: &[byte] = read_raw[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try pager_read_page_at_stem(stem, 2u32, read_buf);
+    try assert_eq_i32(slotted_page_slot_count(read_buf) as i32, 1);
+    const view: SlottedPageCellView = try slotted_page_cell_view(read_buf, 0u16);
+    try assert_eq_bool(byte_slices_equal(view.ptr[0: view.len], expected), true);
+}
+
+fn append_garbage_tail(stem: &const byte, garbage: &[byte]) !void {
+    var wal_path: [byte: 128] = [];
+    try pager_build_wal_path(stem, wal_path[0: 128]);
+    const fd: i32 = try os_open(&wal_path[0], O_RDWR, 0u32);
+    var file: File = File{
+        fd: fd,
+        owns_fd: true,
+    };
+    errdefer {
+        _ = os_close(&file) catch {};
+    }
+
+    _ = try os_seek(&file, 0i64, SEEK_END);
+    _ = try os_write(&file, garbage.ptr, garbage.len);
+    try os_fdatasync(&file);
+    try os_close(&file);
+}
+
+test "nosqlite_storage_wal_recovery_redoes_committed_txn" {
+    try cleanup_stem(TEST_STEM_REDO);
+    defer {
+        _ = cleanup_stem(TEST_STEM_REDO) catch {};
+    }
+
+    _ = try pager_create_at_stem(TEST_STEM_REDO, NOSQLITE_PAGE_SIZE_DEFAULT);
+
+    var page_raw: [byte: 4096] = [];
+    const page_buf: &[byte] = page_raw[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try init_page(page_buf, &"wal"[0: 3], 11u64);
+
+    const commit: WalCommit = make_commit(7u64, 11u64);
+    var batch: WalBatch = wal_batch_init(7u64, 11u64);
+    try wal_batch_append_begin(&batch);
+    try wal_batch_append_page(&batch, 2u32, 11u64, page_buf);
+    try wal_batch_append_commit(&batch, &commit);
+    _ = try pager_wal_append_batch_at_stem(TEST_STEM_REDO, &batch, true);
+
+    const opened: PagerOpenInfo = try pager_open_at_stem(TEST_STEM_REDO);
+    try assert_eq_u64(opened.meta.commit_lsn, 11u64);
+    try assert_page_payload(TEST_STEM_REDO, &"wal"[0: 3]);
+}
+
+test "nosqlite_storage_wal_recovery_ignores_uncommitted_tail" {
+    try cleanup_stem(TEST_STEM_UNCOMMITTED);
+    defer {
+        _ = cleanup_stem(TEST_STEM_UNCOMMITTED) catch {};
+    }
+
+    _ = try pager_create_at_stem(TEST_STEM_UNCOMMITTED, NOSQLITE_PAGE_SIZE_DEFAULT);
+
+    var base_raw: [byte: 4096] = [];
+    const base_buf: &[byte] = base_raw[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try init_page(base_buf, &"base"[0: 4], 5u64);
+    try pager_write_page_at_stem(TEST_STEM_UNCOMMITTED, 2u32, base_buf);
+
+    var tail_raw: [byte: 4096] = [];
+    const tail_buf: &[byte] = tail_raw[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try init_page(tail_buf, &"tail"[0: 4], 9u64);
+
+    var batch: WalBatch = wal_batch_init(9u64, 9u64);
+    try wal_batch_append_begin(&batch);
+    try wal_batch_append_page(&batch, 2u32, 9u64, tail_buf);
+    _ = try pager_wal_append_batch_at_stem(TEST_STEM_UNCOMMITTED, &batch, true);
+
+    const opened: PagerOpenInfo = try pager_open_at_stem(TEST_STEM_UNCOMMITTED);
+    try assert_eq_u64(opened.meta.commit_lsn, 0u64);
+    try assert_page_payload(TEST_STEM_UNCOMMITTED, &"base"[0: 4]);
+    try assert_eq_u64(try pager_wal_size_at_stem(TEST_STEM_UNCOMMITTED), WAL_HEADER_BYTES);
+}
+
+test "nosqlite_storage_wal_recovery_truncates_bad_tail_after_commit" {
+    try cleanup_stem(TEST_STEM_TRUNCATE);
+    defer {
+        _ = cleanup_stem(TEST_STEM_TRUNCATE) catch {};
+    }
+
+    _ = try pager_create_at_stem(TEST_STEM_TRUNCATE, NOSQLITE_PAGE_SIZE_DEFAULT);
+
+    var page_raw: [byte: 4096] = [];
+    const page_buf: &[byte] = page_raw[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try init_page(page_buf, &"ok"[0: 2], 9u64);
+
+    const commit: WalCommit = make_commit(5u64, 9u64);
+    var batch: WalBatch = wal_batch_init(5u64, 9u64);
+    try wal_batch_append_begin(&batch);
+    try wal_batch_append_page(&batch, 2u32, 9u64, page_buf);
+    try wal_batch_append_commit(&batch, &commit);
+    const good_size: u64 = try pager_wal_append_batch_at_stem(TEST_STEM_TRUNCATE, &batch, true);
+
+    var garbage: [byte: 3] = [];
+    garbage[0] = 0xaa as byte;
+    garbage[1] = 0xbb as byte;
+    garbage[2] = 0xcc as byte;
+    try append_garbage_tail(TEST_STEM_TRUNCATE, garbage[0: 3]);
+    try assert_eq_bool((try pager_wal_size_at_stem(TEST_STEM_TRUNCATE)) > good_size, true);
+
+    _ = try pager_open_at_stem(TEST_STEM_TRUNCATE);
+    try assert_eq_u64(try pager_wal_size_at_stem(TEST_STEM_TRUNCATE), good_size);
+    try assert_page_payload(TEST_STEM_TRUNCATE, &"ok"[0: 2]);
+}
+
+test "nosqlite_storage_wal_recovery_respects_page_lsn" {
+    try cleanup_stem(TEST_STEM_PAGE_LSN);
+    defer {
+        _ = cleanup_stem(TEST_STEM_PAGE_LSN) catch {};
+    }
+
+    _ = try pager_create_at_stem(TEST_STEM_PAGE_LSN, NOSQLITE_PAGE_SIZE_DEFAULT);
+
+    var new_raw: [byte: 4096] = [];
+    const new_buf: &[byte] = new_raw[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try init_page(new_buf, &"new"[0: 3], 20u64);
+    try pager_write_page_at_stem(TEST_STEM_PAGE_LSN, 2u32, new_buf);
+
+    var old_raw: [byte: 4096] = [];
+    const old_buf: &[byte] = old_raw[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try init_page(old_buf, &"old"[0: 3], 11u64);
+
+    const commit: WalCommit = make_commit(3u64, 11u64);
+    var batch: WalBatch = wal_batch_init(3u64, 11u64);
+    try wal_batch_append_begin(&batch);
+    try wal_batch_append_page(&batch, 2u32, 11u64, old_buf);
+    try wal_batch_append_commit(&batch, &commit);
+    _ = try pager_wal_append_batch_at_stem(TEST_STEM_PAGE_LSN, &batch, true);
+
+    const opened: PagerOpenInfo = try pager_open_at_stem(TEST_STEM_PAGE_LSN);
+    try assert_eq_u64(opened.meta.commit_lsn, 11u64);
+    try assert_page_payload(TEST_STEM_PAGE_LSN, &"new"[0: 3]);
+}
+
+test "nosqlite_storage_checkpoint_truncates_wal" {
+    try cleanup_stem(TEST_STEM_CHECKPOINT);
+    defer {
+        _ = cleanup_stem(TEST_STEM_CHECKPOINT) catch {};
+    }
+
+    _ = try pager_create_at_stem(TEST_STEM_CHECKPOINT, NOSQLITE_PAGE_SIZE_DEFAULT);
+
+    var page_raw: [byte: 4096] = [];
+    const page_buf: &[byte] = page_raw[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try init_page(page_buf, &"ckp"[0: 3], 13u64);
+    const commit: WalCommit = make_commit(13u64, 13u64);
+    const no_policy: &CheckpointPolicy = null;
+
+    const committed: PagerOpenInfo = try pager_commit_page_at_stem(
+        TEST_STEM_CHECKPOINT,
+        2u32,
+        page_buf,
+        &commit,
+        no_policy,
+    );
+    try assert_eq_u64(committed.meta.commit_lsn, 13u64);
+    try assert_eq_bool((try pager_wal_size_at_stem(TEST_STEM_CHECKPOINT)) > WAL_HEADER_BYTES, true);
+
+    const checkpointed: PagerOpenInfo = try pager_checkpoint_at_stem(TEST_STEM_CHECKPOINT);
+    try assert_eq_u64(checkpointed.meta.checkpoint_lsn, 13u64);
+    try assert_eq_u64(try pager_wal_size_at_stem(TEST_STEM_CHECKPOINT), WAL_HEADER_BYTES);
+}
+
+test "nosqlite_storage_soft_limit_triggers_checkpoint" {
+    try cleanup_stem(TEST_STEM_SOFT_LIMIT);
+    defer {
+        _ = cleanup_stem(TEST_STEM_SOFT_LIMIT) catch {};
+    }
+
+    _ = try pager_create_at_stem(TEST_STEM_SOFT_LIMIT, NOSQLITE_PAGE_SIZE_DEFAULT);
+
+    var page_raw: [byte: 4096] = [];
+    const page_buf: &[byte] = page_raw[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try init_page(page_buf, &"lim"[0: 3], 17u64);
+
+    const policy: CheckpointPolicy = CheckpointPolicy{
+        wal_soft_limit_bytes: 1u64,
+        wal_hard_limit_bytes: 4096u64,
+        wal_vs_db_ratio_milli: 0u32,
+        max_checkpoint_interval_ms: 60000u64,
+    };
+    const commit: WalCommit = make_commit(17u64, 17u64);
+    const committed: PagerOpenInfo = try pager_commit_page_at_stem(
+        TEST_STEM_SOFT_LIMIT,
+        2u32,
+        page_buf,
+        &commit,
+        &policy,
+    );
+    try assert_eq_u64(committed.meta.commit_lsn, 17u64);
+    try assert_eq_u64(committed.meta.checkpoint_lsn, 17u64);
+    try assert_eq_u64(try pager_wal_size_at_stem(TEST_STEM_SOFT_LIMIT), WAL_HEADER_BYTES);
+}
