@@ -1,0 +1,201 @@
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_u64;
+
+use lib.core.types.NOSQLITE_FORMAT_VERSION_V1;
+use lib.core.types.NOSQLITE_PAGE_SIZE_DEFAULT;
+use lib.core.types.NOSQLITE_PAGE_SIZE_MAX_V1;
+use lib.core.types.page_size_is_supported;
+
+use lib.storage.header.PageHeader;
+use lib.storage.header.PageType;
+use lib.storage.header.PAGE_FLAG_NONE;
+use lib.storage.header.page_header_size;
+use lib.storage.header.slot_size;
+
+use lib.storage.meta_page.MetaPage;
+use lib.storage.meta_page.meta_page_slot_valid;
+use lib.storage.meta_page.meta_page_supported;
+
+use lib.storage.wal_header.WalHeader;
+use lib.storage.wal_header.wal_header_supported;
+use lib.storage.wal_header.wal_header_page_size_matches;
+
+use lib.storage.page.page_body_offset;
+use lib.storage.page.page_free_space;
+use lib.storage.page.page_has_room;
+
+use lib.storage.slotted_page.record_cell_header_size;
+use lib.storage.slotted_page.slotted_page_required_bytes;
+use lib.storage.slotted_page.slotted_page_can_fit;
+
+use lib.storage.pager.SnapshotPressurePolicy;
+use lib.storage.pager.SnapshotPressureStatus;
+use lib.storage.pager.CheckpointPolicy;
+use lib.storage.pager.snapshot_pressure_soft;
+use lib.storage.pager.snapshot_pressure_hard;
+use lib.storage.pager.checkpoint_should_trigger_soft;
+use lib.storage.pager.checkpoint_should_trigger_hard;
+
+use lib.storage.checksum.checksum_bytes;
+use lib.storage.checksum.checksum_matches;
+
+fn make_meta(slot: u32, page_size: u32, min_reader_version: u32) MetaPage {
+    var magic: [byte: 4] = [];
+    magic[0] = 78 as byte;
+    magic[1] = 83 as byte;
+    magic[2] = 81 as byte;
+    magic[3] = 76 as byte;
+    return MetaPage{
+        magic: magic,
+        format_version: NOSQLITE_FORMAT_VERSION_V1,
+        min_reader_version: min_reader_version,
+        feature_flags: 0,
+        page_size: page_size,
+        generation: 1,
+        commit_lsn: 0,
+        checkpoint_lsn: 0,
+        page_count: 2,
+        catalog_root: 2,
+        freelist_head: 0,
+        active_meta_slot: slot,
+        checksum: 0,
+    };
+}
+
+fn make_wal_header(page_size: u32, min_reader_version: u32) WalHeader {
+    var magic: [byte: 4] = [];
+    magic[0] = 78 as byte;
+    magic[1] = 83 as byte;
+    magic[2] = 87 as byte;
+    magic[3] = 76 as byte;
+    return WalHeader{
+        magic: magic,
+        format_version: NOSQLITE_FORMAT_VERSION_V1,
+        min_reader_version: min_reader_version,
+        feature_flags: 0,
+        page_size: page_size,
+        header_checksum: 0,
+    };
+}
+
+test "nosqlite_core_page_size_support_matrix" {
+    try assert_eq_bool(page_size_is_supported(NOSQLITE_PAGE_SIZE_DEFAULT), true);
+    try assert_eq_bool(page_size_is_supported(NOSQLITE_PAGE_SIZE_MAX_V1), true);
+    try assert_eq_bool(page_size_is_supported(2048), false);
+    try assert_eq_bool(page_size_is_supported(16384), false);
+}
+
+test "nosqlite_storage_meta_page_slot_and_support" {
+    try assert_eq_bool(meta_page_slot_valid(0), true);
+    try assert_eq_bool(meta_page_slot_valid(1), true);
+    try assert_eq_bool(meta_page_slot_valid(2), false);
+
+    const ok: MetaPage = make_meta(0, NOSQLITE_PAGE_SIZE_DEFAULT, NOSQLITE_FORMAT_VERSION_V1);
+    try assert_eq_bool(meta_page_supported(ok), true);
+
+    const bad_slot: MetaPage = make_meta(9, NOSQLITE_PAGE_SIZE_DEFAULT, NOSQLITE_FORMAT_VERSION_V1);
+    try assert_eq_bool(meta_page_supported(bad_slot), false);
+
+    const bad_page_size: MetaPage = make_meta(0, 2048, NOSQLITE_FORMAT_VERSION_V1);
+    try assert_eq_bool(meta_page_supported(bad_page_size), false);
+
+    const bad_reader: MetaPage = make_meta(0, NOSQLITE_PAGE_SIZE_DEFAULT, NOSQLITE_FORMAT_VERSION_V1 + 1);
+    try assert_eq_bool(meta_page_supported(bad_reader), false);
+}
+
+test "nosqlite_storage_wal_header_support_and_match" {
+    const ok: WalHeader = make_wal_header(NOSQLITE_PAGE_SIZE_DEFAULT, NOSQLITE_FORMAT_VERSION_V1);
+    try assert_eq_bool(wal_header_supported(ok), true);
+    try assert_eq_bool(wal_header_page_size_matches(ok, NOSQLITE_PAGE_SIZE_DEFAULT), true);
+    try assert_eq_bool(wal_header_page_size_matches(ok, NOSQLITE_PAGE_SIZE_MAX_V1), false);
+
+    const bad_reader: WalHeader = make_wal_header(NOSQLITE_PAGE_SIZE_DEFAULT, NOSQLITE_FORMAT_VERSION_V1 + 1);
+    try assert_eq_bool(wal_header_supported(bad_reader), false);
+}
+
+test "nosqlite_storage_page_space_helpers" {
+    var header: PageHeader = PageHeader{
+        page_type: PageType.DATA,
+        flags: PAGE_FLAG_NONE,
+        page_lsn: 0,
+        lower: 64,
+        upper: 256,
+        checksum: 0,
+    };
+
+    try assert_eq_i32(page_body_offset() as i32, page_header_size() as i32);
+    try assert_eq_i32(page_free_space(header) as i32, 192);
+    try assert_eq_bool(page_has_room(header, 128), true);
+    try assert_eq_bool(page_has_room(header, 193), false);
+
+    header.lower = 300;
+    header.upper = 200;
+    try assert_eq_i32(page_free_space(header) as i32, 0);
+}
+
+test "nosqlite_storage_slotted_page_helpers" {
+    const payload_len: usize = 48;
+    const required: usize = slotted_page_required_bytes(payload_len);
+    try assert_eq_i32(required as i32, (slot_size() + payload_len) as i32);
+    try assert_eq_bool(record_cell_header_size() > 0, true);
+
+    const header: PageHeader = PageHeader{
+        page_type: PageType.DATA,
+        flags: PAGE_FLAG_NONE,
+        page_lsn: 0,
+        lower: 128,
+        upper: 512,
+        checksum: 0,
+    };
+
+    try assert_eq_bool(slotted_page_can_fit(header, 64), true);
+    try assert_eq_bool(slotted_page_can_fit(header, 4096), false);
+}
+
+test "nosqlite_storage_pager_policy_helpers" {
+    const pressure_policy: SnapshotPressurePolicy = SnapshotPressurePolicy{
+        soft_retired_bytes: 256,
+        hard_retired_bytes: 1024,
+        max_retired_views: 4,
+        cursor_lease_ms: 30000,
+    };
+
+    const soft_status: SnapshotPressureStatus = SnapshotPressureStatus{
+        retired_bytes: 300,
+        retired_views: 1,
+    };
+    try assert_eq_bool(snapshot_pressure_soft(pressure_policy, soft_status), true);
+    try assert_eq_bool(snapshot_pressure_hard(pressure_policy, soft_status), false);
+
+    const hard_bytes: SnapshotPressureStatus = SnapshotPressureStatus{
+        retired_bytes: 2048,
+        retired_views: 1,
+    };
+    try assert_eq_bool(snapshot_pressure_hard(pressure_policy, hard_bytes), true);
+
+    const hard_views: SnapshotPressureStatus = SnapshotPressureStatus{
+        retired_bytes: 10,
+        retired_views: 4,
+    };
+    try assert_eq_bool(snapshot_pressure_hard(pressure_policy, hard_views), true);
+
+    const checkpoint_policy: CheckpointPolicy = CheckpointPolicy{
+        wal_soft_limit_bytes: 64,
+        wal_hard_limit_bytes: 256,
+        wal_vs_db_ratio_milli: 250,
+        max_checkpoint_interval_ms: 60000,
+    };
+    try assert_eq_bool(checkpoint_should_trigger_soft(checkpoint_policy, 64), true);
+    try assert_eq_bool(checkpoint_should_trigger_soft(checkpoint_policy, 63), false);
+    try assert_eq_bool(checkpoint_should_trigger_hard(checkpoint_policy, 256), true);
+    try assert_eq_bool(checkpoint_should_trigger_hard(checkpoint_policy, 255), false);
+}
+
+test "nosqlite_storage_checksum_crc32_known_vector" {
+    const data: &[byte] = &"abc"[0: 3];
+    const expected: u64 = 891568578u64;
+    try assert_eq_u64(checksum_bytes(data) as u64, expected);
+    try assert_eq_bool(checksum_matches(data, expected as u32), true);
+    try assert_eq_bool(checksum_matches(data, 0), false);
+}

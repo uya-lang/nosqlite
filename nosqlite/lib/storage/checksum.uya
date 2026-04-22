@@ -1,0 +1,13 @@
+// lib.storage.checksum - 校验和封装
+// 模块路径：lib/storage/checksum.uya → use lib.storage.checksum;
+
+use std.crypto.crc32.crc32_compute;
+use lib.core.types.Checksum;
+
+export fn checksum_bytes(data: &[byte]) Checksum {
+    return crc32_compute(data);
+}
+
+export fn checksum_matches(data: &[byte], expected: Checksum) bool {
+    return checksum_bytes(data) == expected;
+}

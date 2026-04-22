@@ -1,0 +1,19 @@
+// lib.core.types - NoSQLite 基础类型与常量
+// 模块路径：lib/core/types.uya → use lib.core.types;
+
+export type PageId = u32;
+export type SlotId = u16;
+export type Lsn = u64;
+export type TxnId = u64;
+export type Checksum = u32;
+
+export const NOSQLITE_FORMAT_VERSION_V1: u32 = 1;
+export const NOSQLITE_PAGE_SIZE_DEFAULT: u32 = 4096;
+export const NOSQLITE_PAGE_SIZE_MAX_V1: u32 = 8192;
+
+export const NOSQLITE_META_SLOT_A: u32 = 0;
+export const NOSQLITE_META_SLOT_B: u32 = 1;
+
+export fn page_size_is_supported(page_size: u32) bool {
+    return page_size == NOSQLITE_PAGE_SIZE_DEFAULT || page_size == NOSQLITE_PAGE_SIZE_MAX_V1;
+}

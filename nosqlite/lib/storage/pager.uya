@@ -1,0 +1,48 @@
+// lib.storage.pager - pager 策略与状态骨架
+// 模块路径：lib/storage/pager.uya → use lib.storage.pager;
+
+export struct SnapshotPressurePolicy {
+    soft_retired_bytes: u64,
+    hard_retired_bytes: u64,
+    max_retired_views: u32,
+    cursor_lease_ms: u64,
+}
+
+export struct SnapshotPressureStatus {
+    retired_bytes: u64,
+    retired_views: u32,
+}
+
+export struct CheckpointPolicy {
+    wal_soft_limit_bytes: u64,
+    wal_hard_limit_bytes: u64,
+    wal_vs_db_ratio_milli: u32,
+    max_checkpoint_interval_ms: u64,
+}
+
+export struct PagerStats {
+    page_count: u32,
+    dirty_pages: u32,
+    retired_views: u32,
+    retired_bytes: u64,
+    wal_bytes: u64,
+}
+
+export fn snapshot_pressure_soft(policy: &SnapshotPressurePolicy, status: &SnapshotPressureStatus) bool {
+    return policy != null && status != null &&
+        status.retired_bytes >= policy.soft_retired_bytes;
+}
+
+export fn snapshot_pressure_hard(policy: &SnapshotPressurePolicy, status: &SnapshotPressureStatus) bool {
+    return policy != null && status != null &&
+        (status.retired_bytes >= policy.hard_retired_bytes ||
+         status.retired_views >= policy.max_retired_views);
+}
+
+export fn checkpoint_should_trigger_soft(policy: &CheckpointPolicy, wal_bytes: u64) bool {
+    return policy != null && wal_bytes >= policy.wal_soft_limit_bytes;
+}
+
+export fn checkpoint_should_trigger_hard(policy: &CheckpointPolicy, wal_bytes: u64) bool {
+    return policy != null && wal_bytes >= policy.wal_hard_limit_bytes;
+}

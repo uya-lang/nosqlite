@@ -2,19 +2,41 @@
 
 日期：2026-04-21
 
+## 全局开发规则
+
+### TDD 默认启用
+
+- [ ] 所有新功能默认遵循 `Red -> Green -> Refactor`
+- [ ] 先写失败测试，再写最小实现，再做重构
+- [ ] 修复任何 bug 时，必须先补回归测试，再修实现
+- [ ] 磁盘格式、WAL、恢复逻辑变更时，必须先补 golden / corruption / recovery 测试
+- [ ] 页布局、索引顺序、数值比较规则变更时，必须先补对照测试
+- [ ] 在一个 TODO 子项被勾选完成前，对应测试必须已存在且能稳定通过
+
+### TDD 执行约束
+
+- [ ] 优先写纯单元测试，再写集成测试，最后写压力/故障测试
+- [ ] 每个 Phase 至少先完成 1 个失败测试用例，再开始对应实现
+- [ ] `Definition of Done` 里的能力项，必须能映射到明确测试文件或测试组
+- [ ] 不接受“代码先写完，最后统一补测试”的开发方式
+
 ## Phase 0 - 项目骨架
 
 - [ ] 创建 `nosqlite/lib` 目录结构
+- [ ] 创建 `nosqlite/tests` 目录结构
+- [ ] 约定测试文件命名：`test_*.uya`
 - [ ] 定义统一错误码与错误分类
 - [ ] 定义基础类型：`DocId`、`PageId`、`TxnId`、`Lsn`
 - [ ] 定义 Uya-native 资源模型：owning type / borrow type / guard type
 - [ ] 定义生产配置轮廓：开发 / 量产
 - [ ] 定义公共测试入口和最小 smoke test
+- [ ] 写一份 TDD 执行说明，约定每个模块先测后写
 - [ ] 约定数据库文件扩展名与目录布局
 - [ ] 写一份最小 API 草案并固定命名
 
 ## Phase 1 - 文档编码层
 
+- [ ] 先写 `DocBlob` 失败测试：节点头、数值词素、对象 key 排序
 - [ ] 定义 `DocBlob` 二进制格式
 - [ ] 定义 `NodeHeader`
 - [ ] 定义 `INT64/NUMBER_TEXT/STRING/ARRAY/OBJECT` 节点布局
@@ -34,6 +56,7 @@
 
 ## Phase 2 - Pager 与文件头
 
+- [ ] 先写失败测试：`MetaPage`、`WalHeader`、`PageHeader`、`Slot`、free space helper
 - [ ] 定义 `MetaPage`
 - [ ] 定义 `format_version`
 - [ ] 定义 `min_reader_version`
@@ -63,6 +86,7 @@
 
 ## Phase 3 - WAL 与恢复
 
+- [ ] 先写失败测试：WAL 头校验、已提交事务 redo、坏记录截断
 - [ ] 增加 `fsync/fdatasync` OS 封装
 - [ ] 定义 WAL 文件头
 - [ ] 在 WAL 文件头中加入 `format_version/min_reader_version/feature_flags`
@@ -89,6 +113,7 @@
 
 ## Phase 4 - Catalog
 
+- [ ] 先写失败测试：catalog 持久化/加载/损坏检测
 - [ ] 定义 `CollectionMeta`
 - [ ] 定义 `CatalogRoot`
 - [ ] 定义 `IndexMeta`
@@ -102,6 +127,7 @@
 
 ## Phase 5 - 主索引 B+Tree
 
+- [ ] 先写失败测试：查找、分裂、顺序游标、数值索引键排序
 - [ ] 定义 B+Tree 内部页格式
 - [ ] 定义 B+Tree 叶子页格式
 - [ ] 定义 canonical numeric index key encoding
@@ -116,6 +142,7 @@
 
 ## Phase 6 - SQL Lexer / Parser
 
+- [ ] 先写失败测试：关键字、路径、表达式优先级、错误语法
 - [ ] 定义 token 集合
 - [ ] 实现 SQL lexer
 - [ ] 实现 `SELECT` 解析
@@ -129,6 +156,7 @@
 
 ## Phase 7 - Binder / Planner
 
+- [ ] 先写失败测试：路径绑定、字面量归一、索引选择
 - [ ] 实现 collection 存在性校验
 - [ ] 实现系统列绑定
 - [ ] 实现 JSON path 绑定
@@ -141,6 +169,7 @@
 
 ## Phase 8 - Executor v1
 
+- [ ] 先写失败测试：`SeqScan`、`PrimaryLookup`、`Filter`、`Project`、`Limit`
 - [ ] 定义 `CommitViewPin`
 - [ ] 定义 `QueryCursor`
 - [ ] 定义 `RowRef`
@@ -165,6 +194,7 @@
 
 ## Phase 9 - 快照读与提交视图
 
+- [ ] 先写失败测试：旧读者不中断、retired 资源回收、cursor 过期
 - [ ] 定义 `CommitView`
 - [ ] 将 `page_table_gen` 纳入 `CommitView`
 - [ ] 实现 reader pin / unpin
@@ -183,6 +213,7 @@
 
 ## Phase 10 - 写路径 v1
 
+- [ ] 先写失败测试：插入、主键可见性、未提交不可见、重启后可见
 - [ ] 定义 `Txn`
 - [ ] 定义 `DocBlobBuilder`
 - [ ] 实现 `INSERT INTO ... JSON ...`
@@ -199,6 +230,7 @@
 
 ## Phase 11 - v1 稳定化
 
+- [ ] 先写失败测试：损坏页、损坏 WAL、checkpoint、snapshot pressure、数值精度
 - [ ] 做页损坏检测
 - [ ] 做 WAL 损坏检测
 - [ ] 做断电恢复验证
@@ -233,6 +265,7 @@
 
 ## Phase 12 - v1.5 功能扩展
 
+- [ ] 先写失败测试：`UPDATE`、`DELETE`、二级索引、`ORDER BY`
 - [ ] 实现 `UPDATE`
 - [ ] 实现 `DELETE`
 - [ ] 实现 tombstone 读取过滤
@@ -252,6 +285,7 @@
 
 ## Phase 13 - 格式兼容与升级
 
+- [ ] 先写失败测试：不兼容版本拒绝打开、未知 feature flag 拒绝、失败升级回滚
 - [ ] 定义文件格式兼容矩阵
 - [ ] 实现不兼容 `format_version` fail-fast
 - [ ] 实现未知必需 `feature_flags` fail-fast
@@ -261,6 +295,7 @@
 
 ## Phase 14 - 编译期增强
 
+- [ ] 先写失败测试：字段不存在、类型不匹配、schema 与 SQL 不一致
 - [ ] 定义静态 schema 描述格式
 - [ ] 设计 `typed_sql(sql, schema)` 接口
 - [ ] 只做静态字段与类型校验
@@ -283,6 +318,7 @@
 - [ ] 核心资源类型完成 `drop` 封装
 - [ ] 核心错误路径完成 `errdefer` 回滚
 - [ ] 锁与 pin 完成 guard 化
+- [ ] 每个完成的能力项都能对应到明确的测试文件或测试组
 - [ ] 所有核心模块至少有单元测试
 - [ ] 至少有一组故障恢复测试
 - [ ] 文档与示例可以独立指导使用

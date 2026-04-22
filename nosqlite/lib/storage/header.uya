@@ -1,0 +1,47 @@
+// lib.storage.header - 页通用头定义
+// 模块路径：lib/storage/header.uya → use lib.storage.header;
+
+use lib.core.types.PageId;
+use lib.core.types.Lsn;
+use lib.core.types.Checksum;
+
+export enum PageType {
+    META,
+    CATALOG,
+    DATA,
+    BTREE_INTERNAL,
+    BTREE_LEAF,
+    FREE,
+}
+
+export const PAGE_FLAG_NONE: u16 = 0;
+export const PAGE_FLAG_DIRTY: u16 = 1;
+export const PAGE_FLAG_HAS_TOMBSTONE: u16 = 2;
+
+export struct PageHeader {
+    page_type: PageType,
+    flags: u16,
+    page_lsn: Lsn,
+    lower: u16,
+    upper: u16,
+    checksum: Checksum,
+}
+
+export struct Slot {
+    off: u16,
+    len: u16,
+    flags: u16,
+}
+
+export struct PageRef {
+    page_id: PageId,
+    header: &PageHeader,
+}
+
+export fn page_header_size() usize {
+    return @size_of(PageHeader) as usize;
+}
+
+export fn slot_size() usize {
+    return @size_of(Slot) as usize;
+}

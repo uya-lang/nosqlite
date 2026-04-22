@@ -1,0 +1,42 @@
+// lib.storage.meta_page - MetaPage 与格式兼容字段
+// 模块路径：lib/storage/meta_page.uya → use lib.storage.meta_page;
+
+use lib.core.types.PageId;
+use lib.core.types.Lsn;
+use lib.core.types.Checksum;
+use lib.core.types.NOSQLITE_FORMAT_VERSION_V1;
+use lib.core.types.NOSQLITE_META_SLOT_A;
+use lib.core.types.NOSQLITE_META_SLOT_B;
+use lib.core.types.page_size_is_supported;
+
+export struct MetaPage {
+    magic: [byte: 4],
+    format_version: u32,
+    min_reader_version: u32,
+    feature_flags: u64,
+    page_size: u32,
+    generation: u64,
+    commit_lsn: Lsn,
+    checkpoint_lsn: Lsn,
+    page_count: u32,
+    catalog_root: PageId,
+    freelist_head: PageId,
+    active_meta_slot: u32,
+    checksum: Checksum,
+}
+
+export fn meta_page_size() usize {
+    return @size_of(MetaPage) as usize;
+}
+
+export fn meta_page_slot_valid(slot: u32) bool {
+    return slot == NOSQLITE_META_SLOT_A || slot == NOSQLITE_META_SLOT_B;
+}
+
+export fn meta_page_supported(page: &MetaPage) bool {
+    return page != null &&
+        page.format_version == NOSQLITE_FORMAT_VERSION_V1 &&
+        page.min_reader_version <= NOSQLITE_FORMAT_VERSION_V1 &&
+        page_size_is_supported(page.page_size) &&
+        meta_page_slot_valid(page.active_meta_slot);
+}

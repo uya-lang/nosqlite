@@ -123,11 +123,15 @@ nosqlite/
       eval.uya
     storage/
       header.uya
+      meta_page.uya
+      wal_header.uya
+      checksum.uya
       pager.uya
       wal.uya
       recovery.uya
       page.uya
       slotted_page.uya
+      freelist.uya
     index/
       key.uya
       btree.uya
@@ -142,6 +146,29 @@ nosqlite/
       txn.uya
       result.uya
 ```
+
+### 5.1 页面子系统代码结构
+
+页面子系统是最先落代码骨架的部分。建议按下面的文件边界实现，而不是把所有页逻辑塞进一个 `pager.uya`。
+
+| 文件 | 职责 |
+|------|------|
+| `nosqlite/lib/core/types.uya` | 页、LSN、事务号、校验和等基础类型别名与常量 |
+| `nosqlite/lib/storage/header.uya` | `PageType`、`PageHeader`、`Slot` 等所有页通用头定义 |
+| `nosqlite/lib/storage/meta_page.uya` | `MetaPage` 与格式版本、功能位、页大小校验 |
+| `nosqlite/lib/storage/wal_header.uya` | `WalHeader` 与 WAL 文件头兼容信息 |
+| `nosqlite/lib/storage/checksum.uya` | CRC32 封装、页/记录校验入口 |
+| `nosqlite/lib/storage/page.uya` | 与“整页视图”相关的通用 helper，如空闲空间计算、页体偏移 |
+| `nosqlite/lib/storage/slotted_page.uya` | slotted page 规则、记录头、可用空间判定 |
+| `nosqlite/lib/storage/freelist.uya` | 空闲页链表节点、分配/回收相关纯数据结构 |
+| `nosqlite/lib/storage/pager.uya` | `SnapshotPressurePolicy`、`CheckpointPolicy`、pager 级状态与策略 |
+
+这样拆分有几个好处：
+
+- `PageHeader`、`MetaPage`、`WalHeader` 可以独立冻结格式
+- checksum 不和 page layout 耦死，后续更容易做校验测试
+- slotted page 与 pager policy 分层，减少实现时相互污染
+- 后续真开始写 pager 逻辑时，可以从“数据结构先行”平滑过渡到“读写路径”
 
 ## 6. 核心设计决策
 

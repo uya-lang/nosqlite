@@ -1,0 +1,29 @@
+// lib.storage.slotted_page - slotted page 布局 helper
+// 模块路径：lib/storage/slotted_page.uya → use lib.storage.slotted_page;
+
+use lib.storage.header.PageHeader;
+use lib.storage.header.slot_size;
+use lib.storage.page.page_has_room;
+
+export const SLOT_FLAG_NONE: u16 = 0;
+export const SLOT_FLAG_USED: u16 = 1;
+export const SLOT_FLAG_TOMBSTONE: u16 = 2;
+
+export struct RecordCellHeader {
+    doc_id: u64,
+    created_at: u64,
+    updated_at: u64,
+    doc_len: u32,
+}
+
+export fn record_cell_header_size() usize {
+    return @size_of(RecordCellHeader) as usize;
+}
+
+export fn slotted_page_required_bytes(payload_len: usize) usize {
+    return slot_size() + payload_len;
+}
+
+export fn slotted_page_can_fit(header: &PageHeader, payload_len: usize) bool {
+    return page_has_room(header, slotted_page_required_bytes(payload_len));
+}
