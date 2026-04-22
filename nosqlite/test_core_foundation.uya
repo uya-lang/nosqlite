@@ -1,0 +1,71 @@
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_u64;
+
+use lib.core.types;
+use lib.foundation.status;
+use lib.foundation.resource_model;
+use lib.foundation.config;
+
+test "nosqlite_core_error_code_contract" {
+    try assert_eq_bool(nosqlite_error_code_valid(NOSQLITE_ERR_OK), true);
+    try assert_eq_bool(nosqlite_error_code_valid(NOSQLITE_ERR_IO_OPEN), true);
+    try assert_eq_bool(nosqlite_error_code_valid(123456u32), false);
+
+    try assert_eq_i32(nosqlite_error_category_for(NOSQLITE_ERR_IO_OPEN) as i32, NosqliteErrorCategory.IO as i32);
+    try assert_eq_i32(nosqlite_error_category_for(NOSQLITE_ERR_FORMAT_PAGE_CHECKSUM_INVALID) as i32, NosqliteErrorCategory.FORMAT as i32);
+    try assert_eq_i32(nosqlite_error_category_for(NOSQLITE_ERR_RESOURCE_WRITER_LOCK_BUSY) as i32, NosqliteErrorCategory.RESOURCE as i32);
+    try assert_eq_i32(nosqlite_error_category_for(NOSQLITE_ERR_INTERNAL_NOT_IMPLEMENTED) as i32, NosqliteErrorCategory.INTERNAL as i32);
+
+    const retryable: NosqliteErrorInfo = nosqlite_error_info(NOSQLITE_ERR_SNAPSHOT_PRESSURE);
+    try assert_eq_bool(retryable.retryable, true);
+    try assert_eq_bool(retryable.fatal, false);
+
+    const fatal: NosqliteErrorInfo = nosqlite_error_info(NOSQLITE_ERR_FORMAT_META_INVALID);
+    try assert_eq_bool(fatal.retryable, false);
+    try assert_eq_bool(fatal.fatal, true);
+}
+
+test "nosqlite_core_resource_model_contract" {
+    const owning: NosqliteResourceModel = nosqlite_resource_model_owning();
+    try assert_eq_i32(owning.kind as i32, NosqliteResourceKind.OWNING as i32);
+    try assert_eq_bool(nosqlite_resource_requires_drop(&owning), true);
+    try assert_eq_bool(nosqlite_resource_is_aliasable(&owning), false);
+
+    const borrow_ro: NosqliteResourceModel = nosqlite_resource_model_borrow_read_only();
+    try assert_eq_i32(borrow_ro.kind as i32, NosqliteResourceKind.BORROWED as i32);
+    try assert_eq_i32(borrow_ro.access as i32, NosqliteBorrowAccess.READ_ONLY as i32);
+    try assert_eq_bool(nosqlite_resource_is_aliasable(&borrow_ro), true);
+
+    const borrow_mut: NosqliteResourceModel = nosqlite_resource_model_borrow_mutable();
+    try assert_eq_i32(borrow_mut.access as i32, NosqliteBorrowAccess.MUTABLE as i32);
+    try assert_eq_bool(nosqlite_resource_is_aliasable(&borrow_mut), false);
+
+    const guard: NosqliteResourceModel = nosqlite_resource_model_guard();
+    try assert_eq_i32(guard.kind as i32, NosqliteResourceKind.GUARD as i32);
+    try assert_eq_bool(nosqlite_resource_requires_drop(&guard), true);
+}
+
+test "nosqlite_core_profile_contours" {
+    const dev: NosqliteProfileContour = nosqlite_dev_profile();
+    const prod: NosqliteProfileContour = nosqlite_prod_profile();
+
+    try assert_eq_bool(nosqlite_profile_is_production(&dev), false);
+    try assert_eq_bool(nosqlite_profile_is_production(&prod), true);
+
+    try assert_eq_bool(dev.durability_enabled, false);
+    try assert_eq_bool(prod.durability_enabled, true);
+    try assert_eq_i32(dev.page_size as i32, NOSQLITE_PAGE_SIZE_DEFAULT as i32);
+    try assert_eq_i32(prod.page_size as i32, NOSQLITE_PAGE_SIZE_DEFAULT as i32);
+
+    try assert_eq_u64(prod.wal_soft_limit_bytes, 67108864u64);
+    try assert_eq_u64(prod.wal_hard_limit_bytes, 268435456u64);
+    try assert_eq_i32(prod.wal_vs_db_ratio_milli as i32, 250);
+    try assert_eq_u64(prod.soft_retired_bytes, 268435456u64);
+    try assert_eq_u64(prod.hard_retired_bytes, 1073741824u64);
+    try assert_eq_i32(prod.max_retired_views as i32, 64);
+    try assert_eq_u64(prod.cursor_lease_ms, 30000u64);
+
+    try assert_eq_bool(dev.wal_soft_limit_bytes < prod.wal_soft_limit_bytes, true);
+    try assert_eq_bool(dev.hard_retired_bytes < prod.hard_retired_bytes, true);
+}

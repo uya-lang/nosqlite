@@ -1,0 +1,65 @@
+// lib.foundation - NoSQLite 资源模型骨架
+// 模块路径：lib/foundation/resource_model.uya → use lib.foundation;
+
+export enum NosqliteResourceKind {
+    OWNING,
+    BORROWED,
+    GUARD,
+}
+
+export enum NosqliteBorrowAccess {
+    NOT_APPLICABLE,
+    READ_ONLY,
+    MUTABLE,
+}
+
+export struct NosqliteResourceModel {
+    kind: NosqliteResourceKind,
+    access: NosqliteBorrowAccess,
+    requires_drop: bool,
+    aliasable: bool,
+}
+
+export fn nosqlite_resource_model_owning() NosqliteResourceModel {
+    return NosqliteResourceModel{
+        kind: NosqliteResourceKind.OWNING,
+        access: NosqliteBorrowAccess.NOT_APPLICABLE,
+        requires_drop: true,
+        aliasable: false,
+    };
+}
+
+export fn nosqlite_resource_model_borrow_read_only() NosqliteResourceModel {
+    return NosqliteResourceModel{
+        kind: NosqliteResourceKind.BORROWED,
+        access: NosqliteBorrowAccess.READ_ONLY,
+        requires_drop: false,
+        aliasable: true,
+    };
+}
+
+export fn nosqlite_resource_model_borrow_mutable() NosqliteResourceModel {
+    return NosqliteResourceModel{
+        kind: NosqliteResourceKind.BORROWED,
+        access: NosqliteBorrowAccess.MUTABLE,
+        requires_drop: false,
+        aliasable: false,
+    };
+}
+
+export fn nosqlite_resource_model_guard() NosqliteResourceModel {
+    return NosqliteResourceModel{
+        kind: NosqliteResourceKind.GUARD,
+        access: NosqliteBorrowAccess.NOT_APPLICABLE,
+        requires_drop: true,
+        aliasable: false,
+    };
+}
+
+export fn nosqlite_resource_requires_drop(model: &NosqliteResourceModel) bool {
+    return model != null && model.requires_drop;
+}
+
+export fn nosqlite_resource_is_aliasable(model: &NosqliteResourceModel) bool {
+    return model != null && model.aliasable;
+}

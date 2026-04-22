@@ -23,16 +23,16 @@
 ## Phase 0 - 项目骨架
 
 - [x] 创建 `nosqlite/lib` 目录结构
-- [ ] 创建 `nosqlite/tests` 目录结构
-- [ ] 约定测试文件命名：`test_*.uya`
-- [ ] 定义统一错误码与错误分类
+- [x] 创建 `nosqlite/tests` 目录结构
+- [x] 约定测试文件命名：`test_*.uya`
+- [x] 定义统一错误码与错误分类
 - [x] 定义基础类型：`DocId`、`PageId`、`TxnId`、`Lsn`
-- [ ] 定义 Uya-native 资源模型：owning type / borrow type / guard type
-- [ ] 定义生产配置轮廓：开发 / 量产
+- [x] 定义 Uya-native 资源模型：owning type / borrow type / guard type
+- [x] 定义生产配置轮廓：开发 / 量产
 - [x] 定义公共测试入口和最小 smoke test
-- [ ] 写一份 TDD 执行说明，约定每个模块先测后写
+- [x] 写一份 TDD 执行说明，约定每个模块先测后写
 - [x] 约定数据库文件扩展名与目录布局
-- [ ] 写一份最小 API 草案并固定命名
+- [x] 写一份最小 API 草案并固定命名
 
 ## Phase 1 - 文档编码层
 
@@ -64,8 +64,8 @@
 - [x] 定义双 Meta 页轮换规则
 - [x] 定义 `active_meta_slot` 语义
 - [x] 定义通用 `PageHeader`
-- [ ] 定义 `WriterLockGuard`
-- [ ] 定义 `PagePin`
+- [x] 定义 `WriterLockGuard`
+- [x] 定义 `PagePin`
 - [x] 实现数据库新建流程
 - [x] 实现数据库打开与头校验
 - [x] 实现 Meta A / Meta B 选择逻辑

@@ -242,6 +242,36 @@ test "nosqlite_storage_pager_policy_helpers" {
     try assert_eq_bool(checkpoint_should_trigger_hard(&checkpoint_policy, 255), false);
 }
 
+test "nosqlite_storage_writer_lock_guard_helpers" {
+    var guard: WriterLockGuard = writer_lock_guard_acquire(7u64, 3u64);
+    try assert_eq_bool(writer_lock_guard_is_held(&guard), true);
+    try assert_eq_u64(guard.owner_txn_id, 7u64);
+    try assert_eq_u64(guard.lock_gen, 3u64);
+
+    writer_lock_guard_release(&guard);
+    try assert_eq_bool(writer_lock_guard_is_held(&guard), false);
+
+    writer_lock_guard_release(&guard);
+    try assert_eq_bool(writer_lock_guard_is_held(&guard), false);
+}
+
+test "nosqlite_storage_page_pin_helpers" {
+    var readonly_pin: PagePin = page_pin_acquire(2u32, 11u64, 5u64, false);
+    try assert_eq_bool(page_pin_is_held(&readonly_pin), true);
+    try assert_eq_i32(readonly_pin.page_id as i32, 2);
+    try assert_eq_u64(readonly_pin.page_lsn, 11u64);
+    try assert_eq_u64(readonly_pin.view_gen, 5u64);
+    try assert_eq_bool(page_pin_is_writable(&readonly_pin), false);
+    try assert_eq_bool(page_pin_is_read_only(&readonly_pin), true);
+
+    var writable_pin: PagePin = page_pin_acquire(3u32, 17u64, 9u64, true);
+    try assert_eq_bool(page_pin_is_writable(&writable_pin), true);
+    try assert_eq_bool(page_pin_is_read_only(&writable_pin), false);
+
+    page_pin_release(&readonly_pin);
+    try assert_eq_bool(page_pin_is_held(&readonly_pin), false);
+}
+
 test "nosqlite_storage_checksum_crc32_known_vector" {
     const data: &[byte] = &"abc"[0: 3];
     const expected: u64 = 891568578u64;

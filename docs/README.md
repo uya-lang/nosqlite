@@ -3,6 +3,9 @@
 - [方案评审](./nosqlite-review.md)
 - [详细设计](./nosqlite-design.md)
 - [实施 TODO](./nosqlite-todo.md)
+- [资源模型](./nosqlite-resource-model.md)
+- [TDD 执行说明](./nosqlite-tdd.md)
+- [最小 API 草案](./nosqlite-api-draft.md)
 
 这组三份文档的关系是：
 

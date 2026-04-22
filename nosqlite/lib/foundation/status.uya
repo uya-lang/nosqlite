@@ -1,0 +1,126 @@
+// lib.foundation - NoSQLite 统一错误码与错误分类
+// 模块路径：lib/foundation/status.uya → use lib.foundation;
+
+export enum NosqliteErrorCategory {
+    SUCCESS,
+    IO,
+    FORMAT,
+    RESOURCE,
+    SNAPSHOT,
+    CATALOG,
+    SQL,
+    EXEC,
+    INTERNAL,
+}
+
+export struct NosqliteErrorInfo {
+    category: NosqliteErrorCategory,
+    code: u32,
+    retryable: bool,
+    fatal: bool,
+}
+
+export const NOSQLITE_ERR_OK: u32 = 0;
+
+export const NOSQLITE_ERR_IO_OPEN: u32 = 1001;
+export const NOSQLITE_ERR_IO_READ: u32 = 1002;
+export const NOSQLITE_ERR_IO_WRITE: u32 = 1003;
+export const NOSQLITE_ERR_IO_SYNC: u32 = 1004;
+export const NOSQLITE_ERR_IO_SEEK: u32 = 1005;
+
+export const NOSQLITE_ERR_FORMAT_META_INVALID: u32 = 2001;
+export const NOSQLITE_ERR_FORMAT_WAL_HEADER_INVALID: u32 = 2002;
+export const NOSQLITE_ERR_FORMAT_PAGE_CHECKSUM_INVALID: u32 = 2003;
+export const NOSQLITE_ERR_FORMAT_PAGE_BOUNDS_INVALID: u32 = 2004;
+
+export const NOSQLITE_ERR_RESOURCE_WRITER_LOCK_BUSY: u32 = 3001;
+export const NOSQLITE_ERR_RESOURCE_PAGE_PIN_CONFLICT: u32 = 3002;
+
+export const NOSQLITE_ERR_SNAPSHOT_PRESSURE: u32 = 4001;
+export const NOSQLITE_ERR_CURSOR_EXPIRED: u32 = 4002;
+
+export const NOSQLITE_ERR_CATALOG_CORRUPT: u32 = 5001;
+export const NOSQLITE_ERR_CATALOG_NOT_FOUND: u32 = 5002;
+
+export const NOSQLITE_ERR_SQL_SYNTAX: u32 = 6001;
+export const NOSQLITE_ERR_SQL_BIND: u32 = 6002;
+
+export const NOSQLITE_ERR_EXEC_CONSTRAINT: u32 = 7001;
+export const NOSQLITE_ERR_EXEC_PATH: u32 = 7002;
+
+export const NOSQLITE_ERR_INTERNAL_INVARIANT_BROKEN: u32 = 9001;
+export const NOSQLITE_ERR_INTERNAL_NOT_IMPLEMENTED: u32 = 9002;
+
+export fn nosqlite_error_code_valid(code: u32) bool {
+    return code == NOSQLITE_ERR_OK ||
+        code == NOSQLITE_ERR_IO_OPEN ||
+        code == NOSQLITE_ERR_IO_READ ||
+        code == NOSQLITE_ERR_IO_WRITE ||
+        code == NOSQLITE_ERR_IO_SYNC ||
+        code == NOSQLITE_ERR_IO_SEEK ||
+        code == NOSQLITE_ERR_FORMAT_META_INVALID ||
+        code == NOSQLITE_ERR_FORMAT_WAL_HEADER_INVALID ||
+        code == NOSQLITE_ERR_FORMAT_PAGE_CHECKSUM_INVALID ||
+        code == NOSQLITE_ERR_FORMAT_PAGE_BOUNDS_INVALID ||
+        code == NOSQLITE_ERR_RESOURCE_WRITER_LOCK_BUSY ||
+        code == NOSQLITE_ERR_RESOURCE_PAGE_PIN_CONFLICT ||
+        code == NOSQLITE_ERR_SNAPSHOT_PRESSURE ||
+        code == NOSQLITE_ERR_CURSOR_EXPIRED ||
+        code == NOSQLITE_ERR_CATALOG_CORRUPT ||
+        code == NOSQLITE_ERR_CATALOG_NOT_FOUND ||
+        code == NOSQLITE_ERR_SQL_SYNTAX ||
+        code == NOSQLITE_ERR_SQL_BIND ||
+        code == NOSQLITE_ERR_EXEC_CONSTRAINT ||
+        code == NOSQLITE_ERR_EXEC_PATH ||
+        code == NOSQLITE_ERR_INTERNAL_INVARIANT_BROKEN ||
+        code == NOSQLITE_ERR_INTERNAL_NOT_IMPLEMENTED;
+}
+
+export fn nosqlite_error_category_for(code: u32) NosqliteErrorCategory {
+    if code == NOSQLITE_ERR_OK {
+        return NosqliteErrorCategory.SUCCESS;
+    }
+    if code >= 1000 && code < 2000 {
+        return NosqliteErrorCategory.IO;
+    }
+    if code >= 2000 && code < 3000 {
+        return NosqliteErrorCategory.FORMAT;
+    }
+    if code >= 3000 && code < 4000 {
+        return NosqliteErrorCategory.RESOURCE;
+    }
+    if code >= 4000 && code < 5000 {
+        return NosqliteErrorCategory.SNAPSHOT;
+    }
+    if code >= 5000 && code < 6000 {
+        return NosqliteErrorCategory.CATALOG;
+    }
+    if code >= 6000 && code < 7000 {
+        return NosqliteErrorCategory.SQL;
+    }
+    if code >= 7000 && code < 8000 {
+        return NosqliteErrorCategory.EXEC;
+    }
+    return NosqliteErrorCategory.INTERNAL;
+}
+
+export fn nosqlite_error_is_retryable(code: u32) bool {
+    return code == NOSQLITE_ERR_RESOURCE_WRITER_LOCK_BUSY ||
+        code == NOSQLITE_ERR_SNAPSHOT_PRESSURE;
+}
+
+export fn nosqlite_error_is_fatal(code: u32) bool {
+    return code == NOSQLITE_ERR_FORMAT_META_INVALID ||
+        code == NOSQLITE_ERR_FORMAT_WAL_HEADER_INVALID ||
+        code == NOSQLITE_ERR_FORMAT_PAGE_CHECKSUM_INVALID ||
+        code == NOSQLITE_ERR_INTERNAL_INVARIANT_BROKEN;
+}
+
+export fn nosqlite_error_info(code: u32) NosqliteErrorInfo {
+    return NosqliteErrorInfo{
+        category: nosqlite_error_category_for(code),
+        code: code,
+        retryable: nosqlite_error_is_retryable(code),
+        fatal: nosqlite_error_is_fatal(code),
+    };
+}

@@ -1,0 +1,64 @@
+// lib.foundation - NoSQLite 开发/量产配置轮廓
+// 模块路径：lib/foundation/config.uya → use lib.foundation;
+
+use lib.core.NOSQLITE_PAGE_SIZE_DEFAULT;
+
+export enum NosqliteDeploymentProfile {
+    DEV,
+    PROD,
+}
+
+export struct NosqliteProfileContour {
+    profile: NosqliteDeploymentProfile,
+    durability_enabled: bool,
+    strict_checksums: bool,
+    page_size: u32,
+    wal_soft_limit_bytes: u64,
+    wal_hard_limit_bytes: u64,
+    wal_vs_db_ratio_milli: u32,
+    max_checkpoint_interval_ms: u64,
+    soft_retired_bytes: u64,
+    hard_retired_bytes: u64,
+    max_retired_views: u32,
+    cursor_lease_ms: u64,
+}
+
+const NOSQLITE_MIB: u64 = 1048576u64;
+
+export fn nosqlite_dev_profile() NosqliteProfileContour {
+    return NosqliteProfileContour{
+        profile: NosqliteDeploymentProfile.DEV,
+        durability_enabled: false,
+        strict_checksums: true,
+        page_size: NOSQLITE_PAGE_SIZE_DEFAULT,
+        wal_soft_limit_bytes: 8u64 * NOSQLITE_MIB,
+        wal_hard_limit_bytes: 32u64 * NOSQLITE_MIB,
+        wal_vs_db_ratio_milli: 500,
+        max_checkpoint_interval_ms: 10000,
+        soft_retired_bytes: 32u64 * NOSQLITE_MIB,
+        hard_retired_bytes: 128u64 * NOSQLITE_MIB,
+        max_retired_views: 8,
+        cursor_lease_ms: 5000,
+    };
+}
+
+export fn nosqlite_prod_profile() NosqliteProfileContour {
+    return NosqliteProfileContour{
+        profile: NosqliteDeploymentProfile.PROD,
+        durability_enabled: true,
+        strict_checksums: true,
+        page_size: NOSQLITE_PAGE_SIZE_DEFAULT,
+        wal_soft_limit_bytes: 64u64 * NOSQLITE_MIB,
+        wal_hard_limit_bytes: 256u64 * NOSQLITE_MIB,
+        wal_vs_db_ratio_milli: 250,
+        max_checkpoint_interval_ms: 60000,
+        soft_retired_bytes: 256u64 * NOSQLITE_MIB,
+        hard_retired_bytes: 1024u64 * NOSQLITE_MIB,
+        max_retired_views: 64,
+        cursor_lease_ms: 30000,
+    };
+}
+
+export fn nosqlite_profile_is_production(profile: &NosqliteProfileContour) bool {
+    return profile != null && profile.profile == NosqliteDeploymentProfile.PROD;
+}

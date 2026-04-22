@@ -63,6 +63,20 @@ export struct PagerOpenInfo {
     wal_header: WalHeader,
 }
 
+export struct WriterLockGuard {
+    owner_txn_id: u64,
+    lock_gen: u64,
+    held: bool,
+}
+
+export struct PagePin {
+    page_id: u32,
+    page_lsn: u64,
+    view_gen: u64,
+    writable: bool,
+    held: bool,
+}
+
 const NOSQLITE_FILE_MODE: u32 = 0o644;
 const NOSQLITE_PATH_BUF_SIZE: usize = 512;
 const NOSQLITE_INITIAL_PAGE_COUNT: u32 = 3;
@@ -70,6 +84,54 @@ const NOSQLITE_INITIAL_CATALOG_ROOT: u32 = 2;
 
 export fn pager_db_extension() &[byte] {
     return &".nsq"[0: 4];
+}
+
+export fn writer_lock_guard_acquire(owner_txn_id: u64, lock_gen: u64) WriterLockGuard {
+    return WriterLockGuard{
+        owner_txn_id: owner_txn_id,
+        lock_gen: lock_gen,
+        held: true,
+    };
+}
+
+export fn writer_lock_guard_is_held(guard: &WriterLockGuard) bool {
+    return guard != null && guard.held;
+}
+
+export fn writer_lock_guard_release(guard: &WriterLockGuard) void {
+    if guard == null {
+        return;
+    }
+    guard.held = false;
+}
+
+export fn page_pin_acquire(page_id: u32, page_lsn: u64, view_gen: u64, writable: bool) PagePin {
+    return PagePin{
+        page_id: page_id,
+        page_lsn: page_lsn,
+        view_gen: view_gen,
+        writable: writable,
+        held: true,
+    };
+}
+
+export fn page_pin_is_held(pin: &PagePin) bool {
+    return pin != null && pin.held;
+}
+
+export fn page_pin_is_writable(pin: &PagePin) bool {
+    return pin != null && pin.writable;
+}
+
+export fn page_pin_is_read_only(pin: &PagePin) bool {
+    return pin != null && !pin.writable;
+}
+
+export fn page_pin_release(pin: &PagePin) void {
+    if pin == null {
+        return;
+    }
+    pin.held = false;
 }
 
 export fn pager_wal_extension() &[byte] {
