@@ -1,10 +1,8 @@
-// lib.storage.freelist - 空闲页链表纯数据结构
-// 模块路径：lib/storage/freelist.uya → use lib.storage.freelist;
-
-use lib.core.types.PageId;
+// lib.storage - 空闲页链表纯数据结构
+// 模块路径：lib/storage/freelist.uya → use lib.storage;
 
 export struct FreePageNode {
-    next_page: PageId,
+    next_page: u32,
 }
 
 export fn freelist_node_size() usize {

@@ -22,14 +22,14 @@
 
 ## Phase 0 - 项目骨架
 
-- [ ] 创建 `nosqlite/lib` 目录结构
+- [x] 创建 `nosqlite/lib` 目录结构
 - [ ] 创建 `nosqlite/tests` 目录结构
 - [ ] 约定测试文件命名：`test_*.uya`
 - [ ] 定义统一错误码与错误分类
-- [ ] 定义基础类型：`DocId`、`PageId`、`TxnId`、`Lsn`
+- [x] 定义基础类型：`DocId`、`PageId`、`TxnId`、`Lsn`
 - [ ] 定义 Uya-native 资源模型：owning type / borrow type / guard type
 - [ ] 定义生产配置轮廓：开发 / 量产
-- [ ] 定义公共测试入口和最小 smoke test
+- [x] 定义公共测试入口和最小 smoke test
 - [ ] 写一份 TDD 执行说明，约定每个模块先测后写
 - [ ] 约定数据库文件扩展名与目录布局
 - [ ] 写一份最小 API 草案并固定命名
@@ -56,14 +56,14 @@
 
 ## Phase 2 - Pager 与文件头
 
-- [ ] 先写失败测试：`MetaPage`、`WalHeader`、`PageHeader`、`Slot`、free space helper
-- [ ] 定义 `MetaPage`
-- [ ] 定义 `format_version`
-- [ ] 定义 `min_reader_version`
-- [ ] 定义 `feature_flags`
+- [x] 先写失败测试：`MetaPage`、`WalHeader`、`PageHeader`、`Slot`、free space helper
+- [x] 定义 `MetaPage`
+- [x] 定义 `format_version`
+- [x] 定义 `min_reader_version`
+- [x] 定义 `feature_flags`
 - [ ] 定义双 Meta 页轮换规则
-- [ ] 定义 `active_meta_slot` 语义
-- [ ] 定义通用 `PageHeader`
+- [x] 定义 `active_meta_slot` 语义
+- [x] 定义通用 `PageHeader`
 - [ ] 定义 `WriterLockGuard`
 - [ ] 定义 `PagePin`
 - [ ] 实现数据库新建流程
@@ -76,20 +76,20 @@
 - [ ] 实现已发布页帧只读规则
 - [ ] 实现私有脏页副本
 - [ ] 为锁与 pin 路径补 `drop` 自动释放
-- [ ] 定义 `SnapshotPressurePolicy`
+- [x] 定义 `SnapshotPressurePolicy`
 - [ ] 定义 cursor lease 语义
 - [ ] 实现 snapshot pressure 对写侧的 backpressure
-- [ ] 实现空闲页链表
+- [x] 实现空闲页链表
 - [ ] 实现 slotted page 插入
 - [ ] 实现 slotted page 读回
 - [ ] 补充分页、插槽、校验测试
 
 ## Phase 3 - WAL 与恢复
 
-- [ ] 先写失败测试：WAL 头校验、已提交事务 redo、坏记录截断
+- [x] 先写失败测试：WAL 头校验、已提交事务 redo、坏记录截断
 - [ ] 增加 `fsync/fdatasync` OS 封装
-- [ ] 定义 WAL 文件头
-- [ ] 在 WAL 文件头中加入 `format_version/min_reader_version/feature_flags`
+- [x] 定义 WAL 文件头
+- [x] 在 WAL 文件头中加入 `format_version/min_reader_version/feature_flags`
 - [ ] 定义 `BEGIN/PAGE_WRITE/COMMIT/CHECKPOINT` 记录
 - [ ] 定义 `WalCommit` 中的数据库级元数据
 - [ ] 定义 `WalBatch`

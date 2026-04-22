@@ -1,5 +1,5 @@
-// lib.storage.pager - pager 策略与状态骨架
-// 模块路径：lib/storage/pager.uya → use lib.storage.pager;
+// lib.storage - pager 策略与状态骨架
+// 模块路径：lib/storage/pager.uya → use lib.storage;
 
 export struct SnapshotPressurePolicy {
     soft_retired_bytes: u64,

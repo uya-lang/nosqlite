@@ -1,8 +1,8 @@
-// lib.storage.page - 页级 helper
-// 模块路径：lib/storage/page.uya → use lib.storage.page;
+// lib.storage - 页级 helper
+// 模块路径：lib/storage/page.uya → use lib.storage;
 
-use lib.storage.header.PageHeader;
-use lib.storage.header.page_header_size;
+use lib.storage.PageHeader;
+use lib.storage.page_header_size;
 
 export fn page_body_offset() usize {
     return page_header_size();
@@ -20,4 +20,24 @@ export fn page_free_space(header: &PageHeader) usize {
 
 export fn page_has_room(header: &PageHeader, required: usize) bool {
     return page_free_space(header) >= required;
+}
+
+export fn page_bounds_valid(header: &PageHeader, page_size: u32) bool {
+    if header == null {
+        return false;
+    }
+    const body_off: usize = page_body_offset();
+    const lower: usize = header.lower as usize;
+    const upper: usize = header.upper as usize;
+    const total: usize = page_size as usize;
+    if lower < body_off {
+        return false;
+    }
+    if header.upper < header.lower {
+        return false;
+    }
+    if upper > total {
+        return false;
+    }
+    return true;
 }

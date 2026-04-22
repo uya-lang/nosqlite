@@ -1,9 +1,8 @@
-// lib.storage.wal_header - WAL 文件头
-// 模块路径：lib/storage/wal_header.uya → use lib.storage.wal_header;
+// lib.storage - WAL 文件头
+// 模块路径：lib/storage/wal_header.uya → use lib.storage;
 
-use lib.core.types.Checksum;
-use lib.core.types.NOSQLITE_FORMAT_VERSION_V1;
-use lib.core.types.page_size_is_supported;
+use lib.core.NOSQLITE_FORMAT_VERSION_V1;
+use lib.core.page_size_is_supported;
 
 export struct WalHeader {
     magic: [byte: 4],
@@ -11,15 +10,23 @@ export struct WalHeader {
     min_reader_version: u32,
     feature_flags: u64,
     page_size: u32,
-    header_checksum: Checksum,
+    header_checksum: u32,
 }
 
 export fn wal_header_size() usize {
     return @size_of(WalHeader) as usize;
 }
 
-export fn wal_header_supported(header: &WalHeader) bool {
+export fn wal_header_magic_valid(header: &WalHeader) bool {
     return header != null &&
+        header.magic[0] == 78 &&
+        header.magic[1] == 83 &&
+        header.magic[2] == 87 &&
+        header.magic[3] == 76;
+}
+
+export fn wal_header_supported(header: &WalHeader) bool {
+    return wal_header_magic_valid(header) &&
         header.format_version == NOSQLITE_FORMAT_VERSION_V1 &&
         header.min_reader_version <= NOSQLITE_FORMAT_VERSION_V1 &&
         page_size_is_supported(header.page_size);

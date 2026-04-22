@@ -1,9 +1,5 @@
-// lib.storage.header - 页通用头定义
-// 模块路径：lib/storage/header.uya → use lib.storage.header;
-
-use lib.core.types.PageId;
-use lib.core.types.Lsn;
-use lib.core.types.Checksum;
+// lib.storage - 页通用头定义
+// 模块路径：lib/storage/header.uya → use lib.storage;
 
 export enum PageType {
     META,
@@ -21,10 +17,10 @@ export const PAGE_FLAG_HAS_TOMBSTONE: u16 = 2;
 export struct PageHeader {
     page_type: PageType,
     flags: u16,
-    page_lsn: Lsn,
+    page_lsn: u64,
     lower: u16,
     upper: u16,
-    checksum: Checksum,
+    checksum: u32,
 }
 
 export struct Slot {
@@ -34,7 +30,7 @@ export struct Slot {
 }
 
 export struct PageRef {
-    page_id: PageId,
+    page_id: u32,
     header: &PageHeader,
 }
 

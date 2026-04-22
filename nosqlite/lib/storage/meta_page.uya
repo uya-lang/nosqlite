@@ -1,13 +1,10 @@
-// lib.storage.meta_page - MetaPage 与格式兼容字段
-// 模块路径：lib/storage/meta_page.uya → use lib.storage.meta_page;
+// lib.storage - MetaPage 与格式兼容字段
+// 模块路径：lib/storage/meta_page.uya → use lib.storage;
 
-use lib.core.types.PageId;
-use lib.core.types.Lsn;
-use lib.core.types.Checksum;
-use lib.core.types.NOSQLITE_FORMAT_VERSION_V1;
-use lib.core.types.NOSQLITE_META_SLOT_A;
-use lib.core.types.NOSQLITE_META_SLOT_B;
-use lib.core.types.page_size_is_supported;
+use lib.core.NOSQLITE_FORMAT_VERSION_V1;
+use lib.core.NOSQLITE_META_SLOT_A;
+use lib.core.NOSQLITE_META_SLOT_B;
+use lib.core.page_size_is_supported;
 
 export struct MetaPage {
     magic: [byte: 4],
@@ -16,13 +13,13 @@ export struct MetaPage {
     feature_flags: u64,
     page_size: u32,
     generation: u64,
-    commit_lsn: Lsn,
-    checkpoint_lsn: Lsn,
+    commit_lsn: u64,
+    checkpoint_lsn: u64,
     page_count: u32,
-    catalog_root: PageId,
-    freelist_head: PageId,
+    catalog_root: u32,
+    freelist_head: u32,
     active_meta_slot: u32,
-    checksum: Checksum,
+    checksum: u32,
 }
 
 export fn meta_page_size() usize {
@@ -33,8 +30,16 @@ export fn meta_page_slot_valid(slot: u32) bool {
     return slot == NOSQLITE_META_SLOT_A || slot == NOSQLITE_META_SLOT_B;
 }
 
-export fn meta_page_supported(page: &MetaPage) bool {
+export fn meta_page_magic_valid(page: &MetaPage) bool {
     return page != null &&
+        page.magic[0] == 78 &&
+        page.magic[1] == 83 &&
+        page.magic[2] == 81 &&
+        page.magic[3] == 76;
+}
+
+export fn meta_page_supported(page: &MetaPage) bool {
+    return meta_page_magic_valid(page) &&
         page.format_version == NOSQLITE_FORMAT_VERSION_V1 &&
         page.min_reader_version <= NOSQLITE_FORMAT_VERSION_V1 &&
         page_size_is_supported(page.page_size) &&

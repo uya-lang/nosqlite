@@ -1,5 +1,5 @@
-// lib.core.types - NoSQLite 基础类型与常量
-// 模块路径：lib/core/types.uya → use lib.core.types;
+// lib.core - NoSQLite 基础类型与常量
+// 模块路径：lib/core/types.uya → use lib.core;
 
 export type PageId = u32;
 export type SlotId = u16;

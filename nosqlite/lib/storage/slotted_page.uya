@@ -1,9 +1,9 @@
-// lib.storage.slotted_page - slotted page 布局 helper
-// 模块路径：lib/storage/slotted_page.uya → use lib.storage.slotted_page;
+// lib.storage - slotted page 布局 helper
+// 模块路径：lib/storage/slotted_page.uya → use lib.storage;
 
-use lib.storage.header.PageHeader;
-use lib.storage.header.slot_size;
-use lib.storage.page.page_has_room;
+use lib.storage.PageHeader;
+use lib.storage.slot_size;
+use lib.storage.page_has_room;
 
 export const SLOT_FLAG_NONE: u16 = 0;
 export const SLOT_FLAG_USED: u16 = 1;
@@ -26,4 +26,12 @@ export fn slotted_page_required_bytes(payload_len: usize) usize {
 
 export fn slotted_page_can_fit(header: &PageHeader, payload_len: usize) bool {
     return page_has_room(header, slotted_page_required_bytes(payload_len));
+}
+
+export fn slot_is_used(flags: u16) bool {
+    return (flags & SLOT_FLAG_USED) != 0;
+}
+
+export fn slot_is_tombstone(flags: u16) bool {
+    return (flags & SLOT_FLAG_TOMBSTONE) != 0;
 }
