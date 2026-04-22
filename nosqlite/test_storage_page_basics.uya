@@ -166,6 +166,24 @@ test "nosqlite_storage_page_header_bounds_and_slot_flags" {
     try assert_eq_bool(slot_is_tombstone(SLOT_FLAG_USED), false);
 }
 
+test "nosqlite_storage_page_buffer_and_checksum_helpers" {
+    var raw: [byte: 256] = [];
+    const page_buf: &[byte] = raw[0: 256];
+    try slotted_page_init(page_buf, PageType.DATA);
+
+    const hdr: &PageHeader = page_header_from_buf(page_buf);
+    try assert_eq_bool(hdr != null, true);
+    try assert_eq_bool(page_buffer_size_matches(page_buf, 256), true);
+    try assert_eq_bool(page_checksum_valid(page_buf), false);
+
+    const crc: u32 = try page_checksum_finalize(page_buf);
+    try assert_eq_bool(crc != 0u32, true);
+    try assert_eq_bool(page_checksum_valid(page_buf), true);
+
+    page_buf.ptr[page_body_offset()] = 99 as byte;
+    try assert_eq_bool(page_checksum_valid(page_buf), false);
+}
+
 test "nosqlite_storage_slotted_page_helpers" {
     const payload_len: usize = 48;
     const required: usize = slotted_page_required_bytes(payload_len);
@@ -299,6 +317,7 @@ test "nosqlite_storage_pager_meta_selection" {
 test "nosqlite_storage_pager_path_and_rotation_helpers" {
     try assert_eq_i32((try pager_next_meta_slot(NOSQLITE_META_SLOT_A)) as i32, NOSQLITE_META_SLOT_B as i32);
     try assert_eq_i32((try pager_next_meta_slot(NOSQLITE_META_SLOT_B)) as i32, NOSQLITE_META_SLOT_A as i32);
+    try assert_eq_u64(pager_page_offset(NOSQLITE_PAGE_SIZE_DEFAULT, 2), 8192u64);
 
     var db_path: [byte: 96] = [];
     var wal_path: [byte: 96] = [];

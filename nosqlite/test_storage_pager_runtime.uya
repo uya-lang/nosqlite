@@ -1,10 +1,13 @@
 use libc.unlink;
 
 use lib.core.types;
+use lib.storage.header;
 use lib.storage.meta_page;
 use lib.storage.wal_header;
+use lib.storage.page;
 use lib.storage.checksum;
 use lib.storage.pager;
+use lib.storage.slotted_page;
 
 const TEST_STEM: *const byte = "/tmp/nosqlite_storage_pager_runtime" as *const byte;
 
@@ -65,8 +68,54 @@ fn main() i32 {
         return 10;
     }
 
-    if cleanup_paths() != 0 {
+    var raw_page: [byte: 4096] = [];
+    const write_buf: &[byte] = raw_page[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    _ = slotted_page_init(write_buf, PageType.DATA) catch {
+        _ = cleanup_paths();
         return 11;
+    };
+    const slot_id: u16 = slotted_page_insert_copy(write_buf, &"abc"[0: 3]) catch {
+        _ = cleanup_paths();
+        return 12;
+    };
+    if slot_id != 0u16 {
+        _ = cleanup_paths();
+        return 13;
+    }
+    _ = pager_write_page_at_stem(TEST_STEM, 2u32, write_buf) catch {
+        _ = cleanup_paths();
+        return 14;
+    };
+
+    var read_page: [byte: 4096] = [];
+    const read_buf: &[byte] = read_page[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    _ = pager_read_page_at_stem(TEST_STEM, 2u32, read_buf) catch {
+        _ = cleanup_paths();
+        return 15;
+    };
+    if !page_checksum_valid(read_buf) {
+        _ = cleanup_paths();
+        return 16;
+    }
+    if slotted_page_slot_count(read_buf) != 1u16 {
+        _ = cleanup_paths();
+        return 17;
+    }
+    const view: SlottedPageCellView = slotted_page_cell_view(read_buf, 0u16) catch {
+        _ = cleanup_paths();
+        return 18;
+    };
+    if view.len != 3usize {
+        _ = cleanup_paths();
+        return 19;
+    }
+    if view.ptr[0] != 97 as byte || view.ptr[1] != 98 as byte || view.ptr[2] != 99 as byte {
+        _ = cleanup_paths();
+        return 20;
+    }
+
+    if cleanup_paths() != 0 {
+        return 21;
     }
     return 0;
 }

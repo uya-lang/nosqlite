@@ -4,6 +4,17 @@
 use lib.storage.PageHeader;
 use lib.storage.page_header_size;
 
+export fn page_header_from_buf(page_buf: &[byte]) &PageHeader {
+    if page_buf.ptr == null || page_buf.len < page_header_size() {
+        return null;
+    }
+    return page_buf.ptr as &PageHeader;
+}
+
+export fn page_buffer_size_matches(page_buf: &[byte], page_size: u32) bool {
+    return page_buf.ptr != null && page_buf.len == page_size as usize;
+}
+
 export fn page_body_offset() usize {
     return page_header_size();
 }

@@ -3,10 +3,44 @@
 
 use std.crypto.crc32.crc32_compute;
 
+export error PageChecksumInvalidBuffer;
+
 export fn checksum_bytes(data: &[byte]) u32 {
     return crc32_compute(data);
 }
 
 export fn checksum_matches(data: &[byte], expected: u32) bool {
     return checksum_bytes(data) == expected;
+}
+
+export fn page_checksum_compute(page_buf: &[byte]) !u32 {
+    const header: &PageHeader = page_header_from_buf(page_buf);
+    if header == null {
+        return error.PageChecksumInvalidBuffer;
+    }
+    const saved: u32 = header.checksum;
+    header.checksum = 0;
+    const crc: u32 = checksum_bytes(page_buf);
+    header.checksum = saved;
+    return crc;
+}
+
+export fn page_checksum_finalize(page_buf: &[byte]) !u32 {
+    const header: &PageHeader = page_header_from_buf(page_buf);
+    if header == null {
+        return error.PageChecksumInvalidBuffer;
+    }
+    const crc: u32 = try page_checksum_compute(page_buf);
+    header.checksum = crc;
+    return crc;
+}
+
+export fn page_checksum_valid(page_buf: &[byte]) bool {
+    const header: &PageHeader = page_header_from_buf(page_buf);
+    if header == null {
+        return false;
+    }
+    return header.checksum == (page_checksum_compute(page_buf) catch {
+        return false;
+    });
 }

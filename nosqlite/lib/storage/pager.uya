@@ -27,6 +27,9 @@ export error PagerBadPageSize;
 export error PagerIoError;
 export error PagerNoValidMeta;
 export error PagerInvalidWalHeader;
+export error PagerInvalidPageId;
+export error PagerInvalidPageBuffer;
+export error PagerInvalidPageChecksum;
 
 export struct SnapshotPressurePolicy {
     soft_retired_bytes: u64,
@@ -106,6 +109,10 @@ export fn pager_next_meta_slot(slot: u32) !u32 {
         return NOSQLITE_META_SLOT_A;
     }
     return error.PagerNoValidMeta;
+}
+
+export fn pager_page_offset(page_size: u32, page_id: u32) u64 {
+    return (page_size as u64) * (page_id as u64);
 }
 
 fn pager_make_initial_meta(page_size: u32) MetaPage {
@@ -239,6 +246,15 @@ fn pager_read_wal_header(file: &File) !WalHeader {
     try pager_seek_exact(file, 0);
     try pager_read_exact(file, buf[0: wal_header_encoded_size()]);
     return wal_header_decode(buf[0: wal_header_encoded_size()]);
+}
+
+fn pager_validate_page_access(meta: &MetaPage, page_id: u32, page_buf: &[byte]) !void {
+    if meta == null || page_id < 2 || page_id >= meta.page_count {
+        return error.PagerInvalidPageId;
+    }
+    if !page_buffer_size_matches(page_buf, meta.page_size) {
+        return error.PagerInvalidPageBuffer;
+    }
 }
 
 fn pager_meta_valid_for_slot(page: &MetaPage, slot: u32) bool {
@@ -391,6 +407,54 @@ export fn pager_open_at_stem(stem: &const byte) !PagerOpenInfo {
         meta: meta,
         wal_header: wal_header,
     };
+}
+
+export fn pager_read_page_at_stem(stem: &const byte, page_id: u32, page_buf: &[byte]) !void {
+    const info: PagerOpenInfo = try pager_open_at_stem(stem);
+    try pager_validate_page_access(&info.meta, page_id, page_buf);
+
+    var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
+
+    var db: File = try pager_open_file(&db_path[0], O_RDONLY, 0);
+    errdefer {
+        _ = os_close(&db) catch {};
+    }
+
+    try pager_seek_exact(&db, pager_page_offset(info.meta.page_size, page_id) as i64);
+    try pager_read_exact(&db, page_buf);
+    try os_close(&db);
+
+    const header: &PageHeader = page_header_from_buf(page_buf);
+    if header == null || !page_bounds_valid(header, info.meta.page_size) {
+        return error.PagerInvalidPageBuffer;
+    }
+    if !page_checksum_valid(page_buf) {
+        return error.PagerInvalidPageChecksum;
+    }
+}
+
+export fn pager_write_page_at_stem(stem: &const byte, page_id: u32, page_buf: &[byte]) !void {
+    const info: PagerOpenInfo = try pager_open_at_stem(stem);
+    try pager_validate_page_access(&info.meta, page_id, page_buf);
+
+    const header: &PageHeader = page_header_from_buf(page_buf);
+    if header == null || !page_bounds_valid(header, info.meta.page_size) {
+        return error.PagerInvalidPageBuffer;
+    }
+    _ = try page_checksum_finalize(page_buf);
+
+    var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
+
+    var db: File = try pager_open_file(&db_path[0], O_RDWR, 0);
+    errdefer {
+        _ = os_close(&db) catch {};
+    }
+
+    try pager_seek_exact(&db, pager_page_offset(info.meta.page_size, page_id) as i64);
+    try pager_write_all(&db, page_buf);
+    try os_close(&db);
 }
 
 export fn snapshot_pressure_soft(policy: &SnapshotPressurePolicy, status: &SnapshotPressureStatus) bool {
