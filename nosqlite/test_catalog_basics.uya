@@ -1,0 +1,100 @@
+use lib.core.types;
+use lib.storage.wal_header;
+use lib.storage.pager.CatalogSnapshot;
+use lib.storage.pager.catalog_load_at_stem;
+use lib.storage.pager.catalog_snapshot_collection_count;
+use lib.storage.pager.catalog_snapshot_find_collection;
+use lib.storage.pager.catalog_cleanup_stem;
+use lib.storage.pager.catalog_create_db_at_stem;
+use lib.storage.pager.catalog_create_collection_at_stem;
+use lib.storage.pager.catalog_allocate_next_doc_id_at_stem;
+use lib.storage.pager.catalog_corrupt_root_byte_at_stem;
+use lib.catalog.schema.CatalogCollectionView;
+use lib.catalog.schema.CollectionMeta;
+
+const TEST_STEM_CATALOG: *const byte = "/tmp/nosqlite_catalog_phase4" as *const byte;
+
+fn byte_slices_equal(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn run_persist_roundtrip() i32 {
+    _ = catalog_cleanup_stem(TEST_STEM_CATALOG) catch {};
+    defer {
+        _ = catalog_cleanup_stem(TEST_STEM_CATALOG) catch {};
+    }
+
+    _ = catalog_create_db_at_stem(TEST_STEM_CATALOG, NOSQLITE_PAGE_SIZE_DEFAULT) catch {
+        return 21;
+    };
+
+    const empty_snapshot: CatalogSnapshot = catalog_load_at_stem(TEST_STEM_CATALOG) catch {
+        return 22;
+    };
+    if catalog_snapshot_collection_count(&empty_snapshot) != 0u32 {
+        return 23;
+    }
+
+    const created: CollectionMeta = catalog_create_collection_at_stem(TEST_STEM_CATALOG, &"users"[0: 5]) catch {
+        return 24;
+    };
+    if created.collection_id != 1u32 || created.next_doc_id != 1u64 {
+        return 25;
+    }
+
+    const duplicate_create: !CollectionMeta = catalog_create_collection_at_stem(TEST_STEM_CATALOG, &"users"[0: 5]);
+    if duplicate_create.error_id == 0u32 {
+        return 26;
+    }
+
+    const first_id: u64 = catalog_allocate_next_doc_id_at_stem(TEST_STEM_CATALOG, &"users"[0: 5]) catch {
+        return 27;
+    };
+    const second_id: u64 = catalog_allocate_next_doc_id_at_stem(TEST_STEM_CATALOG, &"users"[0: 5]) catch {
+        return 28;
+    };
+    if first_id != 1u64 || second_id != 2u64 {
+        return 29;
+    }
+
+    const snapshot: CatalogSnapshot = catalog_load_at_stem(TEST_STEM_CATALOG) catch {
+        return 30;
+    };
+    if catalog_snapshot_collection_count(&snapshot) != 1u32 {
+        return 31;
+    }
+    const users: CatalogCollectionView = catalog_snapshot_find_collection(&snapshot, &"users"[0: 5]) catch {
+        return 32;
+    };
+    if users.meta.next_doc_id != 3u64 || !byte_slices_equal(users.name, &"users"[0: 5]) {
+        return 33;
+    }
+
+    _ = catalog_corrupt_root_byte_at_stem(TEST_STEM_CATALOG, 4usize, 1 as byte) catch {
+        return 34;
+    };
+
+    const corrupted: !CatalogSnapshot = catalog_load_at_stem(TEST_STEM_CATALOG);
+    if corrupted.error_id == 0u32 {
+        return 35;
+    }
+    return 0;
+}
+
+fn main() i32 {
+    const persist_rc: i32 = run_persist_roundtrip();
+    if persist_rc != 0 {
+        return persist_rc;
+    }
+    return 0;
+}

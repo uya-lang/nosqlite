@@ -20,6 +20,15 @@ use libc.O_CREAT;
 use libc.O_EXCL;
 use libc.SEEK_SET;
 use libc.SEEK_END;
+use lib.catalog.schema.CatalogRoot;
+use lib.catalog.schema.CatalogView;
+use lib.catalog.schema.CatalogCollectionView;
+use lib.catalog.schema.CollectionMeta;
+use lib.catalog.schema.catalog_view_from_page;
+use lib.catalog.schema.catalog_find_collection;
+use lib.catalog.schema.catalog_page_append_collection;
+use lib.catalog.schema.catalog_page_allocate_next_doc_id;
+use lib.catalog.schema.catalog_page_init;
 use lib.core.NOSQLITE_FORMAT_VERSION_V1;
 use lib.core.NOSQLITE_META_SLOT_A;
 use lib.core.NOSQLITE_META_SLOT_B;
@@ -80,6 +89,13 @@ export struct PagerStats {
 export struct PagerOpenInfo {
     meta: MetaPage,
     wal_header: WalHeader,
+}
+
+export struct CatalogSnapshot {
+    page_size: u32,
+    catalog_root: u32,
+    root: CatalogRoot,
+    page: [byte: 8192],
 }
 
 export struct WriterLockGuard {
@@ -471,6 +487,34 @@ export fn pager_build_db_path(stem: &const byte, out: &[byte]) !void {
 
 export fn pager_build_wal_path(stem: &const byte, out: &[byte]) !void {
     try pager_build_path(stem, pager_wal_extension(), out);
+}
+
+fn catalog_snapshot_page(snapshot: &CatalogSnapshot) !&[byte] {
+    if snapshot == null {
+        return error.PagerInvalidPageBuffer;
+    }
+    const page_len: usize = (snapshot.page_size as! usize) catch {
+        return error.PagerInvalidPageBuffer;
+    };
+    return snapshot.page[0: page_len];
+}
+
+fn catalog_snapshot_view(snapshot: &CatalogSnapshot) !CatalogView {
+    return try catalog_view_from_page(try catalog_snapshot_page(snapshot));
+}
+
+fn pager_catalog_next_commit(info: &PagerOpenInfo) !WalCommit {
+    if info == null {
+        return error.PagerInvalidWalRecord;
+    }
+    const next_lsn: u64 = info.meta.commit_lsn + 1u64;
+    return WalCommit{
+        txn_id: next_lsn,
+        commit_lsn: next_lsn,
+        catalog_root: info.meta.catalog_root,
+        page_count: info.meta.page_count,
+        freelist_head: info.meta.freelist_head,
+    };
 }
 
 export fn pager_next_meta_slot(slot: u32) !u32 {
@@ -1060,7 +1104,7 @@ export fn pager_create_at_stem(stem: &const byte, page_size: u32) !PagerOpenInfo
     _ = mem_set(page_bytes.ptr, 0, page_bytes.len);
     try pager_write_all(&db, page_bytes);
 
-    _ = mem_set(page_bytes.ptr, 0, page_bytes.len);
+    try catalog_page_init(page_bytes);
     try pager_write_all(&db, page_bytes);
 
     var wal_buf: [byte: 28] = [];
@@ -1110,6 +1154,85 @@ export fn pager_open_at_stem(stem: &const byte) !PagerOpenInfo {
         meta: meta,
         wal_header: wal_header,
     };
+}
+
+export fn catalog_cleanup_stem(stem: &const byte) !void {
+    var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    var wal_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
+    try pager_build_wal_path(stem, wal_path[0: NOSQLITE_PATH_BUF_SIZE]);
+    _ = os_unlink(&db_path[0]) catch {};
+    _ = os_unlink(&wal_path[0]) catch {};
+}
+
+export fn catalog_create_db_at_stem(stem: &const byte, page_size: u32) !void {
+    _ = try pager_create_at_stem(stem, page_size);
+}
+
+export fn catalog_load_at_stem(stem: &const byte) !CatalogSnapshot {
+    const info: PagerOpenInfo = try pager_open_at_stem(stem);
+    if info.meta.catalog_root < 2u32 || info.meta.catalog_root >= info.meta.page_count {
+        return error.PagerInvalidPageId;
+    }
+
+    var snapshot: CatalogSnapshot = CatalogSnapshot{
+        page_size: info.meta.page_size,
+        catalog_root: info.meta.catalog_root,
+        root: CatalogRoot{},
+        page: [],
+    };
+    const page_buf: &[byte] = try catalog_snapshot_page(&snapshot);
+    try pager_read_page_at_stem(stem, info.meta.catalog_root, page_buf);
+    const view: CatalogView = try catalog_view_from_page(page_buf);
+    snapshot.root = view.root;
+    return snapshot;
+}
+
+export fn catalog_snapshot_collection_count(snapshot: &CatalogSnapshot) u32 {
+    if snapshot == null {
+        return 0u32;
+    }
+    return snapshot.root.collection_count;
+}
+
+export fn catalog_snapshot_find_collection(snapshot: &CatalogSnapshot, name: &[byte]) !CatalogCollectionView {
+    const view: CatalogView = try catalog_snapshot_view(snapshot);
+    return try catalog_find_collection(&view, name);
+}
+
+export fn catalog_create_collection_at_stem(stem: &const byte, name: &[byte]) !CollectionMeta {
+    const info: PagerOpenInfo = try pager_open_at_stem(stem);
+    var raw: [byte: 8192] = [];
+    const page_buf: &[byte] = raw[0: info.meta.page_size as usize];
+    try pager_read_page_at_stem(stem, info.meta.catalog_root, page_buf);
+    const created: CollectionMeta = try catalog_page_append_collection(page_buf, name);
+    const commit: WalCommit = try pager_catalog_next_commit(&info);
+    _ = try pager_commit_page_at_stem(stem, info.meta.catalog_root, page_buf, &commit, null);
+    return created;
+}
+
+export fn catalog_allocate_next_doc_id_at_stem(stem: &const byte, name: &[byte]) !u64 {
+    const info: PagerOpenInfo = try pager_open_at_stem(stem);
+    var raw: [byte: 8192] = [];
+    const page_buf: &[byte] = raw[0: info.meta.page_size as usize];
+    try pager_read_page_at_stem(stem, info.meta.catalog_root, page_buf);
+    const doc_id: u64 = try catalog_page_allocate_next_doc_id(page_buf, name);
+    const commit: WalCommit = try pager_catalog_next_commit(&info);
+    _ = try pager_commit_page_at_stem(stem, info.meta.catalog_root, page_buf, &commit, null);
+    return doc_id;
+}
+
+export fn catalog_corrupt_root_byte_at_stem(stem: &const byte, rel_off: usize, xor_mask: byte) !void {
+    const info: PagerOpenInfo = try pager_open_at_stem(stem);
+    var raw: [byte: 8192] = [];
+    const page_buf: &[byte] = raw[0: info.meta.page_size as usize];
+    try pager_read_page_at_stem(stem, info.meta.catalog_root, page_buf);
+    const body_off: usize = page_body_offset();
+    if body_off + rel_off >= page_buf.len {
+        return error.PagerInvalidPageBuffer;
+    }
+    page_buf.ptr[body_off + rel_off] = page_buf.ptr[body_off + rel_off] ^ xor_mask;
+    try pager_write_page_at_stem(stem, info.meta.catalog_root, page_buf);
 }
 
 export fn pager_read_page_at_stem(stem: &const byte, page_id: u32, page_buf: &[byte]) !void {

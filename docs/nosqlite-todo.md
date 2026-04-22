@@ -113,17 +113,17 @@
 
 ## Phase 4 - Catalog
 
-- [ ] 先写失败测试：catalog 持久化/加载/损坏检测
-- [ ] 定义 `CollectionMeta`
-- [ ] 定义 `CatalogRoot`
-- [ ] 定义 `IndexMeta`
-- [ ] 为 `CollectionMeta` 增加名称与索引偏移布局
-- [ ] 实现 `CREATE COLLECTION`
-- [ ] 实现 collection 元数据持久化
-- [ ] 实现 collection 元数据加载
-- [ ] 实现 collection 名称查找
-- [ ] 实现 `next_doc_id` 分配
-- [ ] 为 catalog 增加启动一致性检查
+- [x] 先写失败测试：catalog 持久化/加载/损坏检测
+- [x] 定义 `CollectionMeta`
+- [x] 定义 `CatalogRoot`
+- [x] 定义 `IndexMeta`
+- [x] 为 `CollectionMeta` 增加名称与索引偏移布局
+- [x] 实现 `CREATE COLLECTION`
+- [x] 实现 collection 元数据持久化
+- [x] 实现 collection 元数据加载
+- [x] 实现 collection 名称查找
+- [x] 实现 `next_doc_id` 分配
+- [x] 为 catalog 增加启动一致性检查
 
 ## Phase 5 - 主索引 B+Tree
 

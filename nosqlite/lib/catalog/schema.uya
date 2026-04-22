@@ -1,0 +1,662 @@
+// lib.catalog - catalog blob 与 catalog page 编解码
+// 模块路径：lib/catalog/schema.uya → use lib.catalog.schema;
+
+use std.mem.mem.mem_copy;
+use std.mem.mem.mem_set;
+use std.mem.mem.mem_cmp;
+
+use lib.storage.header;
+use lib.storage.page;
+use lib.storage.checksum;
+
+export error CatalogInvalidBuffer;
+export error CatalogInvalidPage;
+export error CatalogInvalidChecksum;
+export error CatalogCorrupt;
+export error CatalogCollectionNotFound;
+export error CatalogCollectionExists;
+export error CatalogNameTooLong;
+export error CatalogNameInvalid;
+export error CatalogNoSpace;
+export error CatalogDocIdExhausted;
+
+export const CATALOG_ROOT_ENCODED_SIZE: usize = 16;
+export const COLLECTION_META_ENCODED_SIZE: usize = 32;
+export const INDEX_META_ENCODED_SIZE: usize = 20;
+
+export struct CatalogRoot {
+    collection_count: u32,
+    collections_off: u32,
+    string_pool_off: u32,
+    checksum: u32,
+}
+
+export struct CollectionMeta {
+    collection_id: u32,
+    name_len: u16,
+    flags: u16,
+    next_doc_id: u64,
+    primary_root_page: u32,
+    secondary_index_count: u16,
+    rsv: u16,
+    name_off: u32,
+    indexes_off: u32,
+}
+
+export struct IndexMeta {
+    index_id: u32,
+    root_page: u32,
+    flags: u16,
+    path_segment_count: u16,
+    name_off: u32,
+    path_off: u32,
+}
+
+export struct CatalogView {
+    root: CatalogRoot,
+    blob: &[byte],
+}
+
+export struct CatalogCollectionView {
+    meta: CollectionMeta,
+    name: &[byte],
+}
+
+export fn catalog_root_encoded_size() usize {
+    return CATALOG_ROOT_ENCODED_SIZE;
+}
+
+export fn collection_meta_encoded_size() usize {
+    return COLLECTION_META_ENCODED_SIZE;
+}
+
+export fn index_meta_encoded_size() usize {
+    return INDEX_META_ENCODED_SIZE;
+}
+
+fn catalog_store_u16_le(out: &[byte], off: usize, value: u16) void {
+    out.ptr[off] = ((value & 255u16) as! byte).value;
+    out.ptr[off + 1] = (((value >> 8) & 255u16) as! byte).value;
+}
+
+fn catalog_store_u32_le(out: &[byte], off: usize, value: u32) void {
+    out.ptr[off] = ((value & 255u32) as! byte).value;
+    out.ptr[off + 1] = (((value >> 8) & 255u32) as! byte).value;
+    out.ptr[off + 2] = (((value >> 16) & 255u32) as! byte).value;
+    out.ptr[off + 3] = (((value >> 24) & 255u32) as! byte).value;
+}
+
+fn catalog_store_u64_le(out: &[byte], off: usize, value: u64) void {
+    out.ptr[off] = ((value & 255u64) as! byte).value;
+    out.ptr[off + 1] = (((value >> 8) & 255u64) as! byte).value;
+    out.ptr[off + 2] = (((value >> 16) & 255u64) as! byte).value;
+    out.ptr[off + 3] = (((value >> 24) & 255u64) as! byte).value;
+    out.ptr[off + 4] = (((value >> 32) & 255u64) as! byte).value;
+    out.ptr[off + 5] = (((value >> 40) & 255u64) as! byte).value;
+    out.ptr[off + 6] = (((value >> 48) & 255u64) as! byte).value;
+    out.ptr[off + 7] = (((value >> 56) & 255u64) as! byte).value;
+}
+
+fn catalog_load_u16_le(data: &[byte], off: usize) u16 {
+    return (data.ptr[off] as u16) |
+        ((data.ptr[off + 1] as u16) << 8);
+}
+
+fn catalog_load_u32_le(data: &[byte], off: usize) u32 {
+    return (data.ptr[off] as u32) |
+        ((data.ptr[off + 1] as u32) << 8) |
+        ((data.ptr[off + 2] as u32) << 16) |
+        ((data.ptr[off + 3] as u32) << 24);
+}
+
+fn catalog_load_u64_le(data: &[byte], off: usize) u64 {
+    return (data.ptr[off] as u64) |
+        ((data.ptr[off + 1] as u64) << 8) |
+        ((data.ptr[off + 2] as u64) << 16) |
+        ((data.ptr[off + 3] as u64) << 24) |
+        ((data.ptr[off + 4] as u64) << 32) |
+        ((data.ptr[off + 5] as u64) << 40) |
+        ((data.ptr[off + 6] as u64) << 48) |
+        ((data.ptr[off + 7] as u64) << 56);
+}
+
+fn catalog_name_valid(name: &[byte]) bool {
+    if name.ptr == null || name.len == 0 || name.len > 65535usize {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < name.len {
+        if name.ptr[i] == 0 as byte {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn catalog_name_equal(a: &[byte], b: &[byte]) bool {
+    return a.len == b.len && mem_cmp(a.ptr, b.ptr, a.len) == 0;
+}
+
+fn catalog_root_encode_inner(root: &CatalogRoot, out: &[byte], checksum: u32) !void {
+    if root == null || out.ptr == null || out.len < CATALOG_ROOT_ENCODED_SIZE {
+        return error.CatalogInvalidBuffer;
+    }
+    catalog_store_u32_le(out, 0usize, root.collection_count);
+    catalog_store_u32_le(out, 4usize, root.collections_off);
+    catalog_store_u32_le(out, 8usize, root.string_pool_off);
+    catalog_store_u32_le(out, 12usize, checksum);
+}
+
+export fn catalog_root_encode(root: &CatalogRoot, out: &[byte]) !void {
+    try catalog_root_encode_inner(root, out, root.checksum);
+}
+
+export fn catalog_root_decode(data: &[byte]) !CatalogRoot {
+    if data.ptr == null || data.len < CATALOG_ROOT_ENCODED_SIZE {
+        return error.CatalogInvalidBuffer;
+    }
+    return CatalogRoot{
+        collection_count: catalog_load_u32_le(data, 0usize),
+        collections_off: catalog_load_u32_le(data, 4usize),
+        string_pool_off: catalog_load_u32_le(data, 8usize),
+        checksum: catalog_load_u32_le(data, 12usize),
+    };
+}
+
+export fn collection_meta_encode(meta: &CollectionMeta, out: &[byte]) !void {
+    if meta == null || out.ptr == null || out.len < COLLECTION_META_ENCODED_SIZE {
+        return error.CatalogInvalidBuffer;
+    }
+    catalog_store_u32_le(out, 0usize, meta.collection_id);
+    catalog_store_u16_le(out, 4usize, meta.name_len);
+    catalog_store_u16_le(out, 6usize, meta.flags);
+    catalog_store_u64_le(out, 8usize, meta.next_doc_id);
+    catalog_store_u32_le(out, 16usize, meta.primary_root_page);
+    catalog_store_u16_le(out, 20usize, meta.secondary_index_count);
+    catalog_store_u16_le(out, 22usize, meta.rsv);
+    catalog_store_u32_le(out, 24usize, meta.name_off);
+    catalog_store_u32_le(out, 28usize, meta.indexes_off);
+}
+
+export fn collection_meta_decode(data: &[byte]) !CollectionMeta {
+    if data.ptr == null || data.len < COLLECTION_META_ENCODED_SIZE {
+        return error.CatalogInvalidBuffer;
+    }
+    return CollectionMeta{
+        collection_id: catalog_load_u32_le(data, 0usize),
+        name_len: catalog_load_u16_le(data, 4usize),
+        flags: catalog_load_u16_le(data, 6usize),
+        next_doc_id: catalog_load_u64_le(data, 8usize),
+        primary_root_page: catalog_load_u32_le(data, 16usize),
+        secondary_index_count: catalog_load_u16_le(data, 20usize),
+        rsv: catalog_load_u16_le(data, 22usize),
+        name_off: catalog_load_u32_le(data, 24usize),
+        indexes_off: catalog_load_u32_le(data, 28usize),
+    };
+}
+
+export fn index_meta_encode(meta: &IndexMeta, out: &[byte]) !void {
+    if meta == null || out.ptr == null || out.len < INDEX_META_ENCODED_SIZE {
+        return error.CatalogInvalidBuffer;
+    }
+    catalog_store_u32_le(out, 0usize, meta.index_id);
+    catalog_store_u32_le(out, 4usize, meta.root_page);
+    catalog_store_u16_le(out, 8usize, meta.flags);
+    catalog_store_u16_le(out, 10usize, meta.path_segment_count);
+    catalog_store_u32_le(out, 12usize, meta.name_off);
+    catalog_store_u32_le(out, 16usize, meta.path_off);
+}
+
+export fn index_meta_decode(data: &[byte]) !IndexMeta {
+    if data.ptr == null || data.len < INDEX_META_ENCODED_SIZE {
+        return error.CatalogInvalidBuffer;
+    }
+    return IndexMeta{
+        index_id: catalog_load_u32_le(data, 0usize),
+        root_page: catalog_load_u32_le(data, 4usize),
+        flags: catalog_load_u16_le(data, 8usize),
+        path_segment_count: catalog_load_u16_le(data, 10usize),
+        name_off: catalog_load_u32_le(data, 12usize),
+        path_off: catalog_load_u32_le(data, 16usize),
+    };
+}
+
+export fn catalog_blob_checksum_compute(blob: &[byte]) !u32 {
+    if blob.ptr == null || blob.len < CATALOG_ROOT_ENCODED_SIZE || blob.len > 8192usize {
+        return error.CatalogInvalidBuffer;
+    }
+    var scratch: [byte: 8192] = [];
+    _ = mem_copy(&scratch[0], blob.ptr, blob.len);
+    scratch[12] = 0 as byte;
+    scratch[13] = 0 as byte;
+    scratch[14] = 0 as byte;
+    scratch[15] = 0 as byte;
+    return checksum_bytes(scratch[0: blob.len]);
+}
+
+export fn catalog_blob_checksum_valid(blob: &[byte]) bool {
+    const root: CatalogRoot = catalog_root_decode(blob) catch {
+        return false;
+    };
+    return root.checksum == (catalog_blob_checksum_compute(blob) catch {
+        return false;
+    });
+}
+
+export fn catalog_blob_finalize_checksum(blob: &[byte]) !void {
+    if blob.ptr == null || blob.len < CATALOG_ROOT_ENCODED_SIZE {
+        return error.CatalogInvalidBuffer;
+    }
+    catalog_store_u32_le(blob, 12usize, try catalog_blob_checksum_compute(blob));
+}
+
+fn catalog_collection_meta_offset(root: &CatalogRoot, index: u32) !usize {
+    if root == null || index >= root.collection_count {
+        return error.CatalogCollectionNotFound;
+    }
+    const index_usize: usize = (index as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    const collections_off: usize = (root.collections_off as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    return collections_off + index_usize * COLLECTION_META_ENCODED_SIZE;
+}
+
+fn catalog_collection_at_unchecked(blob: &[byte], root: &CatalogRoot, index: u32) !CatalogCollectionView {
+    const meta_off: usize = try catalog_collection_meta_offset(root, index);
+    if meta_off + COLLECTION_META_ENCODED_SIZE > blob.len {
+        return error.CatalogCorrupt;
+    }
+    const meta: CollectionMeta = try collection_meta_decode(blob[meta_off: COLLECTION_META_ENCODED_SIZE]);
+    const name_off: usize = (meta.name_off as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    const name_len: usize = (meta.name_len as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    if name_off + name_len > blob.len {
+        return error.CatalogCorrupt;
+    }
+    return CatalogCollectionView{
+        meta: meta,
+        name: blob[name_off: name_len],
+    };
+}
+
+fn catalog_validate_indexes(blob: &[byte], root: &CatalogRoot, meta: &CollectionMeta) !void {
+    const string_pool_off: usize = (root.string_pool_off as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    if meta.secondary_index_count == 0u16 {
+        if meta.indexes_off != 0u32 {
+            return error.CatalogCorrupt;
+        }
+        return;
+    }
+
+    if meta.indexes_off == 0u32 {
+        return error.CatalogCorrupt;
+    }
+    const indexes_off: usize = (meta.indexes_off as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    const index_count: usize = (meta.secondary_index_count as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    const total_index_bytes: usize = index_count * INDEX_META_ENCODED_SIZE;
+    if indexes_off < string_pool_off || indexes_off + total_index_bytes > blob.len {
+        return error.CatalogCorrupt;
+    }
+
+    var i: usize = 0usize;
+    while i < index_count {
+        const off: usize = indexes_off + i * INDEX_META_ENCODED_SIZE;
+        const idx: IndexMeta = try index_meta_decode(blob[off: INDEX_META_ENCODED_SIZE]);
+        const name_off: usize = (idx.name_off as! usize) catch {
+            return error.CatalogCorrupt;
+        };
+        const path_off: usize = (idx.path_off as! usize) catch {
+            return error.CatalogCorrupt;
+        };
+        if idx.index_id == 0u32 || name_off < string_pool_off || name_off >= blob.len || path_off >= blob.len {
+            return error.CatalogCorrupt;
+        }
+        i = i + 1usize;
+    }
+}
+
+export fn catalog_view_from_blob(blob: &[byte]) !CatalogView {
+    if blob.ptr == null || blob.len < CATALOG_ROOT_ENCODED_SIZE {
+        return error.CatalogInvalidBuffer;
+    }
+    const root: CatalogRoot = try catalog_root_decode(blob[0: CATALOG_ROOT_ENCODED_SIZE]);
+    if !catalog_blob_checksum_valid(blob) {
+        return error.CatalogInvalidChecksum;
+    }
+
+    const collections_off: usize = (root.collections_off as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    const string_pool_off: usize = (root.string_pool_off as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    const collection_count: usize = (root.collection_count as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    const collections_bytes: usize = collection_count * COLLECTION_META_ENCODED_SIZE;
+
+    if collections_off != CATALOG_ROOT_ENCODED_SIZE ||
+        string_pool_off < collections_off ||
+        collections_off + collections_bytes > string_pool_off ||
+        string_pool_off > blob.len {
+        return error.CatalogCorrupt;
+    }
+
+    var i: u32 = 0u32;
+    while i < root.collection_count {
+        const entry: CatalogCollectionView = try catalog_collection_at_unchecked(blob, &root, i);
+        if entry.meta.collection_id == 0u32 || entry.meta.next_doc_id == 0u64 {
+            return error.CatalogCorrupt;
+        }
+        if !catalog_name_valid(entry.name) {
+            return error.CatalogCorrupt;
+        }
+        if entry.meta.name_off < root.string_pool_off {
+            return error.CatalogCorrupt;
+        }
+        try catalog_validate_indexes(blob, &root, &entry.meta);
+
+        var j: u32 = i + 1u32;
+        while j < root.collection_count {
+            const other: CatalogCollectionView = try catalog_collection_at_unchecked(blob, &root, j);
+            if other.meta.collection_id == entry.meta.collection_id || catalog_name_equal(other.name, entry.name) {
+                return error.CatalogCorrupt;
+            }
+            j = j + 1u32;
+        }
+        i = i + 1u32;
+    }
+
+    return CatalogView{
+        root: root,
+        blob: blob,
+    };
+}
+
+export fn catalog_collection_at(view: &CatalogView, index: u32) !CatalogCollectionView {
+    if view == null {
+        return error.CatalogInvalidBuffer;
+    }
+    return try catalog_collection_at_unchecked(view.blob, &view.root, index);
+}
+
+export fn catalog_find_collection(view: &CatalogView, name: &[byte]) !CatalogCollectionView {
+    if view == null || !catalog_name_valid(name) {
+        return error.CatalogNameInvalid;
+    }
+    var i: u32 = 0u32;
+    while i < view.root.collection_count {
+        const entry: CatalogCollectionView = try catalog_collection_at(view, i);
+        if catalog_name_equal(entry.name, name) {
+            return entry;
+        }
+        i = i + 1u32;
+    }
+    return error.CatalogCollectionNotFound;
+}
+
+export fn catalog_page_blob(page_buf: &[byte]) !&[byte] {
+    const header: &PageHeader = page_header_from_buf(page_buf);
+    if header == null {
+        return error.CatalogInvalidPage;
+    }
+    const page_size: u32 = (page_buf.len as! u32) catch {
+        return error.CatalogInvalidPage;
+    };
+    if !page_bounds_valid(header, page_size) || header.page_type != PageType.CATALOG {
+        return error.CatalogInvalidPage;
+    }
+    const body_off: usize = page_body_offset();
+    const lower: usize = header.lower as usize;
+    if lower < body_off || lower > page_buf.len {
+        return error.CatalogInvalidPage;
+    }
+    return page_buf[body_off: lower - body_off];
+}
+
+export fn catalog_view_from_page(page_buf: &[byte]) !CatalogView {
+    return try catalog_view_from_blob(try catalog_page_blob(page_buf));
+}
+
+export fn catalog_page_init(page_buf: &[byte]) !void {
+    if page_buf.ptr == null || page_buf.len < page_header_size() + CATALOG_ROOT_ENCODED_SIZE {
+        return error.CatalogInvalidBuffer;
+    }
+    _ = mem_set(page_buf.ptr, 0 as byte, page_buf.len);
+
+    const header: &PageHeader = page_header_from_buf(page_buf);
+    if header == null {
+        return error.CatalogInvalidPage;
+    }
+
+    header.page_type = PageType.CATALOG;
+    header.flags = PAGE_FLAG_NONE;
+    header.page_lsn = 0u64;
+    const lower: u16 = ((page_body_offset() + CATALOG_ROOT_ENCODED_SIZE) as! u16) catch {
+        return error.CatalogInvalidBuffer;
+    };
+    const upper: u16 = (page_buf.len as! u16) catch {
+        return error.CatalogInvalidBuffer;
+    };
+    header.lower = lower;
+    header.upper = upper;
+    header.checksum = 0u32;
+
+    const blob: &[byte] = page_buf[page_body_offset(): CATALOG_ROOT_ENCODED_SIZE];
+    const root: CatalogRoot = CatalogRoot{
+        collection_count: 0u32,
+        collections_off: CATALOG_ROOT_ENCODED_SIZE as u32,
+        string_pool_off: CATALOG_ROOT_ENCODED_SIZE as u32,
+        checksum: 0u32,
+    };
+    try catalog_root_encode(&root, blob);
+    try catalog_blob_finalize_checksum(blob);
+    _ = try page_checksum_finalize(page_buf);
+}
+
+fn catalog_page_prepare_scratch(scratch_buf: &[byte], page_buf: &[byte], total_blob_len: usize) !void {
+    if scratch_buf.ptr == null || scratch_buf.len != page_buf.len {
+        return error.CatalogInvalidBuffer;
+    }
+    if page_buf.ptr == null || total_blob_len < CATALOG_ROOT_ENCODED_SIZE || page_body_offset() + total_blob_len > page_buf.len {
+        return error.CatalogNoSpace;
+    }
+    _ = mem_set(scratch_buf.ptr, 0 as byte, scratch_buf.len);
+
+    const old_header: &PageHeader = page_header_from_buf(page_buf);
+    const new_header: &PageHeader = page_header_from_buf(scratch_buf);
+    if old_header == null || new_header == null {
+        return error.CatalogInvalidPage;
+    }
+    new_header.page_type = PageType.CATALOG;
+    new_header.flags = PAGE_FLAG_NONE;
+    new_header.page_lsn = old_header.page_lsn;
+    const lower: u16 = ((page_body_offset() + total_blob_len) as! u16) catch {
+        return error.CatalogNoSpace;
+    };
+    const upper: u16 = (scratch_buf.len as! u16) catch {
+        return error.CatalogNoSpace;
+    };
+    new_header.lower = lower;
+    new_header.upper = upper;
+    new_header.checksum = 0u32;
+}
+
+export fn catalog_page_append_collection(page_buf: &[byte], name: &[byte]) !CollectionMeta {
+    if !catalog_name_valid(name) {
+        if name.len > 65535usize {
+            return error.CatalogNameTooLong;
+        }
+        return error.CatalogNameInvalid;
+    }
+
+    const view: CatalogView = try catalog_view_from_page(page_buf);
+    const existing: !CatalogCollectionView = catalog_find_collection(&view, name);
+    if existing.error_id == 0u32 {
+        return error.CatalogCollectionExists;
+    }
+
+    var total_name_bytes: usize = name.len;
+    var max_collection_id: u32 = 0u32;
+    var i: u32 = 0u32;
+    while i < view.root.collection_count {
+        const entry: CatalogCollectionView = try catalog_collection_at(&view, i);
+        if entry.meta.secondary_index_count != 0u16 {
+            return error.CatalogCorrupt;
+        }
+        total_name_bytes = total_name_bytes + entry.name.len;
+        if entry.meta.collection_id > max_collection_id {
+            max_collection_id = entry.meta.collection_id;
+        }
+        i = i + 1u32;
+    }
+
+    const new_count: u32 = view.root.collection_count + 1u32;
+    const collections_bytes: usize = (new_count as! usize) catch {
+        return error.CatalogCorrupt;
+    } * COLLECTION_META_ENCODED_SIZE;
+    const string_pool_off: usize = CATALOG_ROOT_ENCODED_SIZE + collections_bytes;
+    const total_blob_len: usize = string_pool_off + total_name_bytes;
+    var scratch: [byte: 8192] = [];
+    const scratch_buf: &[byte] = scratch[0: page_buf.len];
+    try catalog_page_prepare_scratch(scratch_buf, page_buf, total_blob_len);
+    const blob: &[byte] = scratch_buf[page_body_offset(): total_blob_len];
+
+    const root: CatalogRoot = CatalogRoot{
+        collection_count: new_count,
+        collections_off: CATALOG_ROOT_ENCODED_SIZE as u32,
+        string_pool_off: (string_pool_off as! u32) catch {
+            return error.CatalogNoSpace;
+        },
+        checksum: 0u32,
+    };
+    try catalog_root_encode(&root, blob[0: CATALOG_ROOT_ENCODED_SIZE]);
+
+    var name_cursor: usize = string_pool_off;
+    i = 0u32;
+    while i < view.root.collection_count {
+        const entry: CatalogCollectionView = try catalog_collection_at(&view, i);
+        var meta: CollectionMeta = entry.meta;
+        meta.name_off = (name_cursor as! u32) catch {
+            return error.CatalogNoSpace;
+        };
+        meta.indexes_off = 0u32;
+        const meta_off: usize = CATALOG_ROOT_ENCODED_SIZE + ((i as! usize).value * COLLECTION_META_ENCODED_SIZE);
+        try collection_meta_encode(&meta, blob[meta_off: COLLECTION_META_ENCODED_SIZE]);
+        _ = mem_copy(&blob.ptr[name_cursor], entry.name.ptr, entry.name.len);
+        name_cursor = name_cursor + entry.name.len;
+        i = i + 1u32;
+    }
+
+    const new_index: usize = (view.root.collection_count as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    const created: CollectionMeta = CollectionMeta{
+        collection_id: max_collection_id + 1u32,
+        name_len: (name.len as! u16) catch {
+            return error.CatalogNameTooLong;
+        },
+        flags: 0u16,
+        next_doc_id: 1u64,
+        primary_root_page: 0u32,
+        secondary_index_count: 0u16,
+        rsv: 0u16,
+        name_off: (name_cursor as! u32) catch {
+            return error.CatalogNoSpace;
+        },
+        indexes_off: 0u32,
+    };
+    try collection_meta_encode(&created, blob[CATALOG_ROOT_ENCODED_SIZE + new_index * COLLECTION_META_ENCODED_SIZE: COLLECTION_META_ENCODED_SIZE]);
+    _ = mem_copy(&blob.ptr[name_cursor], name.ptr, name.len);
+
+    try catalog_blob_finalize_checksum(blob);
+    _ = try page_checksum_finalize(scratch_buf);
+    _ = mem_copy(page_buf.ptr, scratch_buf.ptr, scratch_buf.len);
+    return created;
+}
+
+export fn catalog_page_allocate_next_doc_id(page_buf: &[byte], name: &[byte]) !u64 {
+    if !catalog_name_valid(name) {
+        return error.CatalogNameInvalid;
+    }
+
+    const view: CatalogView = try catalog_view_from_page(page_buf);
+    var total_name_bytes: usize = 0usize;
+    var i: u32 = 0u32;
+    var found: bool = false;
+    var assigned_doc_id: u64 = 0u64;
+    while i < view.root.collection_count {
+        const entry: CatalogCollectionView = try catalog_collection_at(&view, i);
+        if entry.meta.secondary_index_count != 0u16 {
+            return error.CatalogCorrupt;
+        }
+        total_name_bytes = total_name_bytes + entry.name.len;
+        if catalog_name_equal(entry.name, name) {
+            if entry.meta.next_doc_id == 0u64 || entry.meta.next_doc_id == 18446744073709551615u64 {
+                return error.CatalogDocIdExhausted;
+            }
+            found = true;
+            assigned_doc_id = entry.meta.next_doc_id;
+        }
+        i = i + 1u32;
+    }
+    if !found {
+        return error.CatalogCollectionNotFound;
+    }
+
+    const collections_bytes: usize = (view.root.collection_count as! usize) catch {
+        return error.CatalogCorrupt;
+    } * COLLECTION_META_ENCODED_SIZE;
+    const string_pool_off: usize = CATALOG_ROOT_ENCODED_SIZE + collections_bytes;
+    const total_blob_len: usize = string_pool_off + total_name_bytes;
+    var scratch: [byte: 8192] = [];
+    const scratch_buf: &[byte] = scratch[0: page_buf.len];
+    try catalog_page_prepare_scratch(scratch_buf, page_buf, total_blob_len);
+    const blob: &[byte] = scratch_buf[page_body_offset(): total_blob_len];
+
+    const root: CatalogRoot = CatalogRoot{
+        collection_count: view.root.collection_count,
+        collections_off: CATALOG_ROOT_ENCODED_SIZE as u32,
+        string_pool_off: (string_pool_off as! u32) catch {
+            return error.CatalogNoSpace;
+        },
+        checksum: 0u32,
+    };
+    try catalog_root_encode(&root, blob[0: CATALOG_ROOT_ENCODED_SIZE]);
+
+    var name_cursor: usize = string_pool_off;
+    i = 0u32;
+    while i < view.root.collection_count {
+        const entry: CatalogCollectionView = try catalog_collection_at(&view, i);
+        var meta: CollectionMeta = entry.meta;
+        meta.name_off = (name_cursor as! u32) catch {
+            return error.CatalogNoSpace;
+        };
+        meta.indexes_off = 0u32;
+        if catalog_name_equal(entry.name, name) {
+            meta.next_doc_id = meta.next_doc_id + 1u64;
+        }
+        const meta_off: usize = CATALOG_ROOT_ENCODED_SIZE + ((i as! usize).value * COLLECTION_META_ENCODED_SIZE);
+        try collection_meta_encode(&meta, blob[meta_off: COLLECTION_META_ENCODED_SIZE]);
+        _ = mem_copy(&blob.ptr[name_cursor], entry.name.ptr, entry.name.len);
+        name_cursor = name_cursor + entry.name.len;
+        i = i + 1u32;
+    }
+
+    try catalog_blob_finalize_checksum(blob);
+    _ = try page_checksum_finalize(scratch_buf);
+    _ = mem_copy(page_buf.ptr, scratch_buf.ptr, scratch_buf.len);
+    return assigned_doc_id;
+}
