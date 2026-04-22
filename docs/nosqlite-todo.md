@@ -36,23 +36,23 @@
 
 ## Phase 1 - 文档编码层
 
-- [ ] 先写 `DocBlob` 失败测试：节点头、数值词素、对象 key 排序
-- [ ] 定义 `DocBlob` 二进制格式
-- [ ] 定义 `NodeHeader`
-- [ ] 定义 `INT64/NUMBER_TEXT/STRING/ARRAY/OBJECT` 节点布局
-- [ ] 定义对象 `ObjectEntry` 与排序规则
-- [ ] 定义类型标签与长度编码规则
-- [ ] 定义 `NUMBER_TEXT` 的无损词素存储规则
-- [ ] 定义 decimal / bigint 比较接口
-- [ ] 实现从 `std.json.JsonValue` 到 `DocBlob` 的转码
-- [ ] 实现 `DocBlob` 的对象字段查找
-- [ ] 实现 `DocBlob` 的数组索引访问
-- [ ] 实现 JSON path 编译到 `PathProgram`
-- [ ] 实现 `PathProgram` 在 `DocBlob` 上求值
-- [ ] 为标量比较实现统一比较规则
-- [ ] 编写大整数 / 精确小数 round-trip 测试
-- [ ] 补全文档编码单元测试
-- [ ] 补全路径求值单元测试
+- [x] 先写 `DocBlob` 失败测试：节点头、数值词素、对象 key 排序
+- [x] 定义 `DocBlob` 二进制格式
+- [x] 定义 `NodeHeader`
+- [x] 定义 `INT64/NUMBER_TEXT/STRING/ARRAY/OBJECT` 节点布局
+- [x] 定义对象 `ObjectEntry` 与排序规则
+- [x] 定义类型标签与长度编码规则
+- [x] 定义 `NUMBER_TEXT` 的无损词素存储规则
+- [x] 定义 decimal / bigint 比较接口
+- [x] 实现从 `std.json.JsonValue` 到 `DocBlob` 的转码
+- [x] 实现 `DocBlob` 的对象字段查找
+- [x] 实现 `DocBlob` 的数组索引访问
+- [x] 实现 JSON path 编译到 `PathProgram`
+- [x] 实现 `PathProgram` 在 `DocBlob` 上求值
+- [x] 为标量比较实现统一比较规则
+- [x] 编写大整数 / 精确小数 round-trip 测试
+- [x] 补全文档编码单元测试
+- [x] 补全路径求值单元测试
 
 ## Phase 2 - Pager 与文件头
 

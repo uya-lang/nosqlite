@@ -1,0 +1,63 @@
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_u64;
+
+use lib.doc.format;
+
+fn byte_slices_equal(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+test "nosqlite_doc_node_header_and_layout_sizes" {
+    try assert_eq_u64(DOC_BLOB_FORMAT_VERSION_V1 as u64, 1u64);
+    try assert_eq_i32(doc_blob_alignment() as i32, 8);
+    try assert_eq_i32(doc_blob_length_field_size() as i32, 4);
+    try assert_eq_i32(doc_blob_offset_field_size() as i32, 4);
+
+    try assert_eq_i32(node_header_size() as i32, 8);
+    try assert_eq_i32(int64_node_size() as i32, 16);
+    try assert_eq_i32(number_text_prefix_size() as i32, 16);
+    try assert_eq_i32(string_node_prefix_size() as i32, 12);
+    try assert_eq_i32(array_node_prefix_size() as i32, 12);
+    try assert_eq_i32(object_node_prefix_size() as i32, 12);
+    try assert_eq_i32(object_entry_size() as i32, 16);
+}
+
+test "nosqlite_doc_number_text_lossless_lexeme_rules" {
+    const int_lexeme: &[byte] = &"123"[0: 3];
+    const decimal_lexeme: &[byte] = &"12.3400"[0: 7];
+    const exponent_lexeme: &[byte] = &"1.2300e+02"[0: 10];
+    const bigint_lexeme: &[byte] = &"9223372036854775808"[0: 19];
+
+    try assert_eq_i32((try doc_number_storage_tag_for_lexeme(int_lexeme)) as i32, DocNodeTag.INT64 as i32);
+    try assert_eq_i32((try doc_number_storage_tag_for_lexeme(decimal_lexeme)) as i32, DocNodeTag.NUMBER_TEXT as i32);
+    try assert_eq_i32((try doc_number_storage_tag_for_lexeme(exponent_lexeme)) as i32, DocNodeTag.NUMBER_TEXT as i32);
+    try assert_eq_i32((try doc_number_storage_tag_for_lexeme(bigint_lexeme)) as i32, DocNodeTag.NUMBER_TEXT as i32);
+
+    try assert_eq_i32((try doc_number_classify_lexeme(decimal_lexeme)) as i32, DocNumberClass.DECIMAL as i32);
+    try assert_eq_i32((try doc_number_classify_lexeme(exponent_lexeme)) as i32, DocNumberClass.EXPONENT as i32);
+    try assert_eq_i32((try doc_number_classify_lexeme(bigint_lexeme)) as i32, DocNumberClass.BIGINT as i32);
+
+    var out: [byte: 64] = [];
+    const encoded_len: usize = try doc_encode_number_text_node(exponent_lexeme, out[0: 64]);
+    try assert_eq_bool(encoded_len >= number_text_prefix_size() + exponent_lexeme.len, true);
+    try assert_eq_i32((try doc_number_text_class(out[0: encoded_len])) as i32, DocNumberClass.EXPONENT as i32);
+    try assert_eq_bool(byte_slices_equal((try doc_number_text_lexeme_view(out[0: encoded_len])), exponent_lexeme), true);
+}
+
+test "nosqlite_doc_object_key_sort_rule" {
+    try assert_eq_bool(doc_object_key_compare(1u32, &"z"[0: 1], 2u32, &"a"[0: 1]) < 0, true);
+    try assert_eq_bool(doc_object_key_compare(9u32, &"apple"[0: 5], 9u32, &"banana"[0: 6]) < 0, true);
+    try assert_eq_bool(doc_object_key_compare(9u32, &"banana"[0: 6], 9u32, &"apple"[0: 5]) > 0, true);
+    try assert_eq_i32(doc_object_key_compare(7u32, &"same"[0: 4], 7u32, &"same"[0: 4]), 0);
+}

@@ -1,0 +1,364 @@
+// lib.doc - DocBlob 二进制格式与基础 helper
+// 模块路径：lib/doc/format.uya → use lib.doc.format;
+
+use std.mem.mem.mem_copy;
+use std.mem.mem.mem_set;
+
+export error DocBlobInvalidBuffer;
+export error DocBlobInvalidTag;
+export error DocBlobInvalidNumber;
+
+export const DOC_BLOB_FORMAT_VERSION_V1: u32 = 1;
+export const DOC_BLOB_ALIGNMENT: usize = 8;
+export const DOC_BLOB_LENGTH_FIELD_SIZE: usize = 4;
+export const DOC_BLOB_OFFSET_FIELD_SIZE: usize = 4;
+
+export enum DocNodeTag {
+    NULL,
+    FALSE,
+    TRUE,
+    INT64,
+    NUMBER_TEXT,
+    STRING,
+    ARRAY,
+    OBJECT,
+}
+
+export enum DocNumberClass {
+    DECIMAL,
+    EXPONENT,
+    BIGINT,
+}
+
+export struct DocBlob {
+    bytes: &[byte],
+}
+
+export struct NodeHeader {
+    tag: u8,
+    flags: u8,
+    rsv: u16,
+    size: u32,
+}
+
+export struct Int64Node {
+    hdr: NodeHeader,
+    value: i64,
+}
+
+export struct NumberTextNodePrefix {
+    hdr: NodeHeader,
+    number_class: u8,
+    rsv: [byte: 3],
+    byte_len: u32,
+}
+
+export struct StringNodePrefix {
+    hdr: NodeHeader,
+    byte_len: u32,
+}
+
+export struct ArrayNodePrefix {
+    hdr: NodeHeader,
+    count: u32,
+}
+
+export struct ObjectEntry {
+    key_hash: u32,
+    key_len: u16,
+    rsv: u16,
+    key_off: u32,
+    val_off: u32,
+}
+
+export struct ObjectNodePrefix {
+    hdr: NodeHeader,
+    count: u32,
+}
+
+export fn doc_blob_alignment() usize {
+    return DOC_BLOB_ALIGNMENT;
+}
+
+export fn doc_blob_length_field_size() usize {
+    return DOC_BLOB_LENGTH_FIELD_SIZE;
+}
+
+export fn doc_blob_offset_field_size() usize {
+    return DOC_BLOB_OFFSET_FIELD_SIZE;
+}
+
+export fn node_header_size() usize {
+    return @size_of(NodeHeader) as usize;
+}
+
+export fn int64_node_size() usize {
+    return @size_of(Int64Node) as usize;
+}
+
+export fn number_text_prefix_size() usize {
+    return @size_of(NumberTextNodePrefix) as usize;
+}
+
+export fn string_node_prefix_size() usize {
+    return @size_of(StringNodePrefix) as usize;
+}
+
+export fn array_node_prefix_size() usize {
+    return @size_of(ArrayNodePrefix) as usize;
+}
+
+export fn object_entry_size() usize {
+    return @size_of(ObjectEntry) as usize;
+}
+
+export fn object_node_prefix_size() usize {
+    return @size_of(ObjectNodePrefix) as usize;
+}
+
+export fn doc_blob_align_up(size: usize) usize {
+    const rem: usize = size % DOC_BLOB_ALIGNMENT;
+    if rem == 0 {
+        return size;
+    }
+    return size + (DOC_BLOB_ALIGNMENT - rem);
+}
+
+export fn doc_node_tag_code(tag: DocNodeTag) u8 {
+    return tag as u8;
+}
+
+export fn doc_number_class_code(number_class: DocNumberClass) u8 {
+    return number_class as u8;
+}
+
+export fn doc_node_tag_from_code(code: u8) !DocNodeTag {
+    if code == doc_node_tag_code(DocNodeTag.NULL) {
+        return DocNodeTag.NULL;
+    }
+    if code == doc_node_tag_code(DocNodeTag.FALSE) {
+        return DocNodeTag.FALSE;
+    }
+    if code == doc_node_tag_code(DocNodeTag.TRUE) {
+        return DocNodeTag.TRUE;
+    }
+    if code == doc_node_tag_code(DocNodeTag.INT64) {
+        return DocNodeTag.INT64;
+    }
+    if code == doc_node_tag_code(DocNodeTag.NUMBER_TEXT) {
+        return DocNodeTag.NUMBER_TEXT;
+    }
+    if code == doc_node_tag_code(DocNodeTag.STRING) {
+        return DocNodeTag.STRING;
+    }
+    if code == doc_node_tag_code(DocNodeTag.ARRAY) {
+        return DocNodeTag.ARRAY;
+    }
+    if code == doc_node_tag_code(DocNodeTag.OBJECT) {
+        return DocNodeTag.OBJECT;
+    }
+    return error.DocBlobInvalidTag;
+}
+
+export fn doc_number_class_from_code(code: u8) !DocNumberClass {
+    if code == doc_number_class_code(DocNumberClass.DECIMAL) {
+        return DocNumberClass.DECIMAL;
+    }
+    if code == doc_number_class_code(DocNumberClass.EXPONENT) {
+        return DocNumberClass.EXPONENT;
+    }
+    if code == doc_number_class_code(DocNumberClass.BIGINT) {
+        return DocNumberClass.BIGINT;
+    }
+    return error.DocBlobInvalidNumber;
+}
+
+export fn node_header_make(tag: DocNodeTag, size: u32) NodeHeader {
+    return NodeHeader{
+        tag: doc_node_tag_code(tag),
+        flags: 0,
+        rsv: 0,
+        size: size,
+    };
+}
+
+fn doc_bytes_lex_compare(a: &[byte], b: &[byte]) i32 {
+    var i: usize = 0;
+    var min_len: usize = a.len;
+    if b.len < min_len {
+        min_len = b.len;
+    }
+    while i < min_len {
+        if a.ptr[i] < b.ptr[i] {
+            return 0 - 1;
+        }
+        if a.ptr[i] > b.ptr[i] {
+            return 1;
+        }
+        i = i + 1;
+    }
+    if a.len < b.len {
+        return 0 - 1;
+    }
+    if a.len > b.len {
+        return 1;
+    }
+    return 0;
+}
+
+fn doc_is_digit(b: byte) bool {
+    return b >= 48 && b <= 57;
+}
+
+fn doc_contains_byte(s: &[byte], needle: byte) bool {
+    var i: usize = 0;
+    while i < s.len {
+        if s.ptr[i] == needle {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn doc_integer_digits_slice(lexeme: &[byte]) !&[byte] {
+    if lexeme.ptr == null || lexeme.len == 0 {
+        return error.DocBlobInvalidNumber;
+    }
+    var start: usize = 0;
+    if lexeme.ptr[0] == 45 {
+        start = 1;
+    }
+    if start >= lexeme.len {
+        return error.DocBlobInvalidNumber;
+    }
+    var i: usize = start;
+    while i < lexeme.len {
+        if !doc_is_digit(lexeme.ptr[i]) {
+            return error.DocBlobInvalidNumber;
+        }
+        i = i + 1;
+    }
+    return lexeme[start: lexeme.len - start];
+}
+
+fn doc_integer_fits_i64(lexeme: &[byte]) bool {
+    const digits: &[byte] = doc_integer_digits_slice(lexeme) catch {
+        return false;
+    };
+    const negative: bool = lexeme.ptr[0] == 45;
+    const limit_pos: &[byte] = &"9223372036854775807"[0: 19];
+    const limit_neg: &[byte] = &"9223372036854775808"[0: 19];
+    if digits.len < 19 {
+        return true;
+    }
+    if digits.len > 19 {
+        return false;
+    }
+    if negative {
+        return doc_bytes_lex_compare(digits, limit_neg) <= 0;
+    }
+    return doc_bytes_lex_compare(digits, limit_pos) <= 0;
+}
+
+export fn doc_number_classify_lexeme(lexeme: &[byte]) !DocNumberClass {
+    if lexeme.ptr == null || lexeme.len == 0 {
+        return error.DocBlobInvalidNumber;
+    }
+    if doc_contains_byte(lexeme, 101 as byte) || doc_contains_byte(lexeme, 69 as byte) {
+        return DocNumberClass.EXPONENT;
+    }
+    if doc_contains_byte(lexeme, 46 as byte) {
+        return DocNumberClass.DECIMAL;
+    }
+    _ = try doc_integer_digits_slice(lexeme);
+    return DocNumberClass.BIGINT;
+}
+
+export fn doc_number_storage_tag_for_lexeme(lexeme: &[byte]) !DocNodeTag {
+    const number_class: DocNumberClass = try doc_number_classify_lexeme(lexeme);
+    if number_class == DocNumberClass.BIGINT && doc_integer_fits_i64(lexeme) {
+        return DocNodeTag.INT64;
+    }
+    return DocNodeTag.NUMBER_TEXT;
+}
+
+fn doc_number_text_prefix_ptr(node: &[byte]) &NumberTextNodePrefix {
+    if node.ptr == null || node.len < number_text_prefix_size() {
+        return null;
+    }
+    return node.ptr as &NumberTextNodePrefix;
+}
+
+export fn doc_encode_number_text_node(lexeme: &[byte], out: &[byte]) !usize {
+    if out.ptr == null || lexeme.ptr == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    const number_class: DocNumberClass = try doc_number_classify_lexeme(lexeme);
+    const raw_size: usize = number_text_prefix_size() + lexeme.len;
+    const total_size: usize = doc_blob_align_up(raw_size);
+    if out.len < total_size {
+        return error.DocBlobInvalidBuffer;
+    }
+    const total_size_u32: u32 = (total_size as! u32) catch {
+        return error.DocBlobInvalidBuffer;
+    };
+    const byte_len_u32: u32 = (lexeme.len as! u32) catch {
+        return error.DocBlobInvalidBuffer;
+    };
+    const prefix: &NumberTextNodePrefix = doc_number_text_prefix_ptr(out[0: total_size]);
+    if prefix == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    prefix.hdr = node_header_make(DocNodeTag.NUMBER_TEXT, total_size_u32);
+    prefix.number_class = doc_number_class_code(number_class);
+    prefix.rsv[0] = 0;
+    prefix.rsv[1] = 0;
+    prefix.rsv[2] = 0;
+    prefix.byte_len = byte_len_u32;
+    if lexeme.len > 0 {
+        _ = mem_copy(&out.ptr[number_text_prefix_size()], lexeme.ptr, lexeme.len);
+    }
+    if total_size > raw_size {
+        _ = mem_set(&out.ptr[raw_size], 0 as byte, total_size - raw_size);
+    }
+    return total_size;
+}
+
+export fn doc_number_text_class(node: &[byte]) !DocNumberClass {
+    const prefix: &NumberTextNodePrefix = doc_number_text_prefix_ptr(node);
+    if prefix == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    if (try doc_node_tag_from_code(prefix.hdr.tag)) != DocNodeTag.NUMBER_TEXT {
+        return error.DocBlobInvalidTag;
+    }
+    return doc_number_class_from_code(prefix.number_class);
+}
+
+export fn doc_number_text_lexeme_view(node: &[byte]) !&[byte] {
+    const prefix: &NumberTextNodePrefix = doc_number_text_prefix_ptr(node);
+    if prefix == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    if (try doc_node_tag_from_code(prefix.hdr.tag)) != DocNodeTag.NUMBER_TEXT {
+        return error.DocBlobInvalidTag;
+    }
+    const start: usize = number_text_prefix_size();
+    const byte_len: usize = prefix.byte_len as usize;
+    const end: usize = start + byte_len;
+    if node.len < end {
+        return error.DocBlobInvalidBuffer;
+    }
+    return node[start: byte_len];
+}
+
+export fn doc_object_key_compare(hash_a: u32, key_a: &[byte], hash_b: u32, key_b: &[byte]) i32 {
+    if hash_a < hash_b {
+        return 0 - 1;
+    }
+    if hash_a > hash_b {
+        return 1;
+    }
+    return doc_bytes_lex_compare(key_a, key_b);
+}

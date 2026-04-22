@@ -1,0 +1,117 @@
+// lib.doc - JSON path compile/eval on DocBlob
+// 模块路径：lib/doc/path.uya → use lib.doc.path;
+
+use lib.doc.codec;
+use lib.doc.format;
+
+export error PathProgramTooDeep;
+export error PathInvalidSyntax;
+export error PathFieldTooLong;
+
+export enum PathStepKind {
+    FIELD,
+    INDEX,
+}
+
+export struct PathStep {
+    kind: PathStepKind,
+    field_len: u16,
+    field: [byte: 64],
+    index: u32,
+}
+
+export struct PathProgram {
+    step_count: u16,
+    steps: [PathStep: 16],
+}
+
+export fn path_program_compile(path: &[byte]) !PathProgram {
+    if path.ptr == null || path.len == 0 || path.ptr[0] != 36 {
+        return error.PathInvalidSyntax;
+    }
+    var program: PathProgram = PathProgram{};
+    var pos: usize = 1;
+    while pos < path.len {
+        if program.step_count as usize >= @len(program.steps) {
+            return error.PathProgramTooDeep;
+        }
+        if path.ptr[pos] == 46 {
+            pos = pos + 1;
+            const start: usize = pos;
+            while pos < path.len && path.ptr[pos] != 46 && path.ptr[pos] != 91 {
+                pos = pos + 1;
+            }
+            const len: usize = pos - start;
+            if len == 0 {
+                return error.PathInvalidSyntax;
+            }
+            if len > 64 {
+                return error.PathFieldTooLong;
+            }
+            const slot: usize = program.step_count as usize;
+            if slot >= @len(program.steps) {
+                return error.PathProgramTooDeep;
+            }
+            program.steps[slot] = PathStep{};
+            program.steps[slot].kind = PathStepKind.FIELD;
+            program.steps[slot].field_len = (len as! u16).value;
+            var i: usize = 0;
+            while i < len {
+                program.steps[slot].field[i] = path.ptr[start + i];
+                i = i + 1;
+            }
+            program.step_count = program.step_count + 1;
+            continue;
+        }
+        if path.ptr[pos] == 91 {
+            pos = pos + 1;
+            if pos >= path.len {
+                return error.PathInvalidSyntax;
+            }
+            var value: u32 = 0;
+            var seen_digit: bool = false;
+            while pos < path.len && path.ptr[pos] != 93 {
+                const b: byte = path.ptr[pos];
+                if b < 48 || b > 57 {
+                    return error.PathInvalidSyntax;
+                }
+                value = value * 10u32 + (b as u32 - 48u32);
+                seen_digit = true;
+                pos = pos + 1;
+            }
+            if !seen_digit || pos >= path.len || path.ptr[pos] != 93 {
+                return error.PathInvalidSyntax;
+            }
+            pos = pos + 1;
+            const slot: usize = program.step_count as usize;
+            if slot >= @len(program.steps) {
+                return error.PathProgramTooDeep;
+            }
+            program.steps[slot] = PathStep{};
+            program.steps[slot].kind = PathStepKind.INDEX;
+            program.steps[slot].index = value;
+            program.step_count = program.step_count + 1;
+            continue;
+        }
+        return error.PathInvalidSyntax;
+    }
+    return program;
+}
+
+export fn path_program_eval(program: &PathProgram, root: &[byte]) !&[byte] {
+    if program == null {
+        return error.PathInvalidSyntax;
+    }
+    var current: &[byte] = root;
+    var i: usize = 0;
+    while i < program.step_count as usize {
+        const step: &PathStep = &program.steps[i];
+        if step.kind == PathStepKind.FIELD {
+            current = try doc_object_field(current, step.field[0: step.field_len as usize]);
+        } else {
+            current = try doc_array_index(current, step.index);
+        }
+        i = i + 1;
+    }
+    return current;
+}

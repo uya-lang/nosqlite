@@ -1,0 +1,50 @@
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_i64;
+
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.json.value.JsonValue;
+use std.json.parser.parse;
+
+use lib.doc.format;
+use lib.doc.codec;
+use lib.doc.path;
+
+test "nosqlite_doc_path_compile_and_eval" {
+    var arena_buf: [byte: 4096] = [];
+    var arena: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&arena, &arena_buf[0], 4096);
+
+    const json: &[byte] = &"{\"user\":{\"name\":\"ann\",\"scores\":[7,8,9],\"active\":true}}"[0: 54];
+    const value: JsonValue = try parse(&arena, json.ptr, json.len);
+
+    var out: [byte: 2048] = [];
+    const encoded_len: usize = try doc_encode_json_value(&value, out[0: 2048]);
+    const root: &[byte] = out[0: encoded_len];
+
+    const p_name: PathProgram = try path_program_compile(&"$.user.name"[0: 11]);
+    const p_score: PathProgram = try path_program_compile(&"$.user.scores[1]"[0: 16]);
+    const p_active: PathProgram = try path_program_compile(&"$.user.active"[0: 13]);
+
+    const name_node: &[byte] = try path_program_eval(&p_name, root);
+    const score_node: &[byte] = try path_program_eval(&p_score, root);
+    const active_node: &[byte] = try path_program_eval(&p_active, root);
+
+    try assert_eq_i32((try doc_node_tag(name_node)) as i32, DocNodeTag.STRING as i32);
+    try assert_eq_bool((try doc_string_view(name_node)).ptr[0] == 97 as byte, true);
+    try assert_eq_i64(try doc_int64_value(score_node), 8);
+    try assert_eq_bool(try doc_bool_value(active_node), true);
+}
+
+test "nosqlite_doc_path_invalid_syntax" {
+    const bad0: !PathProgram = path_program_compile(&"user.name"[0: 9]);
+    _ = bad0 catch {
+        const bad1: !PathProgram = path_program_compile(&"$.user.[0]"[0: 10]);
+        _ = bad1 catch {
+            return;
+        };
+        return error.AssertionFailed;
+    };
+    return error.AssertionFailed;
+}

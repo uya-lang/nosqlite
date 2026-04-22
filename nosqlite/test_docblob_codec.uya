@@ -1,0 +1,87 @@
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_i64;
+
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.json.value.JsonValue;
+use std.json.parser.parse;
+
+use lib.doc.format;
+use lib.doc.codec;
+use lib.doc.compare;
+
+test "nosqlite_doc_json_to_docblob_and_accessors" {
+    var arena_buf: [byte: 4096] = [];
+    var arena: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&arena, &arena_buf[0], 4096);
+
+    const json: &[byte] = &"{\"b\":1,\"a\":[true,\"x\"],\"n\":12.3400}"[0: 34];
+    const value: JsonValue = try parse(&arena, json.ptr, json.len);
+
+    var out: [byte: 1024] = [];
+    const encoded_len: usize = try doc_encode_json_value(&value, out[0: 1024]);
+    const root: &[byte] = out[0: encoded_len];
+
+    try assert_eq_i32((try doc_node_tag(root)) as i32, DocNodeTag.OBJECT as i32);
+    try assert_eq_i32((try doc_object_count(root)) as i32, 3);
+
+    const field_b: &[byte] = try doc_object_field(root, &"b"[0: 1]);
+    try assert_eq_i32((try doc_node_tag(field_b)) as i32, DocNodeTag.INT64 as i32);
+    try assert_eq_i64(try doc_int64_value(field_b), 1);
+
+    const field_a: &[byte] = try doc_object_field(root, &"a"[0: 1]);
+    try assert_eq_i32((try doc_node_tag(field_a)) as i32, DocNodeTag.ARRAY as i32);
+    try assert_eq_i32((try doc_array_count(field_a)) as i32, 2);
+
+    const item0: &[byte] = try doc_array_index(field_a, 0u32);
+    const item1: &[byte] = try doc_array_index(field_a, 1u32);
+    try assert_eq_bool(try doc_bool_value(item0), true);
+    try assert_eq_i32((try doc_node_tag(item1)) as i32, DocNodeTag.STRING as i32);
+    try assert_eq_bool((try doc_string_view(item1)).ptr[0] == 120 as byte, true);
+
+    const field_n: &[byte] = try doc_object_field(root, &"n"[0: 1]);
+    try assert_eq_i32((try doc_node_tag(field_n)) as i32, DocNodeTag.NUMBER_TEXT as i32);
+}
+
+test "nosqlite_doc_scalar_compare_rules" {
+    var int_buf: [byte: 64] = [];
+    var str_buf: [byte: 64] = [];
+    var num_buf: [byte: 64] = [];
+    var num_buf2: [byte: 64] = [];
+    var bool_buf: [byte: 16] = [];
+    var null_buf: [byte: 16] = [];
+
+    const int_len: usize = try doc_encode_int64_node(123, int_buf[0: 64]);
+    const str_len: usize = try doc_encode_string_node(&"abc"[0: 3], str_buf[0: 64]);
+    const num_len: usize = try doc_encode_number_text_node(&"123.0"[0: 5], num_buf[0: 64]);
+    const num_len2: usize = try doc_encode_number_text_node(&"122.999"[0: 7], num_buf2[0: 64]);
+    const bool_value: JsonValue = JsonValue.bool_val(true);
+    const null_value: JsonValue = JsonValue.json_null();
+    const bool_len: usize = try doc_encode_json_value(&bool_value, bool_buf[0: 16]);
+    const null_len: usize = try doc_encode_json_value(&null_value, null_buf[0: 16]);
+
+    try assert_eq_i32(try doc_compare_scalar_nodes(int_buf[0: int_len], num_buf[0: num_len]), 0);
+    try assert_eq_bool((try doc_compare_scalar_nodes(num_buf[0: num_len], num_buf2[0: num_len2])) > 0, true);
+    try assert_eq_bool((try doc_compare_scalar_nodes(bool_buf[0: bool_len], null_buf[0: null_len])) > 0, true);
+    try assert_eq_bool((try doc_compare_scalar_nodes(str_buf[0: str_len], int_buf[0: int_len])) > 0, true);
+}
+
+test "nosqlite_doc_decimal_bigint_roundtrip" {
+    const big_a: &[byte] = &"9223372036854775808"[0: 19];
+    const big_b: &[byte] = &"18446744073709551616"[0: 20];
+    const dec_a: &[byte] = &"12.3400"[0: 7];
+    const dec_b: &[byte] = &"12.34"[0: 5];
+    const exp_a: &[byte] = &"1.234e2"[0: 7];
+
+    var buf_big: [byte: 64] = [];
+    var buf_dec: [byte: 64] = [];
+    const big_len: usize = try doc_encode_number_text_node(big_a, buf_big[0: 64]);
+    const dec_len: usize = try doc_encode_number_text_node(dec_a, buf_dec[0: 64]);
+
+    try assert_eq_bool((try doc_compare_number_lexemes(big_b, big_a)) > 0, true);
+    try assert_eq_i32(try doc_compare_number_lexemes(dec_a, dec_b), 0);
+    try assert_eq_i32(try doc_compare_number_lexemes(exp_a, dec_a), 1);
+    try assert_eq_bool((try doc_number_text_lexeme_view(buf_big[0: big_len])).len == big_a.len, true);
+    try assert_eq_bool((try doc_number_text_lexeme_view(buf_dec[0: dec_len])).len == dec_a.len, true);
+}

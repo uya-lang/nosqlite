@@ -12,6 +12,8 @@
 
 - `nosqlite/tests/core/`
   对应基础类型、错误码、资源模型、配置轮廓。
+- `nosqlite/tests/doc/`
+  对应 `DocBlob`、路径、数值语义与编码规则。
 - `nosqlite/tests/storage/`
   对应 pager、page header、meta page、WAL header、slotted page。
 - `nosqlite/tests/fixtures/`
@@ -26,6 +28,9 @@
 当前测试入口与逻辑分组映射：
 
 - `nosqlite/test_core_foundation.uya` -> `tests/core/`
+- `nosqlite/test_docblob_basics.uya` -> `tests/doc/`
+- `nosqlite/test_docblob_codec.uya` -> `tests/doc/`
+- `nosqlite/test_docblob_path.uya` -> `tests/doc/`
 - `nosqlite/test_storage_page_basics.uya` -> `tests/storage/`
 - `nosqlite/test_storage_pager_runtime.uya` -> `tests/storage/`
 - `nosqlite/test_storage_slotted_page_runtime.uya` -> `tests/storage/`

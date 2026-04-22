@@ -1,0 +1,535 @@
+// lib.doc - DocBlob 转码与访问 helper
+// 模块路径：lib/doc/codec.uya → use lib.doc.codec;
+
+use libc.snprintf;
+use std.mem.mem.mem_copy;
+use std.mem.mem.mem_set;
+use std.json.value.JsonValue;
+use std.json.value.JsonArray;
+use std.json.value.JsonObject;
+use std.json.value.JsonStrView;
+use lib.doc.format;
+
+export error DocBlobTooDeep;
+export error DocBlobContainerTooLarge;
+export error DocBlobMissingField;
+export error DocBlobIndexOutOfBounds;
+export error DocBlobWrongNodeType;
+
+const DOC_MAX_CONTAINER_ITEMS: usize = 128;
+const DOC_MAX_ENCODE_DEPTH: usize = 64;
+const DOC_FLOAT_LEXEME_BUF: usize = 64;
+
+fn doc_header_ptr(node: &[byte]) &NodeHeader {
+    if node.ptr == null || node.len < node_header_size() {
+        return null;
+    }
+    return node.ptr as &NodeHeader;
+}
+
+fn doc_int64_ptr(node: &[byte]) &Int64Node {
+    if node.ptr == null || node.len < int64_node_size() {
+        return null;
+    }
+    return node.ptr as &Int64Node;
+}
+
+fn doc_string_prefix_ptr(node: &[byte]) &StringNodePrefix {
+    if node.ptr == null || node.len < string_node_prefix_size() {
+        return null;
+    }
+    return node.ptr as &StringNodePrefix;
+}
+
+fn doc_array_prefix_ptr(node: &[byte]) &ArrayNodePrefix {
+    if node.ptr == null || node.len < array_node_prefix_size() {
+        return null;
+    }
+    return node.ptr as &ArrayNodePrefix;
+}
+
+fn doc_object_prefix_ptr(node: &[byte]) &ObjectNodePrefix {
+    if node.ptr == null || node.len < object_node_prefix_size() {
+        return null;
+    }
+    return node.ptr as &ObjectNodePrefix;
+}
+
+fn doc_array_offsets_ptr(node: &[byte]) &u32 {
+    if node.ptr == null || node.len < array_node_prefix_size() {
+        return null;
+    }
+    return &node.ptr[array_node_prefix_size()] as &u32;
+}
+
+fn doc_object_entries_ptr(node: &[byte]) &ObjectEntry {
+    if node.ptr == null || node.len < object_node_prefix_size() {
+        return null;
+    }
+    return &node.ptr[object_node_prefix_size()] as &ObjectEntry;
+}
+
+fn doc_json_str_view_as_slice(view: JsonStrView) &[byte] {
+    return view.ptr[0: view.len];
+}
+
+fn doc_hash_fnv1a32(bytes: &[byte]) u32 {
+    var h: u32 = 2166136261u32;
+    var i: usize = 0;
+    while i < bytes.len {
+        h = h ^ (bytes.ptr[i] as u32);
+        h = h * 16777619u32;
+        i = i + 1;
+    }
+    return h;
+}
+
+fn doc_format_float_lexeme(value: f64, out: &[byte]) !&[byte] {
+    if out.ptr == null || out.len == 0 {
+        return error.DocBlobInvalidBuffer;
+    }
+    const n: i32 = snprintf(out.ptr, out.len, "%.17g\0" as &const byte, value);
+    if n < 0 {
+        return error.DocBlobInvalidNumber;
+    }
+    const len: usize = (n as! usize) catch {
+        return error.DocBlobInvalidNumber;
+    };
+    if len >= out.len {
+        return error.DocBlobInvalidBuffer;
+    }
+    return out[0: len];
+}
+
+fn doc_encode_null_node(out: &[byte]) !usize {
+    if out.ptr == null || out.len < node_header_size() {
+        return error.DocBlobInvalidBuffer;
+    }
+    const hdr: &NodeHeader = doc_header_ptr(out[0: node_header_size()]);
+    if hdr == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    hdr.tag = doc_node_tag_code(DocNodeTag.NULL);
+    hdr.flags = 0;
+    hdr.rsv = 0;
+    hdr.size = (node_header_size() as! u32).value;
+    return node_header_size();
+}
+
+fn doc_encode_bool_node(value: bool, out: &[byte]) !usize {
+    if out.ptr == null || out.len < node_header_size() {
+        return error.DocBlobInvalidBuffer;
+    }
+    const hdr: &NodeHeader = doc_header_ptr(out[0: node_header_size()]);
+    if hdr == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    if value {
+        hdr.tag = doc_node_tag_code(DocNodeTag.TRUE);
+    } else {
+        hdr.tag = doc_node_tag_code(DocNodeTag.FALSE);
+    }
+    hdr.flags = 0;
+    hdr.rsv = 0;
+    hdr.size = (node_header_size() as! u32).value;
+    return node_header_size();
+}
+
+export fn doc_encode_int64_node(value: i64, out: &[byte]) !usize {
+    if out.ptr == null || out.len < int64_node_size() {
+        return error.DocBlobInvalidBuffer;
+    }
+    const node: &Int64Node = doc_int64_ptr(out[0: int64_node_size()]);
+    if node == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    node.hdr = node_header_make(DocNodeTag.INT64, int64_node_size() as u32);
+    node.value = value;
+    return int64_node_size();
+}
+
+export fn doc_encode_string_node(value: &[byte], out: &[byte]) !usize {
+    if out.ptr == null || value.ptr == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    const raw_size: usize = string_node_prefix_size() + value.len;
+    const total_size: usize = doc_blob_align_up(raw_size);
+    if out.len < total_size {
+        return error.DocBlobInvalidBuffer;
+    }
+    const total_size_u32: u32 = (total_size as! u32) catch {
+        return error.DocBlobInvalidBuffer;
+    };
+    const byte_len_u32: u32 = (value.len as! u32) catch {
+        return error.DocBlobInvalidBuffer;
+    };
+    const prefix: &StringNodePrefix = doc_string_prefix_ptr(out[0: total_size]);
+    if prefix == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    prefix.hdr = node_header_make(DocNodeTag.STRING, total_size_u32);
+    prefix.byte_len = byte_len_u32;
+    if value.len > 0 {
+        _ = mem_copy(&out.ptr[string_node_prefix_size()], value.ptr, value.len);
+    }
+    if total_size > raw_size {
+        _ = mem_set(&out.ptr[raw_size], 0 as byte, total_size - raw_size);
+    }
+    return total_size;
+}
+
+fn doc_measure_json_value_depth(value: &JsonValue, depth: usize) !usize {
+    if value == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    if depth > DOC_MAX_ENCODE_DEPTH {
+        return error.DocBlobTooDeep;
+    }
+    match value[0] {
+        .json_null(_) => { return node_header_size(); },
+        .bool_val(_) => { return node_header_size(); },
+        .int_val(_) => { return int64_node_size(); },
+        .float_val(v) => {
+            var buf: [byte: DOC_FLOAT_LEXEME_BUF] = [];
+            const lexeme: &[byte] = try doc_format_float_lexeme(v, buf[0: DOC_FLOAT_LEXEME_BUF]);
+            return doc_blob_align_up(number_text_prefix_size() + lexeme.len);
+        },
+        .str(s) => {
+            return doc_blob_align_up(string_node_prefix_size() + s.len);
+        },
+        .arr(arr) => {
+            return doc_measure_json_array(&arr, depth + 1);
+        },
+        .obj(obj) => {
+            return doc_measure_json_object(&obj, depth + 1);
+        },
+    }
+}
+
+fn doc_measure_json_array(arr: &JsonArray, depth: usize) !usize {
+    if arr.len > DOC_MAX_CONTAINER_ITEMS {
+        return error.DocBlobContainerTooLarge;
+    }
+    var cursor: usize = doc_blob_align_up(array_node_prefix_size() + arr.len * DOC_BLOB_OFFSET_FIELD_SIZE);
+    var i: usize = 0;
+    while i < arr.len {
+        const child_size: usize = try doc_measure_json_value_depth(&arr.items[i], depth);
+        cursor = cursor + child_size;
+        i = i + 1;
+    }
+    return cursor;
+}
+
+fn doc_measure_json_object(obj: &JsonObject, depth: usize) !usize {
+    if obj.len > DOC_MAX_CONTAINER_ITEMS {
+        return error.DocBlobContainerTooLarge;
+    }
+    var key_bytes: usize = 0;
+    var values_bytes: usize = 0;
+    var i: usize = 0;
+    while i < obj.len {
+        key_bytes = key_bytes + obj.pairs[i].key.len;
+        values_bytes = values_bytes + (try doc_measure_json_value_depth(&obj.pairs[i].value, depth));
+        i = i + 1;
+    }
+    const key_area_end: usize = object_node_prefix_size() + obj.len * object_entry_size() + key_bytes;
+    return doc_blob_align_up(key_area_end) + values_bytes;
+}
+
+export fn doc_measure_json_value(value: &JsonValue) !usize {
+    return doc_measure_json_value_depth(value, 0);
+}
+
+fn doc_sort_object_indexes(obj: &JsonObject, order: &[u16], hashes: &[u32]) void {
+    var i: usize = 0;
+    while i < obj.len {
+        order.ptr[i] = i as u16;
+        i = i + 1;
+    }
+    i = 1;
+    while i < obj.len {
+        const cur_idx: u16 = order.ptr[i];
+        const cur_hash: u32 = hashes.ptr[cur_idx as usize];
+        const cur_key: &[byte] = doc_json_str_view_as_slice(obj.pairs[cur_idx as usize].key);
+        var j: usize = i;
+        while j > 0 {
+            const prev_idx: u16 = order.ptr[j - 1];
+            const prev_hash: u32 = hashes.ptr[prev_idx as usize];
+            const prev_key: &[byte] = doc_json_str_view_as_slice(obj.pairs[prev_idx as usize].key);
+            if doc_object_key_compare(prev_hash, prev_key, cur_hash, cur_key) <= 0 {
+                break;
+            }
+            order.ptr[j] = prev_idx;
+            j = j - 1;
+        }
+        order.ptr[j] = cur_idx;
+        i = i + 1;
+    }
+}
+
+fn doc_encode_json_value_depth(value: &JsonValue, out: &[byte], depth: usize) !usize {
+    if value == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    if depth > DOC_MAX_ENCODE_DEPTH {
+        return error.DocBlobTooDeep;
+    }
+    match value[0] {
+        .json_null(_) => { return doc_encode_null_node(out); },
+        .bool_val(v) => { return doc_encode_bool_node(v, out); },
+        .int_val(v) => { return doc_encode_int64_node(v, out); },
+        .float_val(v) => {
+            var buf: [byte: DOC_FLOAT_LEXEME_BUF] = [];
+            const lexeme: &[byte] = try doc_format_float_lexeme(v, buf[0: DOC_FLOAT_LEXEME_BUF]);
+            return doc_encode_number_text_node(lexeme, out);
+        },
+        .str(s) => {
+            return doc_encode_string_node(doc_json_str_view_as_slice(s), out);
+        },
+        .arr(arr) => {
+            return doc_encode_json_array(&arr, out, depth + 1);
+        },
+        .obj(obj) => {
+            return doc_encode_json_object(&obj, out, depth + 1);
+        },
+    }
+}
+
+fn doc_encode_json_array(arr: &JsonArray, out: &[byte], depth: usize) !usize {
+    if arr.len > DOC_MAX_CONTAINER_ITEMS {
+        return error.DocBlobContainerTooLarge;
+    }
+    const total_size: usize = try doc_measure_json_array(arr, depth);
+    if out.ptr == null || out.len < total_size {
+        return error.DocBlobInvalidBuffer;
+    }
+    const prefix: &ArrayNodePrefix = doc_array_prefix_ptr(out[0: total_size]);
+    const offsets: &u32 = doc_array_offsets_ptr(out[0: total_size]);
+    if prefix == null || offsets == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    prefix.hdr = node_header_make(DocNodeTag.ARRAY, (total_size as! u32).value);
+    prefix.count = (arr.len as! u32).value;
+
+    const offsets_end: usize = array_node_prefix_size() + arr.len * DOC_BLOB_OFFSET_FIELD_SIZE;
+    var cursor: usize = doc_blob_align_up(offsets_end);
+    if cursor > offsets_end {
+        _ = mem_set(&out.ptr[offsets_end], 0 as byte, cursor - offsets_end);
+    }
+
+    var i: usize = 0;
+    while i < arr.len {
+        offsets[i] = (cursor as! u32).value;
+        const child_size: usize = try doc_encode_json_value_depth(&arr.items[i], out[cursor: out.len - cursor], depth);
+        cursor = cursor + child_size;
+        i = i + 1;
+    }
+    return total_size;
+}
+
+fn doc_encode_json_object(obj: &JsonObject, out: &[byte], depth: usize) !usize {
+    if obj.len > DOC_MAX_CONTAINER_ITEMS {
+        return error.DocBlobContainerTooLarge;
+    }
+    const total_size: usize = try doc_measure_json_object(obj, depth);
+    if out.ptr == null || out.len < total_size {
+        return error.DocBlobInvalidBuffer;
+    }
+    const prefix: &ObjectNodePrefix = doc_object_prefix_ptr(out[0: total_size]);
+    const entries: &ObjectEntry = doc_object_entries_ptr(out[0: total_size]);
+    if prefix == null || entries == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    prefix.hdr = node_header_make(DocNodeTag.OBJECT, (total_size as! u32).value);
+    prefix.count = (obj.len as! u32).value;
+
+    var order_buf: [u16: DOC_MAX_CONTAINER_ITEMS] = [];
+    var hash_buf: [u32: DOC_MAX_CONTAINER_ITEMS] = [];
+    var i: usize = 0;
+    while i < obj.len {
+        hash_buf[i] = doc_hash_fnv1a32(doc_json_str_view_as_slice(obj.pairs[i].key));
+        i = i + 1;
+    }
+    doc_sort_object_indexes(obj, order_buf[0: DOC_MAX_CONTAINER_ITEMS], hash_buf[0: DOC_MAX_CONTAINER_ITEMS]);
+    const hash_slice: &[u32] = hash_buf[0: obj.len];
+
+    var key_cursor: usize = object_node_prefix_size() + obj.len * object_entry_size();
+    var rank: usize = 0;
+    while rank < obj.len {
+        const src_idx: usize = order_buf[rank] as usize;
+        if src_idx >= DOC_MAX_CONTAINER_ITEMS || src_idx >= obj.len {
+            return error.DocBlobContainerTooLarge;
+        }
+        const key: &[byte] = doc_json_str_view_as_slice(obj.pairs[src_idx].key);
+        const entry: &ObjectEntry = &entries[rank];
+        const key_hash: u32 = hash_slice.ptr[src_idx];
+        entry.key_hash = key_hash;
+        entry.key_len = (key.len as! u16).value;
+        entry.rsv = 0;
+        entry.key_off = (key_cursor as! u32).value;
+        if key.len > 0 {
+            _ = mem_copy(&out.ptr[key_cursor], key.ptr, key.len);
+        }
+        key_cursor = key_cursor + key.len;
+        rank = rank + 1;
+    }
+
+    const value_start: usize = doc_blob_align_up(key_cursor);
+    if value_start > key_cursor {
+        _ = mem_set(&out.ptr[key_cursor], 0 as byte, value_start - key_cursor);
+    }
+    var value_cursor: usize = value_start;
+    rank = 0;
+    while rank < obj.len {
+        const src_idx: usize = order_buf[rank] as usize;
+        if src_idx >= DOC_MAX_CONTAINER_ITEMS || src_idx >= obj.len {
+            return error.DocBlobContainerTooLarge;
+        }
+        const entry: &ObjectEntry = &entries[rank];
+        entry.val_off = (value_cursor as! u32).value;
+        const child_size: usize = try doc_encode_json_value_depth(&obj.pairs[src_idx].value, out[value_cursor: out.len - value_cursor], depth);
+        value_cursor = value_cursor + child_size;
+        rank = rank + 1;
+    }
+    return total_size;
+}
+
+export fn doc_encode_json_value(value: &JsonValue, out: &[byte]) !usize {
+    return doc_encode_json_value_depth(value, out, 0);
+}
+
+export fn doc_node_tag(node: &[byte]) !DocNodeTag {
+    const hdr: &NodeHeader = doc_header_ptr(node);
+    if hdr == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    return doc_node_tag_from_code(hdr.tag);
+}
+
+export fn doc_node_total_size(node: &[byte]) !usize {
+    const hdr: &NodeHeader = doc_header_ptr(node);
+    if hdr == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    return hdr.size as usize;
+}
+
+export fn doc_int64_value(node: &[byte]) !i64 {
+    const int_node: &Int64Node = doc_int64_ptr(node);
+    if int_node == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    if (try doc_node_tag_from_code(int_node.hdr.tag)) != DocNodeTag.INT64 {
+        return error.DocBlobWrongNodeType;
+    }
+    return int_node.value;
+}
+
+export fn doc_string_view(node: &[byte]) !&[byte] {
+    const prefix: &StringNodePrefix = doc_string_prefix_ptr(node);
+    if prefix == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    if (try doc_node_tag_from_code(prefix.hdr.tag)) != DocNodeTag.STRING {
+        return error.DocBlobWrongNodeType;
+    }
+    const byte_len: usize = prefix.byte_len as usize;
+    const start: usize = string_node_prefix_size();
+    if node.len < start + byte_len {
+        return error.DocBlobInvalidBuffer;
+    }
+    return node[start: byte_len];
+}
+
+export fn doc_bool_value(node: &[byte]) !bool {
+    const tag: DocNodeTag = try doc_node_tag(node);
+    if tag == DocNodeTag.TRUE {
+        return true;
+    }
+    if tag == DocNodeTag.FALSE {
+        return false;
+    }
+    return error.DocBlobWrongNodeType;
+}
+
+export fn doc_array_count(node: &[byte]) !u32 {
+    const prefix: &ArrayNodePrefix = doc_array_prefix_ptr(node);
+    if prefix == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    if (try doc_node_tag_from_code(prefix.hdr.tag)) != DocNodeTag.ARRAY {
+        return error.DocBlobWrongNodeType;
+    }
+    return prefix.count;
+}
+
+export fn doc_object_count(node: &[byte]) !u32 {
+    const prefix: &ObjectNodePrefix = doc_object_prefix_ptr(node);
+    if prefix == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    if (try doc_node_tag_from_code(prefix.hdr.tag)) != DocNodeTag.OBJECT {
+        return error.DocBlobWrongNodeType;
+    }
+    return prefix.count;
+}
+
+export fn doc_array_index(node: &[byte], index: u32) !&[byte] {
+    const prefix: &ArrayNodePrefix = doc_array_prefix_ptr(node);
+    const offsets: &u32 = doc_array_offsets_ptr(node);
+    if prefix == null || offsets == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    if (try doc_node_tag_from_code(prefix.hdr.tag)) != DocNodeTag.ARRAY {
+        return error.DocBlobWrongNodeType;
+    }
+    if index >= prefix.count {
+        return error.DocBlobIndexOutOfBounds;
+    }
+    const start: usize = offsets[index as usize] as usize;
+    if start >= node.len {
+        return error.DocBlobInvalidBuffer;
+    }
+    const size: usize = try doc_node_total_size(node[start: node.len - start]);
+    if start + size > node.len {
+        return error.DocBlobInvalidBuffer;
+    }
+    return node[start: size];
+}
+
+export fn doc_object_field(node: &[byte], key: &[byte]) !&[byte] {
+    const prefix: &ObjectNodePrefix = doc_object_prefix_ptr(node);
+    const entries: &ObjectEntry = doc_object_entries_ptr(node);
+    if prefix == null || entries == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    if (try doc_node_tag_from_code(prefix.hdr.tag)) != DocNodeTag.OBJECT {
+        return error.DocBlobWrongNodeType;
+    }
+    const key_hash: u32 = doc_hash_fnv1a32(key);
+    var i: usize = 0;
+    while i < prefix.count as usize {
+        const entry: &ObjectEntry = &entries[i];
+        if entry.key_hash == key_hash {
+            const key_off: usize = entry.key_off as usize;
+            const key_len: usize = entry.key_len as usize;
+            if key_off + key_len > node.len {
+                return error.DocBlobInvalidBuffer;
+            }
+            const entry_key: &[byte] = node[key_off: key_len];
+            if doc_bytes_lex_compare(entry_key, key) == 0 {
+                const val_off: usize = entry.val_off as usize;
+                if val_off >= node.len {
+                    return error.DocBlobInvalidBuffer;
+                }
+                const size: usize = try doc_node_total_size(node[val_off: node.len - val_off]);
+                if val_off + size > node.len {
+                    return error.DocBlobInvalidBuffer;
+                }
+                return node[val_off: size];
+            }
+        }
+        i = i + 1;
+    }
+    return error.DocBlobMissingField;
+}
