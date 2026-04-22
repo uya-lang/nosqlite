@@ -320,10 +320,13 @@ link_generated_test_output() {
     local output_dir="$3"
     local exe_file="${output_dir}/${base_name}.bin${TARGET_EXE_SUFFIX}"
     local link_log_file="${output_dir}/${base_name}.linker_output.log"
+    local sidecar_file="${output_file}imports.sh"
     local extra_c_file=""
     local bridge_c_file=""
     local link_succeeded=false
     local -a link_cmd=("${CC_CMD[@]}" "${CFLAGS_ARR[@]}")
+    local -a cimport_objects=()
+    local -a cimport_ldflags=()
 
     if [ "$TARGET_OS" = "linux" ]; then
         link_cmd+=(-no-pie)
@@ -352,6 +355,43 @@ link_generated_test_output() {
     if [ -n "$extra_c_file" ]; then
         link_cmd+=("$extra_c_file")
     fi
+    if [ -f "$sidecar_file" ]; then
+        # shellcheck disable=SC1090
+        . "$sidecar_file"
+        local cimport_count="${UYA_CIMPORT_COUNT:-0}"
+        local ci=0
+        while [ "$ci" -lt "$cimport_count" ]; do
+            local src_var="UYA_CIMPORT_SRC_${ci}"
+            local cflagc_var="UYA_CIMPORT_CFLAGC_${ci}"
+            local src_path="${!src_var}"
+            local cflagc="${!cflagc_var:-0}"
+            local obj_path="${output_dir}/${base_name}.cimport.${ci}.o"
+            local -a compile_cmd=("${CC_CMD[@]}" "${CFLAGS_ARR[@]}")
+            local cj=0
+            while [ "$cj" -lt "$cflagc" ]; do
+                local cflag_var="UYA_CIMPORT_CFLAG_${ci}_${cj}"
+                compile_cmd+=("${!cflag_var}")
+                cj=$((cj + 1))
+            done
+            compile_cmd+=(-c "$src_path" -o "$obj_path")
+            if ! "${compile_cmd[@]}" > /dev/null 2> "$link_log_file"; then
+                return 1
+            fi
+            cimport_objects+=("$obj_path")
+            ci=$((ci + 1))
+        done
+
+        local ldflagc="${UYA_CIMPORT_LDFLAGC:-0}"
+        local li=0
+        while [ "$li" -lt "$ldflagc" ]; do
+            local ldflag_var="UYA_CIMPORT_LDFLAG_${li}"
+            cimport_ldflags+=("${!ldflag_var}")
+            li=$((li + 1))
+        done
+    fi
+    if [ ${#cimport_objects[@]} -gt 0 ]; then
+        link_cmd+=("${cimport_objects[@]}")
+    fi
     if [ "$base_name" = "test_tls_ecdsa" ]; then
         link_cmd+=(-lcrypto)
     fi
@@ -359,6 +399,9 @@ link_generated_test_output() {
         link_cmd+=(-lm)
     fi
     link_cmd+=("${LDFLAGS_ARR[@]}")
+    if [ ${#cimport_ldflags[@]} -gt 0 ]; then
+        link_cmd+=("${cimport_ldflags[@]}")
+    fi
 
     rm -f "$link_log_file"
     "${link_cmd[@]}" > /dev/null 2> "$link_log_file" && link_succeeded=true

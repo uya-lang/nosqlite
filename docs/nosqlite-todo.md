@@ -80,9 +80,9 @@
 - [ ] 定义 cursor lease 语义
 - [ ] 实现 snapshot pressure 对写侧的 backpressure
 - [x] 实现空闲页链表
-- [ ] 实现 slotted page 插入
-- [ ] 实现 slotted page 读回
-- [ ] 补充分页、插槽、校验测试
+- [x] 实现 slotted page 插入
+- [x] 实现 slotted page 读回
+- [x] 补充分页、插槽、校验测试
 
 ## Phase 3 - WAL 与恢复
 

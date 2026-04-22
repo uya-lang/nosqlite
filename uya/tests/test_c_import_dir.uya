@@ -1,0 +1,22 @@
+@c_import("fixtures/c_import/dir/add_dir_impl.c");
+@c_import("fixtures/c_import/dir");
+
+use std.runtime.entry;
+use std.testing.expect_eq;
+use std.testing.run_test;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+
+extern fn add_dir_i32(a: i32, b: i32) i32;
+extern fn mul_dir_i32(a: i32, b: i32) i32;
+
+fn test_c_import_dir_overlap_dedupe() !void {
+    try expect_eq(add_dir_i32(3, 4), 7, "direct file import should work");
+    try expect_eq(mul_dir_i32(7, 5), 35, "directory import should work");
+}
+
+export fn main() i32 {
+    test_suite_begin("c_import dir");
+    run_test("dir overlap dedupe", test_c_import_dir_overlap_dedupe);
+    return test_suite_end();
+}

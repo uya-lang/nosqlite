@@ -1,0 +1,110 @@
+use lib.core.types;
+use lib.storage.header;
+use lib.storage.meta_page;
+use lib.storage.wal_header;
+use lib.storage.page;
+use lib.storage.slotted_page;
+use lib.storage.pager;
+use lib.storage.checksum;
+
+fn byte_slices_equal(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn test_init_insert_and_view() i32 {
+    var raw: [byte: 256] = [];
+    const page_buf: &[byte] = raw[0: 256];
+    _ = slotted_page_init(page_buf, PageType.DATA) catch {
+        return 1;
+    };
+
+    const hdr: &PageHeader = slotted_page_header(page_buf);
+    if !page_bounds_valid(hdr, 256) { return 2; }
+    if slotted_page_slot_count(page_buf) != 0u16 { return 3; }
+
+    const cell0: &[byte] = &"abc"[0: 3];
+    const slot0: u16 = slotted_page_insert_copy(page_buf, cell0) catch {
+        return 4;
+    };
+    if slot0 != 0u16 { return 5; }
+    if slotted_page_slot_count(page_buf) != 1u16 { return 6; }
+
+    const slot0_meta: Slot = slotted_page_get_slot(page_buf, slot0) catch {
+        return 7;
+    };
+    if slot0_meta.len != 3u16 { return 8; }
+    if !slot_is_used(slot0_meta.flags) { return 9; }
+    if slot_is_tombstone(slot0_meta.flags) { return 10; }
+
+    const view0: SlottedPageCellView = slotted_page_cell_view(page_buf, slot0) catch {
+        return 11;
+    };
+    if view0.len != 3 { return 12; }
+    if !byte_slices_equal(view0.ptr[0: view0.len], cell0) { return 13; }
+
+    const cell1: &[byte] = &"hello"[0: 5];
+    const slot1: u16 = slotted_page_insert_copy(page_buf, cell1) catch {
+        return 14;
+    };
+    if slot1 != 1u16 { return 15; }
+    if slotted_page_slot_count(page_buf) != 2u16 { return 16; }
+
+    const view1: SlottedPageCellView = slotted_page_cell_view(page_buf, slot1) catch {
+        return 17;
+    };
+    if !byte_slices_equal(view1.ptr[0: view1.len], cell1) { return 18; }
+
+    return 0;
+}
+
+fn test_insert_no_space() i32 {
+    var raw: [byte: 64] = [];
+    const page_buf: &[byte] = raw[0: 64];
+    _ = slotted_page_init(page_buf, PageType.DATA) catch {
+        return 21;
+    };
+
+    const too_big: &[byte] = &"abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ"[0: 46];
+    const insert_res: !u16 = slotted_page_insert_copy(page_buf, too_big);
+    _ = insert_res catch {
+        return 0;
+    };
+    return 22;
+}
+
+fn test_invalid_slot() i32 {
+    var raw: [byte: 128] = [];
+    const page_buf: &[byte] = raw[0: 128];
+    _ = slotted_page_init(page_buf, PageType.DATA) catch {
+        return 31;
+    };
+
+    const missing: !Slot = slotted_page_get_slot(page_buf, 9);
+    _ = missing catch {
+        return 0;
+    };
+    return 32;
+}
+
+fn main() i32 {
+    const r1: i32 = test_init_insert_and_view();
+    if r1 != 0 { return r1; }
+
+    const r2: i32 = test_insert_no_space();
+    if r2 != 0 { return r2; }
+
+    const r3: i32 = test_invalid_slot();
+    if r3 != 0 { return r3; }
+
+    return 0;
+}

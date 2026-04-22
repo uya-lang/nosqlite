@@ -1,0 +1,45 @@
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+
+use lib.storage.page;
+use lib.storage.slotted_page;
+use lib.storage.header;
+use lib.storage.Slot;
+use lib.storage.PageHeader;
+use lib.storage.PageType;
+use lib.storage.SlottedPageCellView;
+
+fn byte_slices_equal(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+test "repro_codegen_segfault" {
+    var raw: [byte: 256] = [];
+    const page_buf: &[byte] = raw[0: 256];
+    try slotted_page.slotted_page_init(page_buf, PageType.DATA);
+
+    const hdr: &PageHeader = slotted_page.slotted_page_header(page_buf);
+    try assert_eq_bool(page.page_bounds_valid(hdr, 256), true);
+    try assert_eq_i32(slotted_page.slotted_page_slot_count(page_buf) as i32, 0);
+
+    const cell0: &[byte] = &"abc"[0: 3];
+    const slot0: u16 = try slotted_page.slotted_page_insert_copy(page_buf, cell0);
+    try assert_eq_i32(slot0 as i32, 0);
+
+    const slot0_meta: Slot = try slotted_page.slotted_page_get_slot(page_buf, slot0);
+    try assert_eq_i32(slot0_meta.len as i32, 3);
+
+    const view0: SlottedPageCellView = try slotted_page.slotted_page_cell_view(page_buf, slot0);
+    try assert_eq_i32(view0.len as i32, 3);
+    try assert_eq_bool(byte_slices_equal(view0.ptr[0: view0.len], cell0), true);
+}

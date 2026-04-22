@@ -1,0 +1,38 @@
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+
+error EmptyView;
+
+struct ByteView {
+    ptr: &byte,
+    len: usize,
+}
+
+fn byte_slices_equal(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn make_view(buf: &[byte]) !ByteView {
+    if buf.len == 0 {
+        return error.EmptyView;
+    }
+    return ByteView{ ptr: buf.ptr, len: buf.len };
+}
+
+test "macro_slice_expr_codegen" {
+    const bytes: &[byte] = &"abc"[0: 3];
+    const view: ByteView = try make_view(bytes);
+
+    try assert_eq_i32(view.len as i32, 3);
+    try assert_eq_bool(byte_slices_equal(view.ptr[0: view.len], bytes), true);
+}

@@ -56,6 +56,8 @@
 
 ### 0.49.47（2026-04-21）
 
+- **标准库 `std.sql`**：新增 `lib/std/sql/`。首版提供参考 Go `database/sql` 的数据库通用抽象：`Value`、`NamedArg`、`ColumnInfo`、`Driver`、`Conn`、`Stmt`、`Rows`、`Tx`、`Result`、高层 `DB` / `Row` 包装与 `db_open`。为兼容当前 C99 backend，接口方法优先采用普通返回值与 `out` 参数的稳定组合。
+- **测试**：新增 `tests/test_std_sql.uya`，覆盖 fake driver 的 open / ping / prepare / exec / query / query_row / tx 主链路。
 - **标准库 `std.crypto`**：新增 `lib/std/crypto/blake2b.uya` 与 `lib/std/crypto/blake2s.uya`。接口分别为 `blake2b_digest(data, digest_out)` 与 `blake2s_digest(data, digest_out)`；均为纯 Uya 一次性摘要实现，分别输出 64 / 32 字节。
 - **标准库 `std.crypto`**：新增 `lib/std/crypto/md5.uya` 与 `lib/std/crypto/crc32.uya`。接口分别为 `md5_digest(data, digest_out)` 与 `crc32_compute(data)`；MD5 为 RFC 1321 一次性摘要实现，CRC-32 使用 IEEE/ZIP 反射多项式 `0xEDB88320`。
 - **内核复用**：`lib/kernel/update.uya` 的元数据 CRC32 计算改为直接复用 `std.crypto.crc32`，避免同一算法在标准库和内核层重复维护。
@@ -652,7 +654,7 @@ Uya的"坚如磐石"设计哲学带来以下不可动摇的收益：
   defer errdefer try catch error null interface atomic union
   export use
   ```
-- **内置函数**：所有内置函数均以 `@` 开头，无需导入。包括：`@size_of(T)`、`@align_of(T)`、`@len(a)`（数组长度）、`@max`、`@min`（整数类型极值，类型由上下文推断）、`@error_id(err)`（提取错误值的数值 ID）、`@embed("file")`（编译期嵌入单文件）、`@embed_dir("dir")`（编译期嵌入目录）。
+- **内置函数**：所有内置函数均以 `@` 开头，无需导入。包括：`@size_of(T)`、`@align_of(T)`、`@len(a)`（数组长度）、`@max`、`@min`（整数类型极值，类型由上下文推断）、`@error_id(err)`（提取错误值的数值 ID）、`@embed("file")`（编译期嵌入单文件）、`@embed_dir("dir")`（编译期嵌入目录）。另外，`@c_import("path", cflags?, ldflags?);` 是顶层构建指令，用于把外部 C 源纳入当前构建图。
 - 标识符 `[A-Za-z_][A-Za-z0-9_]*`，区分大小写。
 - 数值字面量：
   - 整数字面量：
@@ -4626,9 +4628,18 @@ fn caller() void {
 | `@frame` | `@frame(fn_name)` / `@frame(fn_name<T>)` | 异步帧类型构造器（v0.9.3）；暴露 `@async_fn` 的状态机帧类型；高层方法 `start/poll/stop`；pinned 语义（禁止按值移动/赋值/传参/返回） |
 | `@embed` | `fn @embed("path") &[const byte]` | 编译期嵌入单个普通文件，返回只读字节切片 |
 | `@embed_dir` | `fn @embed_dir("path") &[const EmbedDirEntry]` | 编译期递归嵌入目录，返回只读目录条目切片 |
+| `@c_import` | `@c_import("path"[, "cflags"[, "ldflags"]]);` | 顶层构建指令：导入单个 `.c` 或递归目录内 `*.c`，并把 `cflags` / `ldflags` 纳入当前构建 |
 | `@asm` | `@asm { ... }` | 内联汇编块 |
 | `@vector` | `@vector(T, N)` / `@vector.splat(x)` / `@vector.load(ptr)` / `@vector.store(ptr,v)` / `@vector.select(m,a,b)` / `@vector.any(m)` / `@vector.all(m)` | SIMD 向量类型构造器与阶段 4 辅助内建 |
 | `@mask` | `@mask(N)` | SIMD 掩码类型构造器 |
+
+**`@c_import` 说明**：
+- 只能在顶层使用
+- 首参数可指向单个 `.c` 文件，或一个目录；目录模式会递归收集全部 `*.c`
+- `cflags` 只作用于该导入展开出的 C 文件
+- `ldflags` 在最终链接阶段聚合
+- 若输出为单文件 `app.c`，编译器会额外生成 `app.cimports.sh`
+- 若走 split-C / `--split-c-dir` 路径，导入的 C object 直接进入 Makefile，不额外生成 sidecar
 
 **常用标准库模块（当前实现摘录）**：
 
@@ -4638,12 +4649,15 @@ fn caller() void {
 | `std.mem` | `memcpy` / `memset` / `memmove` / `memcmp` 等 | 纯 Uya 内存操作 |
 | `std.encoding.base64` | Base64 / Base64URL 编解码 | 文本协议、JWT 等场景 |
 | `std.http` | `types` / `parse` / `router` / `server` / `jwt` | 阻塞式 HTTP 与 JWT 辅助 |
+| `std.sql` | `types` / `driver` / `db` | 数据库通用抽象；面向 SQLite / MySQL 等驱动适配 |
 | `std.crypto.blake2b` | `blake2b_digest(data, digest_out)` | BLAKE2b 一次性摘要，输出 64 字节 |
 | `std.crypto.blake2s` | `blake2s_digest(data, digest_out)` | BLAKE2s 一次性摘要，输出 32 字节 |
 | `std.crypto.sha256` | `sha256_digest(data, digest_out)` | SHA-256 一次性摘要，输出 32 字节 |
 | `std.crypto.hmac_sha256` | `hmac_sha256(key, msg, mac_out)` | HMAC-SHA256，一次性 MAC，输出 32 字节 |
 | `std.crypto.md5` | `md5_digest(data, digest_out)` | MD5 一次性摘要，输出 16 字节 |
 | `std.crypto.crc32` | `crc32_compute(data) -> u32` | CRC-32（IEEE / ZIP）校验和 |
+
+> **`std.sql` 详细说明**：见 [std_sql.md](./std_sql.md)
 
 **命名惯例**：
 - 单一概念：`@len`, `@max`, `@min`（短形式）

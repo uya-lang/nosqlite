@@ -1,9 +1,9 @@
 # Uya 内置函数使用文档
 
-> 版本：v0.49.44（2026-04-02）  
+> 版本：v0.49.45（2026-04-22）  
 > 此文档为 uya.md 的详细补充说明  
-> 语言规范：0.49.44  
-> 所有内置函数均以 `@` 开头，由编译器识别，无需导入或声明；其实现阶段与运行时开销以各章节说明为准
+> 语言规范：0.49.45  
+> 所有内置函数均以 `@` 开头，由编译器识别，无需导入或声明；其实现阶段与运行时开销以各章节说明为准。`@c_import` 也是 `@` 前缀的编译器内建能力，但它是**顶层构建指令**，不是表达式函数
 
 ---
 
@@ -24,6 +24,7 @@
   - [@func_name](#func_name)
   - [@embed](#embed)
   - [@embed_dir](#embed_dir)
+  - [@c_import](#c_import)
 - [4. 可变参数函数](#4-可变参数函数)
   - [@params](#params)
   - [@va_start](#va_start)
@@ -630,6 +631,52 @@ fn main() i32 {
 - 条目按相对路径字典序排序
 - `path` 使用 `/` 作为分隔符
 - 目录中的 symlink 和特殊文件会报错
+
+---
+
+### @c_import
+
+**指令签名**：
+```uya
+@c_import(path: string_literal);
+@c_import(path: string_literal, cflags: string_literal);
+@c_import(path: string_literal, cflags: string_literal, ldflags: string_literal);
+```
+
+**功能描述**：
+顶层构建指令。把外部 C 源文件纳入当前程序构建图，或把某个目录下递归收集到的全部 `*.c` 纳入构建图。
+
+**参数**：
+- `path`：字符串字面量；可指向单个 `.c` 文件，或一个目录
+- `cflags`：可选；只作用于该导入展开出的 C 文件
+- `ldflags`：可选；只在最终链接阶段聚合
+
+**使用示例**：
+```uya
+@c_import("fixtures/c_import/add_impl.c");
+@c_import("fixtures/c_import/dir");
+@c_import("fixtures/c_import/flag_impl.c", "-DC_IMPORT_MAGIC=7");
+
+extern fn add_i32(a: i32, b: i32) i32;
+extern fn add_magic_i32(x: i32) i32;
+```
+
+**目录模式规则**：
+- 递归收集目录下全部 `*.c`
+- 结果按相对路径字典序稳定排序
+- 允许 symlink，只要最终 target 是 regular `.c`
+- 若目录中没有任何 `*.c`，编译报错
+
+**输出与构建行为**：
+- `uya build/run/test -o app`：编译器会自动编译这些 C translation unit 并参与最终链接
+- `uya build -o app.c --c99`：除主 `app.c` 外，还会生成 `app.cimports.sh`
+- `--split-c-dir` / 默认 split-C：Makefile 直接包含额外 C object 规则，不会额外生成 sidecar
+
+**注意事项**：
+- 只能在顶层使用
+- 参数必须是字符串字面量
+- 它不自动导入 C 声明；仍需手写 `extern fn` / `extern struct`
+- `cflags`/`ldflags` 在实现上按 ASCII 空白做 token 化，不支持依赖 shell quoting 的复杂写法
 
 ---
 
@@ -1859,6 +1906,7 @@ const both: @mask(4) = lt & eq;
 | | `@func_name` | ✓ | - | ✅ 已实现 |
 | **嵌入资源** | `@embed` | ✓ | - | ✅ 已实现 |
 | | `@embed_dir` | ✓ | - | ✅ 已实现 |
+| **构建导入** | `@c_import` | ✓ | - | ✅ 已实现（顶层构建指令） |
 | **可变参数** | `@params` | - | ✓ | ✅ 已实现 |
 | | `@va_start` | ✓ | - | 📋 规范支持 |
 | | `@va_end` | ✓ | - | 📋 规范支持 |
@@ -2000,6 +2048,7 @@ fn buffer_info<T>() void {
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v0.49.45 | 2026-04-22 | 新增顶层构建指令 `@c_import("path", cflags?, ldflags?)` 文档；同步单文件 `.c + .cimports.sh`、目录递归导入 `*.c`、split-C Makefile 集成与测试入口说明 |
 | v0.49.43 | 2026-03-26 | 与 **uya.md 0.49.43** 同步：字符串字面量赋 **`[byte:N]`** / **`&[const byte]`**、成员访问链左值、**`&[const T]`** 切片语法说明（见主文档规范变更 **0.49.43**）；内置函数条目无增删 |
 | v0.49.42 | 2026-03-22 | 与 **uya.md 0.49.42** 同步：词法 **`\\xHH`** / **`\\uXXXX`**（见主文档 §1.4）；内置函数条目无增删 |
 | v0.49.41 | 2026-03-22 | 与 **uya.md 0.49.41** 同步：**`@print` / `@println`** 明确支持 **`byte` / `u8` / `i8`** 的 **`&[T]`**、**`[T:N]`**、**`*byte`** 及字面量 **`"..."`**；**`[byte:N]`** / **`&[byte]`** 以 **`%s`** 打印（与 C 以 **`\\0`** 结尾的缓冲区语义一致） |
@@ -2060,4 +2109,4 @@ fn buffer_info<T>() void {
 
 ---
 
-**本文档由 Uya 编译器团队维护，最后更新：2026-04-02（0.49.44）**
+**本文档由 Uya 编译器团队维护，最后更新：2026-04-22（0.49.45）**

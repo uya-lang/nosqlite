@@ -2,7 +2,7 @@
 
 > **用途**：指导模型编写可编译的 Uya，减少与其它语言混淆与臆造语法。  
 > **自包含**：下文已写入常用规则；**不**再依赖任何外部说明文件。  
-> **语言版本**：**0.49.43** · 更新 **2026-03-30**（与 [uya.md](./uya.md) 主规范同步；异步 `block_on` 骨架示例、`export mc` 体末分号、`@println` 插值）
+> **语言版本**：**0.49.45** · 更新 **2026-04-22**（与 [uya.md](./uya.md) 主规范同步；补充 `@c_import` 顶层构建指令、目录递归导入 `*.c`、`.cimports.sh` sidecar 语义）
 
 ---
 
@@ -80,6 +80,7 @@
 - **指针与整数**：`@ptr_from_usize` `@usize_from_ptr`
 - **错误**：`@error_id(expr)` → `u32`
 - **调试打印**：`@print` `@println` — 可用于整数、浮点、`bool`、双引号字面量；**`byte` / `u8` / `i8`** 的 **`[T:N]`**、**`&[T]`**、**`*byte`** 等可按 C 字符串 **`%s`** 打印时，缓冲区须以 **`\0`** 结尾。**不要**写成 **`@println("a", x)`** 等多实参 C `printf` 风格；多段内容用**字符串插值** **`@println("a ${x}")`** 等
+- **C 构建导入**：`@c_import("path"[,"cflags"[,"ldflags"]]);` —— **顶层构建指令**，不是表达式函数。首参数可指向**单个 `.c` 文件**，或一个目录；目录模式会**递归收集全部 `*.c`**。`cflags` 只作用于该导入展开出的 C 文件，`ldflags` 在最终链接阶段聚合。若输出为单文件 `app.c`，编译器会额外生成 `app.cimports.sh`；若走 split-C / `--split-c-dir` 路径，则由 Makefile 直接处理导入的 C object。**不要**把 `@c_import(...)` 写进表达式位置、函数体内、结构体字段初始化里
 - **内联汇编**：`@asm { "模板"(输入…, -> 输出…); }`；多条指令写多个模板行。**`clobbers = [...]`** 写在 **`@asm { ... }` 闭合 `}` 之后**（若需要）。**输出变量必须在块外先声明**；**FFI 指针 `*T` 不能作为 asm 操作数**，须先转为 `&T` / `&const T` 等。指令字符串与寄存器名**随目标平台变化**，勿照搬单一体系结构示例当通用语法
 - **SIMD**：`@vector(T,N)`、`@mask(N)`；常见：`@vector.splat`、`@vector.load`、`@vector.store`、`@vector.select`、`@vector.reduce_add` / `reduce_mul` / `reduce_min` / `reduce_max`、`@vector.any`、`@vector.all`。**元素类型与通道数**须满足编译器当前支持集合；**`@mask(N)` 不当作普通 `bool`**，分支判断用 `@vector.any` / `@vector.all` 等。具体是否发射 SIMD 指令依赖宿主 C 编译器与目标 CPU，语义以能通过编译的用法为准
 
@@ -119,6 +120,10 @@
 // 变量：仅 const / var，无 let / mut
 const N: i32 = 10;
 var x: i32 = 0;
+
+// 顶层构建指令：可导入单个 .c 或目录
+@c_import("vendor/sqlite3.c");
+@c_import("vendor/sqlite_shims/", "-Ivendor/sqlite");
 
 fn f(a: i32, b: i32) i32 { return a + b; }
 export fn g() !i32 { return 0; }
@@ -266,6 +271,7 @@ export mc twice(x: expr) expr { ${x} + ${x}; }
 | 不要写成 | Uya 中应使用 |
 |----------|----------------|
 | `let x = 1;` / `let mut x = 1;` | **`const x: i32 = 1;`** 或 **`var x: i32 = 1;`**（无 `let`/`mut`） |
+| 把 `@c_import(...)` 当普通表达式赋给变量 | **`@c_import` 只能在顶层单独成句**；它是构建指令，不产生运行时值 |
 | `x++` / `x--` | `x = x + 1;` |
 | `cond ? a : b` | `if cond { a } else { b }` |
 | `fn foo() -> i32` | `fn foo() i32` |
@@ -273,6 +279,7 @@ export mc twice(x: expr) expr { ${x} + ${x}; }
 | `impl Trait for S` | `struct S : I { ... }` 或 `S { }` 方法块 |
 | `use foo::*` | 逐项 `use` 或模块前缀 |
 | 把 `&[byte]` 变量当字符串容器随便 `= "..."` | 使用 **`&[const byte]`** 或 **`[byte:N]`** |
+| 只记得 `@c_import("foo.c")`，忘了目录模式 | 可直接写 **`@c_import("dir/")`**，递归导入目录下全部 **`*.c`** |
 | 自写 `struct Future<T> { }`、假 `std.async.run` / `async_sleep` | **`use std.async`**，只调用**库里真实存在**的符号（如 **`block_on` / `block_on_plain`** 等）；**不要**发明 **`async.xxx`** 前缀（见 §3） |
 | `"a" ++ "b"`、`@println(... ++ ...)` | **插值** `"${a}${b}"` 或定长缓冲/格式化 API；**无** `++` 拼串 |
 | `if x is i32`、`if result is T` | **无**「`is` 类型分支」；用 **`match`**、**`catch`** 或显式比较 |

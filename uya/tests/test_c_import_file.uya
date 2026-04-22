@@ -1,0 +1,19 @@
+@c_import("fixtures/c_import/add_impl.c");
+
+use std.runtime.entry;
+use std.testing.expect_eq;
+use std.testing.run_test;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+
+extern fn add_i32(a: i32, b: i32) i32;
+
+fn test_c_import_file_basic() !void {
+    try expect_eq(add_i32(20, 22), 42, "single c file import should link");
+}
+
+export fn main() i32 {
+    test_suite_begin("c_import file");
+    run_test("single file", test_c_import_file_basic);
+    return test_suite_end();
+}

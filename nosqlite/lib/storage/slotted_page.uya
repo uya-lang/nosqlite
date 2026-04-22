@@ -1,9 +1,19 @@
 // lib.storage - slotted page 布局 helper
 // 模块路径：lib/storage/slotted_page.uya → use lib.storage;
 
+use std.mem.mem.mem_copy;
+use std.mem.mem.mem_set;
+use lib.storage.PageType;
 use lib.storage.PageHeader;
+use lib.storage.Slot;
+use lib.storage.page_header_size;
 use lib.storage.slot_size;
 use lib.storage.page_has_room;
+use lib.storage.page_bounds_valid;
+
+export error SlottedPageInvalidHeader;
+export error SlottedPageInvalidSlot;
+export error SlottedPageNoSpace;
 
 export const SLOT_FLAG_NONE: u16 = 0;
 export const SLOT_FLAG_USED: u16 = 1;
@@ -14,6 +24,12 @@ export struct RecordCellHeader {
     created_at: u64,
     updated_at: u64,
     doc_len: u32,
+}
+
+export struct SlottedPageCellView {
+    ptr: &byte,
+    len: usize,
+    flags: u16,
 }
 
 export fn record_cell_header_size() usize {
@@ -34,4 +50,134 @@ export fn slot_is_used(flags: u16) bool {
 
 export fn slot_is_tombstone(flags: u16) bool {
     return (flags & SLOT_FLAG_TOMBSTONE) != 0;
+}
+
+fn slotted_page_header_ptr(page_buf: &[byte]) &PageHeader {
+    if page_buf.ptr == null || page_buf.len < page_header_size() {
+        return null;
+    }
+    return page_buf.ptr as &PageHeader;
+}
+
+fn slotted_page_slot_ptr(page_buf: &[byte], slot_idx: u16) &Slot {
+    if page_buf.ptr == null {
+        return null;
+    }
+    const addr: usize = @usize_from_ptr(page_buf.ptr as &void) +
+        page_header_size() +
+        (slot_idx as usize) * slot_size();
+    return @ptr_from_usize(addr) as &Slot;
+}
+
+export fn slotted_page_header(page_buf: &[byte]) &PageHeader {
+    return slotted_page_header_ptr(page_buf);
+}
+
+export fn slotted_page_slot_count(page_buf: &[byte]) u16 {
+    const header: &PageHeader = slotted_page_header_ptr(page_buf);
+    if header == null {
+        return 0;
+    }
+    if header.lower < page_header_size() as u16 {
+        return 0;
+    }
+    const bytes: usize = (header.lower as usize) - page_header_size();
+    return (bytes / slot_size()) as u16;
+}
+
+export fn slotted_page_init(page_buf: &[byte], page_type: PageType) !void {
+    if page_buf.ptr == null || page_buf.len < page_header_size() {
+        return error.SlottedPageInvalidHeader;
+    }
+    const lower: u16 = (page_header_size() as! u16) catch {
+        return error.SlottedPageInvalidHeader;
+    };
+    const upper: u16 = (page_buf.len as! u16) catch {
+        return error.SlottedPageInvalidHeader;
+    };
+    _ = mem_set(page_buf.ptr, 0, page_buf.len);
+    const header: &PageHeader = slotted_page_header_ptr(page_buf);
+    if header == null {
+        return error.SlottedPageInvalidHeader;
+    }
+    header.page_type = page_type;
+    header.flags = 0;
+    header.page_lsn = 0;
+    header.lower = lower;
+    header.upper = upper;
+    header.checksum = 0;
+}
+
+export fn slotted_page_get_slot(page_buf: &[byte], slot_idx: u16) !Slot {
+    const header: &PageHeader = slotted_page_header_ptr(page_buf);
+    if header == null || !page_bounds_valid(header, page_buf.len as u32) {
+        return error.SlottedPageInvalidHeader;
+    }
+    const count: u16 = slotted_page_slot_count(page_buf);
+    if slot_idx >= count {
+        return error.SlottedPageInvalidSlot;
+    }
+    const slotp: &Slot = slotted_page_slot_ptr(page_buf, slot_idx);
+    if slotp == null {
+        return error.SlottedPageInvalidSlot;
+    }
+    return Slot{
+        off: slotp.off,
+        len: slotp.len,
+        flags: slotp.flags,
+    };
+}
+
+export fn slotted_page_cell_view(page_buf: &[byte], slot_idx: u16) !SlottedPageCellView {
+    const slot: Slot = try slotted_page_get_slot(page_buf, slot_idx);
+    const start: usize = slot.off as usize;
+    const len: usize = slot.len as usize;
+    if start + len > page_buf.len {
+        return error.SlottedPageInvalidSlot;
+    }
+    return SlottedPageCellView{
+        ptr: &page_buf.ptr[start],
+        len: len,
+        flags: slot.flags,
+    };
+}
+
+export fn slotted_page_insert_copy(page_buf: &[byte], cell: &[byte]) !u16 {
+    const header: &PageHeader = slotted_page_header_ptr(page_buf);
+    if header == null || !page_bounds_valid(header, page_buf.len as u32) {
+        return error.SlottedPageInvalidHeader;
+    }
+    if !slotted_page_can_fit(header, cell.len) {
+        return error.SlottedPageNoSpace;
+    }
+
+    const slot_idx: u16 = slotted_page_slot_count(page_buf);
+    const slotp: &Slot = slotted_page_slot_ptr(page_buf, slot_idx);
+    if slotp == null {
+        return error.SlottedPageInvalidSlot;
+    }
+
+    const cell_len_u16: u16 = (cell.len as! u16) catch {
+        return error.SlottedPageInvalidSlot;
+    };
+    const slot_size_u16: u16 = (slot_size() as! u16) catch {
+        return error.SlottedPageInvalidHeader;
+    };
+
+    const new_upper: usize = (header.upper as usize) - cell.len;
+    const new_upper_u16: u16 = (new_upper as! u16) catch {
+        return error.SlottedPageInvalidSlot;
+    };
+    if cell.len > 0 {
+        _ = mem_copy(&page_buf.ptr[new_upper], cell.ptr, cell.len);
+    }
+
+    slotp.off = new_upper_u16;
+    slotp.len = cell_len_u16;
+    slotp.flags = SLOT_FLAG_USED;
+
+    header.lower = header.lower + slot_size_u16;
+    header.upper = new_upper_u16;
+
+    return slot_idx;
 }

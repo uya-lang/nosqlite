@@ -47,18 +47,18 @@ elif [ $$is_expected -eq 1 ]; then echo "FAIL: $$base_name (应失败但通过�
 elif [ ! -f "$$output_file" ]; then echo "FAIL: $$base_name (未生成输出)"; echo FAIL > "$$result_file"; \
 else \
     link_ok=0; \
+    extra_c_file=""; \
     has_main=0; grep -q "int main(" "$$output_file" 2>/dev/null && has_main=1 || grep -q "int32_t main(" "$$output_file" 2>/dev/null && has_main=1 || true; \
     if [ "$$base_name" = "extern_function" ]; then \
-        gcc --std=c99 -no-pie "$$output_file" $(TEST_DIR)/extern_function_impl.c -o "$(BUILD_DIR)/$$base_name" 2>/dev/null && link_ok=1; \
+        extra_c_file="$(TEST_DIR)/extern_function_impl.c"; \
     elif [ "$$base_name" = "test_comprehensive_cast" ] || [ "$$base_name" = "test_ffi_cast" ] || [ "$$base_name" = "test_pointer_cast" ] || [ "$$base_name" = "test_simple_cast" ] || [ "$$base_name" = "test_extern_union" ]; then \
-        gcc --std=c99 -no-pie "$$output_file" external_functions.c -o "$(BUILD_DIR)/$$base_name" 2>/dev/null && link_ok=1; \
+        extra_c_file="external_functions.c"; \
     elif [ "$$base_name" = "test_abi_calling_convention" ]; then \
-        gcc --std=c99 -no-pie "$$output_file" $(TEST_DIR)/test_abi_helpers.c -o "$(BUILD_DIR)/$$base_name" 2>/dev/null && link_ok=1; \
+        extra_c_file="$(TEST_DIR)/test_abi_helpers.c"; \
     elif [ "$$base_name" = "test_tflm_cmsis" ]; then \
-        gcc --std=c99 -no-pie "$$output_file" $(TEST_DIR)/tflm_cmsis_host_stub.c -o "$(BUILD_DIR)/$$base_name" 2>/dev/null && link_ok=1; \
-    else \
-        gcc --std=c99 -no-pie "$$output_file" -o "$(BUILD_DIR)/$$base_name" 2>/dev/null && link_ok=1; \
+        extra_c_file="$(TEST_DIR)/tflm_cmsis_host_stub.c"; \
     fi; \
+    CC=gcc ./link_cimports_posix.sh "$$output_file" "$(BUILD_DIR)/$$base_name" "$$extra_c_file" >/dev/null 2>&1 && link_ok=1; \
     if [ $$link_ok -eq 1 ]; then \
         if "$(BUILD_DIR)/$$base_name" >/dev/null 2>&1; then echo "PASS: $$base_name"; echo PASS > "$$result_file"; \
         else echo "FAIL: $$base_name (运行失败)"; echo FAIL > "$$result_file"; fi; \

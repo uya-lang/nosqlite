@@ -11,6 +11,20 @@ use lib.storage.slotted_page;
 use lib.storage.pager;
 use lib.storage.checksum;
 
+fn byte_slices_equal(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
 fn make_meta(slot: u32, page_size: u32, min_reader_version: u32) MetaPage {
     var magic: [byte: 4] = [];
     magic[0] = 78 as byte;

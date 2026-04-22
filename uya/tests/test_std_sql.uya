@@ -1,0 +1,459 @@
+use std.runtime.entry;
+
+use std.async;
+use std.testing.expect;
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_i64;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+use std.sql.types;
+use std.sql.driver;
+use std.sql.db;
+use std.sql.types.Value;
+use std.sql.types.NamedArg;
+use std.sql.types.ColumnInfo;
+use std.sql.types.SqlBytesView;
+use std.sql.types.sql_arg_named;
+use std.sql.types.sql_bytes_view_empty;
+use std.sql.types.sql_bytes_view_eq;
+use std.sql.types.sql_bytes_view_from_ptr;
+use std.sql.types.sql_value_string;
+use std.sql.driver.Driver;
+use std.sql.driver.Conn;
+use std.sql.driver.Tx;
+use std.sql.driver.Rows;
+use std.sql.driver.Result;
+use std.sql.driver.Stmt;
+use std.sql.db.DB;
+use std.sql.db.Row;
+use std.sql.db.db_open;
+
+fn bytes_view_eq_slice(v: SqlBytesView, s: &[byte]) bool {
+    if s.len == 0 {
+        return sql_bytes_view_eq(v, null, 0);
+    }
+    return sql_bytes_view_eq(v, s.ptr as &const byte, s.len);
+}
+
+fn expect_value_i64(v: Value, expected: i64) !void {
+    match v {
+        .Int64(x) => {
+            try assert_eq_i64(x, expected);
+        },
+        else => {
+            try assert_eq_i32(0, 1);
+        },
+    }
+}
+
+fn expect_value_string(v: Value, expected: &[byte]) !void {
+    match v {
+        .String(s) => {
+            try assert_eq_bool(bytes_view_eq_slice(s, expected), true);
+        },
+        else => {
+            try assert_eq_i32(0, 1);
+        },
+    }
+}
+
+fn fake_column(name: &[byte], db_type: &[byte], nullable: bool) ColumnInfo {
+    return ColumnInfo{
+        name: sql_bytes_view_from_ptr(name.ptr as &const byte, name.len),
+        database_type: sql_bytes_view_from_ptr(db_type.ptr as &const byte, db_type.len),
+        nullable: nullable,
+        has_nullable: true,
+    };
+}
+
+struct FakeRows : Rows {
+    cols: [ColumnInfo: 2],
+    values: [Value: 4],
+    row_count: usize,
+    column_count_value: usize,
+    cursor: usize,
+    current_row: usize,
+    has_current: bool,
+    closed: bool,
+
+    fn column_count(self: &Self) usize {
+        return self.column_count_value;
+    },
+
+    fn column_info(self: &Self, index: usize) ColumnInfo {
+        if index >= self.column_count_value {
+            return fake_column(&""[0: 0], &""[0: 0], false);
+        }
+        return self.cols[index];
+    },
+
+    fn next(self: &Self) bool {
+        if self.closed {
+            return false;
+        }
+        if self.cursor >= self.row_count {
+            self.has_current = false;
+            return false;
+        }
+        self.current_row = self.cursor;
+        self.cursor = self.cursor + 1;
+        self.has_current = true;
+        return true;
+    },
+
+    fn scan(self: &Self, dest: &Value, dest_len: usize) !void {
+        if !self.has_current {
+            return error.ErrScanWithoutRow;
+        }
+        if dest_len < self.column_count_value {
+            return error.ErrScanDestTooSmall;
+        }
+        const base: usize = self.current_row * self.column_count_value;
+        var i: usize = 0;
+        while i < self.column_count_value {
+            dest[i] = self.values[base + i];
+            i = i + 1;
+        }
+    },
+
+    fn close(self: &Self) void {
+        self.closed = true;
+        self.has_current = false;
+    },
+}
+
+fn fake_rows_make_empty() FakeRows {
+    return FakeRows{
+        cols: [
+            fake_column(&"id"[0: 2], &"INTEGER"[0: 7], false),
+            fake_column(&"name"[0: 4], &"TEXT"[0: 4], true),
+        ],
+        values: [],
+        row_count: 0,
+        column_count_value: 2,
+        cursor: 0,
+        current_row: 0,
+        has_current: false,
+        closed: false,
+    };
+}
+
+fn fake_rows_make_default() FakeRows {
+    var rows: FakeRows = fake_rows_make_empty();
+    rows.values[0] = Value.Int64(1);
+    rows.values[1] = sql_value_string(&"alice"[0: 5]);
+    rows.values[2] = Value.Int64(2);
+    rows.values[3] = sql_value_string(&"bob"[0: 3]);
+    rows.row_count = 2;
+    return rows;
+}
+
+fn fake_rows_make_single_name(name: SqlBytesView) FakeRows {
+    var rows: FakeRows = fake_rows_make_empty();
+    rows.values[0] = Value.Int64(1);
+    rows.values[1] = Value.String(name);
+    rows.row_count = 1;
+    return rows;
+}
+
+fn fake_exec_result(arg_count: usize) Result {
+    return Result{
+        last_insert_id: 100 + arg_count as i64,
+        rows_affected: arg_count as i64,
+    };
+}
+
+fn fake_empty_rows_value() Rows {
+    return fake_rows_make_empty();
+}
+
+fn fake_stmt_value(query_text: SqlBytesView, closed: bool) Stmt {
+    return FakeStmt{ query_text: query_text, closed: closed };
+}
+
+fn fake_tx_value(committed: bool, rolled_back: bool) Tx {
+    return FakeTx{ committed: committed, rolled_back: rolled_back };
+}
+
+fn fake_conn_value(dsn: SqlBytesView, ping_count: i32, closed: bool) Conn {
+    return FakeConn{ dsn: dsn, ping_count: ping_count, closed: closed };
+}
+
+fn fake_query_rows(query: SqlBytesView, args: &NamedArg, arg_count: usize) Rows {
+    if bytes_view_eq_slice(query, &"empty"[0: 5]) {
+        return fake_rows_make_empty();
+    }
+    if arg_count > 0 && args != null {
+        match args[0].value {
+            .String(s) => {
+                return fake_rows_make_single_name(s);
+            },
+            .Bytes(s) => {
+                return fake_rows_make_single_name(s);
+            },
+            else => {},
+        }
+    }
+    return fake_rows_make_default();
+}
+
+struct FakeStmt : Stmt {
+    query_text: SqlBytesView,
+    closed: bool,
+
+    fn exec(self: &Self, args: &NamedArg, arg_count: usize) Result {
+        if self.closed {
+            return Result{ last_insert_id: 0, rows_affected: 0 };
+        }
+        _ = args;
+        _ = self.query_text;
+        return fake_exec_result(arg_count);
+    },
+
+    fn query(self: &Self, args: &NamedArg, arg_count: usize, out: &Rows) void {
+        if self.closed {
+            out[0] = fake_empty_rows_value();
+            return;
+        }
+        out[0] = fake_query_rows(self.query_text, args, arg_count);
+    },
+
+    fn close(self: &Self) void {
+        self.closed = true;
+    },
+}
+
+struct FakeTx : Tx {
+    committed: bool,
+    rolled_back: bool,
+
+    fn ensure_active(self: &Self) !void {
+        if self.committed || self.rolled_back {
+            return error.ErrTxDone;
+        }
+    },
+
+    fn prepare(self: &Self, query: &const byte, query_len: usize, out: &Stmt) void {
+        if self.committed || self.rolled_back {
+            out[0] = fake_stmt_value(sql_bytes_view_empty(), true);
+            return;
+        }
+        out[0] = fake_stmt_value(sql_bytes_view_from_ptr(query, query_len), false);
+    },
+
+    fn exec(self: &Self, query: &const byte, query_len: usize, args: &NamedArg, arg_count: usize) Result {
+        if self.committed || self.rolled_back {
+            return Result{ last_insert_id: 0, rows_affected: 0 };
+        }
+        _ = query;
+        _ = query_len;
+        _ = args;
+        return fake_exec_result(arg_count);
+    },
+
+    fn query(self: &Self, query: &const byte, query_len: usize, args: &NamedArg, arg_count: usize, out: &Rows) void {
+        if self.committed || self.rolled_back {
+            out[0] = fake_empty_rows_value();
+            return;
+        }
+        out[0] = fake_query_rows(sql_bytes_view_from_ptr(query, query_len), args, arg_count);
+    },
+
+    fn commit(self: &Self) !void {
+        try self.ensure_active();
+        self.committed = true;
+    },
+
+    fn rollback(self: &Self) !void {
+        try self.ensure_active();
+        self.rolled_back = true;
+    },
+}
+
+struct FakeConn : Conn {
+    dsn: SqlBytesView,
+    ping_count: i32,
+    closed: bool,
+
+    fn ensure_open(self: &Self) !void {
+        if self.closed {
+            return error.ErrDBClosed;
+        }
+    },
+
+    fn prepare(self: &Self, query: &const byte, query_len: usize, out: &Stmt) void {
+        if self.closed {
+            out[0] = fake_stmt_value(sql_bytes_view_empty(), true);
+            return;
+        }
+        out[0] = fake_stmt_value(sql_bytes_view_from_ptr(query, query_len), false);
+    },
+
+    fn exec(self: &Self, query: &const byte, query_len: usize, args: &NamedArg, arg_count: usize) Result {
+        if self.closed {
+            return Result{ last_insert_id: 0, rows_affected: 0 };
+        }
+        _ = query;
+        _ = query_len;
+        _ = args;
+        return fake_exec_result(arg_count);
+    },
+
+    fn query(self: &Self, query: &const byte, query_len: usize, args: &NamedArg, arg_count: usize, out: &Rows) void {
+        if self.closed {
+            out[0] = fake_empty_rows_value();
+            return;
+        }
+        out[0] = fake_query_rows(sql_bytes_view_from_ptr(query, query_len), args, arg_count);
+    },
+
+    fn begin(self: &Self, out: &Tx) void {
+        if self.closed {
+            out[0] = fake_tx_value(true, false);
+            return;
+        }
+        out[0] = fake_tx_value(false, false);
+    },
+
+    fn ping(self: &Self) !void {
+        try self.ensure_open();
+        self.ping_count = self.ping_count + 1;
+        _ = self.dsn;
+    },
+
+    fn close(self: &Self) void {
+        self.closed = true;
+    },
+}
+
+struct FakeDriver : Driver {
+    open_count: i32,
+
+    fn driver_name(self: &Self) SqlBytesView {
+        _ = self;
+        return sql_bytes_view_from_ptr("fake" as &const byte, 4);
+    },
+
+    fn open(self: &Self, dsn: &const byte, dsn_len: usize, out: &Conn) void {
+        self.open_count = self.open_count + 1;
+        out[0] = fake_conn_value(sql_bytes_view_from_ptr(dsn, dsn_len), 0, false);
+    },
+}
+
+fn test_db_open_ping_and_close() !void {
+    var driver_impl: FakeDriver = FakeDriver{ open_count: 0 };
+    const dbi: DB = db_open(driver_impl, &"mem://demo"[0: 10]);
+
+    try assert_eq_i32(driver_impl.open_count, 1);
+    try assert_eq_bool(bytes_view_eq_slice(dbi.driver_name(), &"fake"[0: 4]), true);
+
+    try dbi.ping();
+    dbi.close();
+
+    const ping_closed: !void = dbi.ping();
+    match ping_closed {
+        error.ErrDBClosed => {},
+        else => { try assert_eq_i32(0, 1); },
+    }
+}
+
+fn test_exec_prepare_and_result() !void {
+    var driver_impl: FakeDriver = FakeDriver{ open_count: 0 };
+    const dbi: DB = db_open(driver_impl, &"mem://demo"[0: 10]);
+    var args: [NamedArg: 1] = [];
+    args[0] = sql_arg_named(&"name"[0: 4], sql_value_string(&"carol"[0: 5]));
+
+    const res: Result = try dbi.exec(&"insert users"[0: 12], args[0: 1]);
+    try assert_eq_i64(res.last_insert_id, 101);
+    try assert_eq_i64(res.rows_affected, 1);
+
+    var stmt: Stmt = fake_stmt_value(sql_bytes_view_empty(), false);
+    try dbi.prepare(&"insert users"[0: 12], &stmt);
+    const stmt_res: Result = stmt.exec(&args[0], 1);
+    try assert_eq_i64(stmt_res.last_insert_id, 101);
+    stmt.close();
+}
+
+fn test_query_and_query_row() !void {
+    var driver_impl: FakeDriver = FakeDriver{ open_count: 0 };
+    const dbi: DB = db_open(driver_impl, &"mem://demo"[0: 10]);
+    var empty_args_buf: [NamedArg: 1] = [];
+    const empty_args: &[NamedArg] = empty_args_buf[0: 0];
+
+    var rows: Rows = fake_empty_rows_value();
+    try dbi.query(&"users"[0: 5], empty_args, &rows);
+    try assert_eq_i64(rows.column_count() as i64, 2);
+
+    const c0: ColumnInfo = rows.column_info(0);
+    const c1: ColumnInfo = rows.column_info(1);
+    try assert_eq_bool(bytes_view_eq_slice(c0.name, &"id"[0: 2]), true);
+    try assert_eq_bool(bytes_view_eq_slice(c1.database_type, &"TEXT"[0: 4]), true);
+
+    var scanned: [Value: 2] = [];
+    try assert_eq_bool(rows.next(), true);
+    try rows.scan(&scanned[0], 2);
+    try expect_value_i64(scanned[0], 1);
+    try expect_value_string(scanned[1], &"alice"[0: 5]);
+
+    try assert_eq_bool(rows.next(), true);
+    try rows.scan(&scanned[0], 2);
+    try expect_value_i64(scanned[0], 2);
+    try expect_value_string(scanned[1], &"bob"[0: 3]);
+
+    try assert_eq_bool(rows.next(), false);
+    rows.close();
+
+    var named_args: [NamedArg: 1] = [];
+    named_args[0] = sql_arg_named(&"name"[0: 4], sql_value_string(&"carol"[0: 5]));
+    const row: Row = try dbi.query_row(&"user_by_name"[0: 12], named_args[0: 1]);
+    try row.scan(&scanned[0], 2);
+    try expect_value_i64(scanned[0], 1);
+    try expect_value_string(scanned[1], &"carol"[0: 5]);
+}
+
+fn test_query_row_no_rows() !void {
+    var driver_impl: FakeDriver = FakeDriver{ open_count: 0 };
+    const dbi: DB = db_open(driver_impl, &"mem://demo"[0: 10]);
+    var empty_args_buf: [NamedArg: 1] = [];
+    const empty_args: &[NamedArg] = empty_args_buf[0: 0];
+    const row: Row = try dbi.query_row(&"empty"[0: 5], empty_args);
+    var scanned: [Value: 2] = [];
+
+    const r: !void = row.scan(&scanned[0], 2);
+    match r {
+        error.ErrNoRows => {},
+        else => { try assert_eq_i32(0, 1); },
+    }
+}
+
+fn test_tx_commit_and_done() !void {
+    var driver_impl: FakeDriver = FakeDriver{ open_count: 0 };
+    const dbi: DB = db_open(driver_impl, &"mem://demo"[0: 10]);
+    var tx: Tx = fake_tx_value(false, false);
+    try dbi.begin(&tx);
+    var args: [NamedArg: 1] = [];
+    args[0] = sql_arg_named(&"name"[0: 4], sql_value_string(&"dave"[0: 4]));
+
+    const res: Result = tx.exec("insert" as &const byte, 6, &args[0], 1);
+    try assert_eq_i64(res.rows_affected, 1);
+    try tx.commit();
+
+    const rollback_again: !void = tx.rollback();
+    match rollback_again {
+        error.ErrTxDone => {},
+        else => { try assert_eq_i32(0, 1); },
+    }
+}
+
+export fn main() i32 {
+    test_suite_begin("std.sql");
+    run_test("db open ping close", test_db_open_ping_and_close);
+    run_test("exec prepare result", test_exec_prepare_and_result);
+    run_test("query and query_row", test_query_and_query_row);
+    run_test("query_row no rows", test_query_row_no_rows);
+    run_test("tx commit and done", test_tx_commit_and_done);
+    return test_suite_end();
+}

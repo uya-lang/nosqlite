@@ -1,0 +1,19 @@
+@c_import("fixtures/c_import/flag_impl.c", "-DC_IMPORT_MAGIC=7");
+
+use std.runtime.entry;
+use std.testing.expect_eq;
+use std.testing.run_test;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+
+extern fn add_magic_i32(x: i32) i32;
+
+fn test_c_import_cflags_basic() !void {
+    try expect_eq(add_magic_i32(5), 12, "per-import cflags should compile helper");
+}
+
+export fn main() i32 {
+    test_suite_begin("c_import cflags");
+    run_test("cflags", test_c_import_cflags_basic);
+    return test_suite_end();
+}
