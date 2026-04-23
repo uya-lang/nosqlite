@@ -1,9 +1,25 @@
 // 测试 std.json 解析：浮点数（小数、负数、科学计数法）
 use std.runtime.entry;
 use std.json.value.JsonValue;
+use std.json.value.JsonStrView;
 use std.json.parser.parse;
+use std.json.parser.parse_lossless_numbers;
 use std.mem.arena.Arena;
 use std.mem.arena.arena_init;
+
+fn json_str_view_eq(s: JsonStrView, expected: &[const byte]) bool {
+    if s.len != expected.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < expected.len {
+        if s.ptr[i] != expected.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
 
 export fn main() i32 {
     var arena_buf: [byte: 4096] = [];
@@ -42,6 +58,49 @@ export fn main() i32 {
     match v3 {
         .float_val(x) => { if x < 99.0 || x > 101.0 { return 8; } },
         else => { return 9; },
+    }
+
+    // lossless-number parsing keeps the original numeric lexeme for storage engines.
+    buf[0] = 49;  // 1
+    buf[1] = 50;  // 2
+    buf[2] = 46;  // .
+    buf[3] = 51;  // 3
+    buf[4] = 52;  // 4
+    buf[5] = 48;  // 0
+    buf[6] = 48;  // 0
+    const v4: JsonValue = parse_lossless_numbers(&a, &buf[0], 7) catch { return 10; };
+    match v4 {
+        .num_text(s) => {
+            if !json_str_view_eq(s, &"12.3400"[0: 7]) { return 11; }
+        },
+        else => { return 12; },
+    }
+
+    buf[0] = 57;  // 9
+    buf[1] = 50;  // 2
+    buf[2] = 50;  // 2
+    buf[3] = 51;  // 3
+    buf[4] = 51;  // 3
+    buf[5] = 55;  // 7
+    buf[6] = 50;  // 2
+    buf[7] = 48;  // 0
+    buf[8] = 51;  // 3
+    buf[9] = 54;  // 6
+    buf[10] = 56; // 8
+    buf[11] = 53; // 5
+    buf[12] = 52; // 4
+    buf[13] = 55; // 7
+    buf[14] = 55; // 7
+    buf[15] = 53; // 5
+    buf[16] = 56; // 8
+    buf[17] = 48; // 0
+    buf[18] = 56; // 8
+    const v5: JsonValue = parse_lossless_numbers(&a, &buf[0], 19) catch { return 13; };
+    match v5 {
+        .num_text(s) => {
+            if !json_str_view_eq(s, &"9223372036854775808"[0: 19]) { return 14; }
+        },
+        else => { return 15; },
     }
 
     return 0;

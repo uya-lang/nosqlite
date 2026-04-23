@@ -1,5 +1,6 @@
 use lib.storage.wal_header;
 use lib.core.types;
+use std.runtime.entry.set_process_stack_limit_bytes;
 use std.mem.allocator.IAllocator;
 use std.mem.allocator.MallocAllocator;
 use std.mem.allocator.get_allocator;
@@ -683,6 +684,8 @@ fn run_insert_persists_after_reopen() i32 {
 }
 
 fn main() i32 {
+    set_process_stack_limit_bytes(64u64 * 1024u64 * 1024u64);
+
     const a: i32 = run_cursor_seqscan_filter_limit();
     if a != 0 {
         return a;

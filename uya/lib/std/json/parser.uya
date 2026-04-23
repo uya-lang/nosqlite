@@ -23,6 +23,7 @@ struct ParseState {
     pos: usize,
     arena: &Arena,
     depth: usize,
+    preserve_numbers: bool,
 }
 
 fn peek(s: &ParseState) byte {
@@ -143,6 +144,12 @@ fn parse_number(s: &ParseState) !JsonValue {
         while s.pos < s.len && is_digit(s.ptr[s.pos]) { s.pos = s.pos + 1; }
     }
     if is_float {
+        if s.preserve_numbers {
+            return JsonValue.num_text(JsonStrView{
+                ptr: &s.ptr[start],
+                len: s.pos - start,
+            });
+        }
         var i: usize = start;
         var neg: i32 = 1;
         if i < s.len && s.ptr[i] == 45 { neg = 0 - 1; i = i + 1; }
@@ -183,8 +190,24 @@ fn parse_number(s: &ParseState) !JsonValue {
     while i < s.pos {
         const d: i32 = s.ptr[i] as i32 - 48;
         if d < 0 || d > 9 { i = i + 1; continue; }
-        if v > 922337203685477580 { return error.NumberOverflow; }
-        if v == 922337203685477580 && (d > 7 || (!neg && d > 7)) { return error.NumberOverflow; }
+        if v > 922337203685477580 {
+            if s.preserve_numbers {
+                return JsonValue.num_text(JsonStrView{
+                    ptr: &s.ptr[start],
+                    len: s.pos - start,
+                });
+            }
+            return error.NumberOverflow;
+        }
+        if v == 922337203685477580 && (d > 7 || (!neg && d > 7)) {
+            if s.preserve_numbers {
+                return JsonValue.num_text(JsonStrView{
+                    ptr: &s.ptr[start],
+                    len: s.pos - start,
+                });
+            }
+            return error.NumberOverflow;
+        }
         v = v * 10 + d as i64;
         i = i + 1;
     }
@@ -355,10 +378,18 @@ fn parse_value(s: &ParseState) !JsonValue {
     return error.UnexpectedToken;
 }
 
-export fn parse(arena: &Arena, ptr: &byte, len: usize) !JsonValue {
-    var state: ParseState = ParseState{ ptr: ptr, len: len, pos: 0, arena: arena, depth: 0 };
+fn parse_with_number_policy(arena: &Arena, ptr: &byte, len: usize, preserve_numbers: bool) !JsonValue {
+    var state: ParseState = ParseState{ ptr: ptr, len: len, pos: 0, arena: arena, depth: 0, preserve_numbers: preserve_numbers };
     const v: JsonValue = try parse_value(&state);
     skip_ws(&state);
     if state.pos < len { return error.UnexpectedToken; }
     return v;
+}
+
+export fn parse(arena: &Arena, ptr: &byte, len: usize) !JsonValue {
+    return parse_with_number_policy(arena, ptr, len, false);
+}
+
+export fn parse_lossless_numbers(arena: &Arena, ptr: &byte, len: usize) !JsonValue {
+    return parse_with_number_policy(arena, ptr, len, true);
 }

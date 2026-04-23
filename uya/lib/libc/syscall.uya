@@ -685,8 +685,13 @@ std.cfg(std.target_os == .tos_macos, {
 
 // eventfd 标志
 export const EFD_SEMAPHORE: i32 = 0x1;
-export const EFD_NONBLOCK: i32 = O_NONBLOCK;
-export const EFD_CLOEXEC: i32 = O_CLOEXEC;
+std.cfg(std.target_os == .tos_macos, {
+    export const EFD_NONBLOCK: i32 = 0x00000004;
+    export const EFD_CLOEXEC: i32 = 0x01000000;
+}, {
+    export const EFD_NONBLOCK: i32 = 0x800;
+    export const EFD_CLOEXEC: i32 = 0x80000;
+})
 
 // fcntl 命令
 export const F_DUPFD: i32 = 0;

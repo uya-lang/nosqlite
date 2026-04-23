@@ -11,7 +11,6 @@ use osal.os_open;
 use osal.os_close;
 use osal.os_write;
 use osal.os_seek;
-use osal.os_fdatasync;
 
 use lib.core.types;
 use lib.storage.header;
@@ -20,6 +19,8 @@ use lib.storage.page;
 use lib.storage.checksum;
 use lib.storage.pager;
 use lib.storage.slotted_page;
+
+extern "libc" fn fdatasync(fd: i32) i32;
 
 const TEST_STEM_REDO: *const byte = "/tmp/nosqlite_storage_wal_redo" as *const byte;
 const TEST_STEM_UNCOMMITTED: *const byte = "/tmp/nosqlite_storage_wal_uncommitted" as *const byte;
@@ -93,7 +94,9 @@ fn append_garbage_tail(stem: &const byte, garbage: &[byte]) !void {
 
     _ = try os_seek(&file, 0i64, SEEK_END);
     _ = try os_write(&file, garbage.ptr, garbage.len);
-    try os_fdatasync(&file);
+    if fdatasync(file.fd) != 0 {
+        return error.PagerIoError;
+    }
     try os_close(&file);
 }
 

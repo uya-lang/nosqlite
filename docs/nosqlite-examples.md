@@ -48,7 +48,7 @@ python3 nosqlite/benchmark_phase11.py
 - `docs/nosqlite-benchmark-v0.md`
 - `docs/nosqlite-benchmark-v0.json`
 
-由于当前存储原型仍受单页容量约束，`floor/target/stretch` 目前会按 `skip` 记录。
+当前基线使用缩小数据集，`floor/target/stretch` 会按 `docs/nosqlite-benchmark-v0.json` 中的 v0 阈值判定；DoD 要求的四类 benchmark 当前均为 `floor=pass`。
 
 ## 4. 最小 Uya API 用法
 
@@ -83,5 +83,5 @@ fn example() !void {
 
 ## 5. 当前边界
 
-- benchmark 默认基线当前是缩小数据集，不代表设计文档第 18 节的参考环境实测。
+- benchmark 默认基线当前是缩小数据集，不代表未来生产参考环境的大规模实测。
 - `INSERT ... JSON ...` 现在已经能无损保留大整数和精确小数词素，但整体容量仍受 v1 原型页布局限制。

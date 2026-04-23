@@ -51,3 +51,4 @@
 - `nosqlite/test_index_btree.uya` -> `tests/storage/`
 - `nosqlite/tests/verify_phase12_5_async_boundary.sh` -> Phase 12.5 async boundary verification
 - `nosqlite/tests/verify_phase14_typed_sql_errors.sh` -> Phase 14 typed SQL static-error verification
+- `nosqlite/tests/verify_definition_of_done.sh` -> Definition of Done verification

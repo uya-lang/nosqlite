@@ -10,9 +10,6 @@ use osal.os_close;
 use osal.os_read;
 use osal.os_write;
 use osal.os_seek;
-use osal.os_fsync;
-use osal.os_fdatasync;
-use osal.os_ftruncate;
 use osal.os_unlink;
 use libc.O_RDONLY;
 use libc.O_RDWR;
@@ -40,6 +37,10 @@ use lib.core.nosqlite_format_compatible;
 use lib.core.nosqlite_format_version_supported;
 use lib.core.nosqlite_min_reader_version_supported;
 use lib.core.page_size_is_supported;
+
+extern "libc" fn fsync(fd: i32) i32;
+extern "libc" fn fdatasync(fd: i32) i32;
+extern "libc" fn ftruncate(fd: i32, length: i64) i32;
 
 export error PagerPathTooLong;
 export error PagerBadPageSize;
@@ -757,27 +758,27 @@ fn pager_file_size(file: &File) !u64 {
 }
 
 fn pager_sync_wal(file: &File) !void {
-    os_fdatasync(file) catch {
+    if file == null || fdatasync(file.fd) != 0 {
         return error.PagerIoError;
-    };
+    }
 }
 
 fn pager_sync_db(file: &File) !void {
-    os_fdatasync(file) catch {
+    if file == null || fdatasync(file.fd) != 0 {
         return error.PagerIoError;
-    };
+    }
 }
 
 fn pager_full_sync(file: &File) !void {
-    os_fsync(file) catch {
+    if file == null || fsync(file.fd) != 0 {
         return error.PagerIoError;
-    };
+    }
 }
 
 fn pager_truncate_file(file: &File, length: u64) !void {
-    os_ftruncate(file, length as i64) catch {
+    if file == null || ftruncate(file.fd, length as i64) != 0 {
         return error.PagerIoError;
-    };
+    }
 }
 
 fn pager_write_meta_page(db: &File, meta: &MetaPage) !void {

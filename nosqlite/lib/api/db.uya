@@ -15,7 +15,7 @@ use std.json.value.JsonArray;
 use std.json.value.JsonObject;
 use std.json.value.JsonKeyValue;
 use std.json.value.JsonStrView;
-use std.json.parser.parse;
+use std.json.parser.parse_lossless_numbers;
 
 use lib.storage.pager.SnapshotPressurePolicy;
 use lib.storage.pager.SnapshotPressureStatus;
@@ -567,7 +567,7 @@ fn doc_blob_builder_build_json(builder: &DocBlobBuilder, json: &[const byte]) !v
     }
     var arena: Arena = Arena{ buffer: null, size: 0, used: 0 };
     arena_init(&arena, &builder.scratch[0], DB_TXN_DOC_SCRATCH_MAX);
-    const value: JsonValue = try parse(&arena, json.ptr, json.len);
+    const value: JsonValue = try parse_lossless_numbers(&arena, json.ptr, json.len);
     const encoded_len: usize = try doc_encode_json_value(&value, builder.doc_blob[0: DB_DOC_BLOB_MAX]);
     builder.doc_len = (encoded_len as! u16) catch {
         return error.DbRowTooLarge;
