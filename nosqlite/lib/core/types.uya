@@ -8,12 +8,34 @@ export type TxnId = u64;
 export type Checksum = u32;
 
 export const NOSQLITE_FORMAT_VERSION_V1: u32 = 1;
+export const NOSQLITE_FORMAT_READER_VERSION_CURRENT: u32 = NOSQLITE_FORMAT_VERSION_V1;
+export const NOSQLITE_FORMAT_READER_VERSION_MIN: u32 = NOSQLITE_FORMAT_VERSION_V1;
 export const NOSQLITE_PAGE_SIZE_DEFAULT: u32 = 4096;
 export const NOSQLITE_PAGE_SIZE_MAX_V1: u32 = 8192;
+export const NOSQLITE_FEATURE_FLAGS_SUPPORTED_V1: u64 = 0u64;
 
 export const NOSQLITE_META_SLOT_A: u32 = 0;
 export const NOSQLITE_META_SLOT_B: u32 = 1;
 
 export fn page_size_is_supported(page_size: u32) bool {
     return page_size == NOSQLITE_PAGE_SIZE_DEFAULT || page_size == NOSQLITE_PAGE_SIZE_MAX_V1;
+}
+
+export fn nosqlite_format_version_supported(format_version: u32) bool {
+    return format_version == NOSQLITE_FORMAT_VERSION_V1;
+}
+
+export fn nosqlite_min_reader_version_supported(min_reader_version: u32) bool {
+    return min_reader_version >= NOSQLITE_FORMAT_READER_VERSION_MIN &&
+        min_reader_version <= NOSQLITE_FORMAT_READER_VERSION_CURRENT;
+}
+
+export fn nosqlite_feature_flags_supported(feature_flags: u64) bool {
+    return (feature_flags & NOSQLITE_FEATURE_FLAGS_SUPPORTED_V1) == feature_flags;
+}
+
+export fn nosqlite_format_compatible(format_version: u32, min_reader_version: u32, feature_flags: u64) bool {
+    return nosqlite_format_version_supported(format_version) &&
+        nosqlite_min_reader_version_supported(min_reader_version) &&
+        nosqlite_feature_flags_supported(feature_flags);
 }

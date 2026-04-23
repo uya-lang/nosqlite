@@ -35,6 +35,10 @@ use lib.core.NOSQLITE_META_SLOT_A;
 use lib.core.NOSQLITE_META_SLOT_B;
 use lib.core.NOSQLITE_PAGE_SIZE_DEFAULT;
 use lib.core.NOSQLITE_PAGE_SIZE_MAX_V1;
+use lib.core.nosqlite_feature_flags_supported;
+use lib.core.nosqlite_format_compatible;
+use lib.core.nosqlite_format_version_supported;
+use lib.core.nosqlite_min_reader_version_supported;
 use lib.core.page_size_is_supported;
 
 export error PagerPathTooLong;
@@ -50,6 +54,10 @@ export error PagerPageTableFull;
 export error PagerPageTableImmutable;
 export error PagerPageNotFound;
 export error PagerPageFrameReadOnly;
+export error PagerIncompatibleFormat;
+export error PagerUnknownFeatureFlags;
+export error PagerUpgradeUnsupportedTarget;
+export error PagerUpgradeFailed;
 export error SnapshotPressure;
 export error CursorExpired;
 export error WalInvalidBuffer;
@@ -98,6 +106,25 @@ export struct WalCheckReport {
 export struct PagerOpenInfo {
     meta: MetaPage,
     wal_header: WalHeader,
+}
+
+export struct PagerUpgradePlan {
+    target_format_version: u32,
+    target_min_reader_version: u32,
+    target_feature_flags: u64,
+}
+
+export struct PagerUpgradeReport {
+    before_format_version: u32,
+    after_format_version: u32,
+    before_min_reader_version: u32,
+    after_min_reader_version: u32,
+    before_feature_flags: u64,
+    after_feature_flags: u64,
+    wal_bytes_before: u64,
+    wal_bytes_after: u64,
+    checkpoint_lsn: u64,
+    changed: bool,
 }
 
 export struct CatalogSnapshot {
@@ -673,6 +700,52 @@ fn pager_read_wal_header(file: &File) !WalHeader {
     return wal_header_decode(buf[0: wal_header_encoded_size()]);
 }
 
+fn pager_write_wal_header(file: &File, header: &WalHeader) !void {
+    if file == null || header == null {
+        return error.PagerInvalidWalHeader;
+    }
+    var buf: [byte: 28] = [];
+    const wal_bytes: &[byte] = buf[0: wal_header_encoded_size()];
+    try wal_header_encode(header, wal_bytes);
+    try pager_seek_exact(file, 0);
+    try pager_write_all(file, wal_bytes);
+}
+
+fn pager_format_fields_require_supported(format_version: u32, min_reader_version: u32, feature_flags: u64) !void {
+    if !nosqlite_format_version_supported(format_version) ||
+        !nosqlite_min_reader_version_supported(min_reader_version) {
+        return error.PagerIncompatibleFormat;
+    }
+    if !nosqlite_feature_flags_supported(feature_flags) {
+        return error.PagerUnknownFeatureFlags;
+    }
+}
+
+fn pager_meta_fail_fast_if_incompatible_for_slot(page: &MetaPage, slot: u32) !void {
+    if page == null ||
+        !meta_page_magic_valid(page) ||
+        !meta_page_checksum_valid(page) ||
+        !meta_page_slot_matches_physical(page, slot) {
+        return;
+    }
+    try pager_format_fields_require_supported(page.format_version, page.min_reader_version, page.feature_flags);
+}
+
+fn pager_validate_wal_header_for_meta(header: &WalHeader, meta: &MetaPage) !void {
+    if header == null || meta == null ||
+        !wal_header_magic_valid(header) ||
+        !wal_header_checksum_valid(header) {
+        return error.PagerInvalidWalHeader;
+    }
+    try pager_format_fields_require_supported(header.format_version, header.min_reader_version, header.feature_flags);
+    if !wal_header_page_size_matches(header, meta.page_size) ||
+        header.format_version != meta.format_version ||
+        header.min_reader_version != meta.min_reader_version ||
+        header.feature_flags != meta.feature_flags {
+        return error.PagerInvalidWalHeader;
+    }
+}
+
 fn pager_file_size(file: &File) !u64 {
     const end_off: i64 = os_seek(file, 0, SEEK_END) catch {
         return error.PagerIoError;
@@ -860,17 +933,20 @@ fn pager_probe_meta_b_only(db: &File) !MetaPage {
         const meta_b_8k: MetaPage = pager_read_meta_at(db, 8192) catch {
             return error.PagerNoValidMeta;
         };
+        try pager_meta_fail_fast_if_incompatible_for_slot(&meta_b_8k, NOSQLITE_META_SLOT_B);
         if !pager_meta_valid_for_slot(&meta_b_8k, NOSQLITE_META_SLOT_B) {
             return error.PagerNoValidMeta;
         }
         return meta_b_8k;
     };
+    try pager_meta_fail_fast_if_incompatible_for_slot(&meta_b_4k, NOSQLITE_META_SLOT_B);
     if pager_meta_valid_for_slot(&meta_b_4k, NOSQLITE_META_SLOT_B) {
         return meta_b_4k;
     }
     const meta_b_8k: MetaPage = pager_read_meta_at(db, 8192) catch {
         return error.PagerNoValidMeta;
     };
+    try pager_meta_fail_fast_if_incompatible_for_slot(&meta_b_8k, NOSQLITE_META_SLOT_B);
     if !pager_meta_valid_for_slot(&meta_b_8k, NOSQLITE_META_SLOT_B) {
         return error.PagerNoValidMeta;
     }
@@ -878,6 +954,8 @@ fn pager_probe_meta_b_only(db: &File) !MetaPage {
 }
 
 export fn pager_select_latest_meta(meta_a: &MetaPage, meta_b: &MetaPage) !MetaPage {
+    try pager_meta_fail_fast_if_incompatible_for_slot(meta_a, NOSQLITE_META_SLOT_A);
+    try pager_meta_fail_fast_if_incompatible_for_slot(meta_b, NOSQLITE_META_SLOT_B);
     const a_ok: bool = pager_meta_valid_for_slot(meta_a, NOSQLITE_META_SLOT_A);
     const b_ok: bool = pager_meta_valid_for_slot(meta_b, NOSQLITE_META_SLOT_B);
     if a_ok && b_ok {
@@ -905,6 +983,7 @@ fn pager_probe_selected_meta(db: &File) !MetaPage {
     const meta_a: MetaPage = pager_read_meta_at(db, 0) catch {
         return try pager_probe_meta_b_only(db);
     };
+    try pager_meta_fail_fast_if_incompatible_for_slot(&meta_a, NOSQLITE_META_SLOT_A);
     if !pager_meta_valid_for_slot(&meta_a, NOSQLITE_META_SLOT_A) {
         return try pager_probe_meta_b_only(db);
     }
@@ -1156,12 +1235,7 @@ export fn pager_open_at_stem(stem: &const byte) !PagerOpenInfo {
 
     const selected_meta: MetaPage = try pager_probe_selected_meta(&db);
     const wal_header: WalHeader = try pager_read_wal_header(&wal);
-    if !wal_header_supported(&wal_header) ||
-        !wal_header_checksum_valid(&wal_header) ||
-        !wal_header_page_size_matches(&wal_header, selected_meta.page_size) ||
-        wal_header.feature_flags != selected_meta.feature_flags {
-        return error.PagerInvalidWalHeader;
-    }
+    try pager_validate_wal_header_for_meta(&wal_header, &selected_meta);
     const meta: MetaPage = try pager_recover_wal(&db, &wal, &selected_meta);
 
     try os_close(&wal);
@@ -1347,6 +1421,44 @@ export fn pager_xor_wal_byte_at_stem(stem: &const byte, rel_off: u64, xor_mask: 
     try pager_xor_path_byte(&wal_path[0], rel_off, xor_mask);
 }
 
+export fn pager_test_rewrite_meta_format_at_stem(stem: &const byte, format_version: u32, min_reader_version: u32, feature_flags: u64) !void {
+    var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
+
+    var db: File = try pager_open_file(&db_path[0], O_RDWR, 0);
+    errdefer {
+        _ = os_close(&db) catch {};
+    }
+
+    var meta: MetaPage = try pager_probe_selected_meta(&db);
+    meta.format_version = format_version;
+    meta.min_reader_version = min_reader_version;
+    meta.feature_flags = feature_flags;
+    meta_page_finalize_checksum(&meta);
+    try pager_write_meta_page(&db, &meta);
+    try pager_sync_db(&db);
+    try os_close(&db);
+}
+
+export fn pager_test_rewrite_wal_header_format_at_stem(stem: &const byte, format_version: u32, min_reader_version: u32, feature_flags: u64) !void {
+    var wal_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    try pager_build_wal_path(stem, wal_path[0: NOSQLITE_PATH_BUF_SIZE]);
+
+    var wal_file: File = try pager_open_file(&wal_path[0], O_RDWR, 0);
+    errdefer {
+        _ = os_close(&wal_file) catch {};
+    }
+
+    var header: WalHeader = try pager_read_wal_header(&wal_file);
+    header.format_version = format_version;
+    header.min_reader_version = min_reader_version;
+    header.feature_flags = feature_flags;
+    wal_header_finalize_checksum(&header);
+    try pager_write_wal_header(&wal_file, &header);
+    try pager_sync_wal(&wal_file);
+    try os_close(&wal_file);
+}
+
 export fn pager_check_wal_at_stem(stem: &const byte) !WalCheckReport {
     var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
     var wal_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
@@ -1367,12 +1479,7 @@ export fn pager_check_wal_at_stem(stem: &const byte) !WalCheckReport {
         return error.PagerNoValidMeta;
     }
     const wal_header: WalHeader = try pager_read_wal_header(&wal);
-    if !wal_header_supported(&wal_header) ||
-        !wal_header_checksum_valid(&wal_header) ||
-        !wal_header_page_size_matches(&wal_header, selected_meta.page_size) ||
-        wal_header.feature_flags != selected_meta.feature_flags {
-        return error.PagerInvalidWalHeader;
-    }
+    try pager_validate_wal_header_for_meta(&wal_header, &selected_meta);
 
     const wal_size: u64 = try pager_file_size(&wal);
     var report: WalCheckReport = WalCheckReport{
@@ -1646,6 +1753,102 @@ export fn pager_checkpoint_at_stem(stem: &const byte) !PagerOpenInfo {
         meta: next_meta,
         wal_header: info.wal_header,
     };
+}
+
+fn pager_upgrade_target_supported(plan: &PagerUpgradePlan) bool {
+    return plan != null &&
+        nosqlite_format_compatible(plan.target_format_version, plan.target_min_reader_version, plan.target_feature_flags);
+}
+
+fn pager_upgrade_needs_header_rewrite(meta: &MetaPage, plan: &PagerUpgradePlan) bool {
+    return meta != null && plan != null &&
+        (meta.format_version != plan.target_format_version ||
+         meta.min_reader_version != plan.target_min_reader_version ||
+         meta.feature_flags != plan.target_feature_flags);
+}
+
+fn pager_upgrade_at_stem_impl(stem: &const byte, plan: &PagerUpgradePlan, fail_after_checkpoint: bool) !PagerUpgradeReport {
+    if !pager_upgrade_target_supported(plan) {
+        return error.PagerUpgradeUnsupportedTarget;
+    }
+
+    const before_info: PagerOpenInfo = try pager_open_at_stem(stem);
+    const before_wal_bytes: u64 = try pager_wal_size_at_stem(stem);
+    const checkpointed: PagerOpenInfo = try pager_checkpoint_at_stem(stem);
+    const after_checkpoint_wal_bytes: u64 = try pager_wal_size_at_stem(stem);
+    if after_checkpoint_wal_bytes != wal_header_encoded_size() as u64 ||
+        checkpointed.meta.checkpoint_lsn != checkpointed.meta.commit_lsn {
+        return error.PagerUpgradeFailed;
+    }
+    if fail_after_checkpoint {
+        return error.PagerUpgradeFailed;
+    }
+
+    var final_meta: MetaPage = pager_copy_meta(&checkpointed.meta);
+    var final_header: WalHeader = checkpointed.wal_header;
+    const changed: bool = pager_upgrade_needs_header_rewrite(&checkpointed.meta, plan);
+    if changed {
+        var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+        var wal_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+        try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
+        try pager_build_wal_path(stem, wal_path[0: NOSQLITE_PATH_BUF_SIZE]);
+
+        var db: File = try pager_open_file(&db_path[0], O_RDWR, 0);
+        errdefer {
+            _ = os_close(&db) catch {};
+        }
+        var wal_file: File = try pager_open_file(&wal_path[0], O_RDWR, 0);
+        errdefer {
+            _ = os_close(&wal_file) catch {};
+        }
+        errdefer {
+            _ = pager_write_wal_header(&wal_file, &checkpointed.wal_header) catch {};
+            _ = pager_sync_wal(&wal_file) catch {};
+            _ = pager_write_meta_page(&db, &checkpointed.meta) catch {};
+            _ = pager_sync_db(&db) catch {};
+        }
+
+        final_header.format_version = plan.target_format_version;
+        final_header.min_reader_version = plan.target_min_reader_version;
+        final_header.feature_flags = plan.target_feature_flags;
+        wal_header_finalize_checksum(&final_header);
+        try pager_write_wal_header(&wal_file, &final_header);
+        try pager_sync_wal(&wal_file);
+
+        final_meta.format_version = plan.target_format_version;
+        final_meta.min_reader_version = plan.target_min_reader_version;
+        final_meta.feature_flags = plan.target_feature_flags;
+        final_meta.generation = checkpointed.meta.generation + 1u64;
+        final_meta.active_meta_slot = try pager_next_meta_slot(checkpointed.meta.active_meta_slot);
+        meta_page_finalize_checksum(&final_meta);
+        try pager_write_meta_page(&db, &final_meta);
+        try pager_sync_db(&db);
+
+        try os_close(&wal_file);
+        try os_close(&db);
+    }
+
+    const final_wal_bytes: u64 = try pager_wal_size_at_stem(stem);
+    return PagerUpgradeReport{
+        before_format_version: before_info.meta.format_version,
+        after_format_version: final_meta.format_version,
+        before_min_reader_version: before_info.meta.min_reader_version,
+        after_min_reader_version: final_meta.min_reader_version,
+        before_feature_flags: before_info.meta.feature_flags,
+        after_feature_flags: final_meta.feature_flags,
+        wal_bytes_before: before_wal_bytes,
+        wal_bytes_after: final_wal_bytes,
+        checkpoint_lsn: final_meta.checkpoint_lsn,
+        changed: changed,
+    };
+}
+
+export fn pager_upgrade_at_stem(stem: &const byte, plan: &PagerUpgradePlan) !PagerUpgradeReport {
+    return try pager_upgrade_at_stem_impl(stem, plan, false);
+}
+
+export fn pager_test_upgrade_fail_after_checkpoint_at_stem(stem: &const byte, plan: &PagerUpgradePlan) !PagerUpgradeReport {
+    return try pager_upgrade_at_stem_impl(stem, plan, true);
 }
 
 export fn snapshot_pressure_soft(policy: &SnapshotPressurePolicy, status: &SnapshotPressureStatus) bool {

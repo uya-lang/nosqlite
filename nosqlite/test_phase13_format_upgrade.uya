@@ -1,0 +1,166 @@
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_u64;
+
+use lib.core.types;
+use lib.storage.wal_header.wal_header_encoded_size;
+use lib.storage.header.PageHeader;
+use lib.storage.header.PageType;
+use lib.storage.checksum.page_checksum_finalize;
+use lib.storage.page.page_header_from_buf;
+use lib.storage.slotted_page.slotted_page_init;
+use lib.storage.slotted_page.slotted_page_insert_copy;
+use lib.storage.pager.PagerOpenInfo;
+use lib.storage.pager.PagerUpgradePlan;
+use lib.storage.pager.PagerUpgradeReport;
+use lib.storage.pager.WalCommit;
+use lib.storage.pager.catalog_cleanup_stem;
+use lib.storage.pager.pager_commit_page_at_stem;
+use lib.storage.pager.pager_create_at_stem;
+use lib.storage.pager.pager_open_at_stem;
+use lib.storage.pager.pager_test_rewrite_meta_format_at_stem;
+use lib.storage.pager.pager_test_rewrite_wal_header_format_at_stem;
+use lib.storage.pager.pager_test_upgrade_fail_after_checkpoint_at_stem;
+use lib.storage.pager.pager_upgrade_at_stem;
+use lib.storage.pager.pager_wal_size_at_stem;
+
+const TEST_STEM_INCOMPAT_VERSION: *const byte = "/tmp/nosqlite_phase13_incompat_version" as *const byte;
+const TEST_STEM_UNKNOWN_FLAG: *const byte = "/tmp/nosqlite_phase13_unknown_flag" as *const byte;
+const TEST_STEM_UNKNOWN_META_FLAG: *const byte = "/tmp/nosqlite_phase13_unknown_meta_flag" as *const byte;
+const TEST_STEM_UPGRADE: *const byte = "/tmp/nosqlite_phase13_upgrade" as *const byte;
+
+fn cleanup_stem(stem: &const byte) void {
+    _ = catalog_cleanup_stem(stem) catch {};
+}
+
+fn make_commit(lsn: u64) WalCommit {
+    return WalCommit{
+        txn_id: lsn,
+        commit_lsn: lsn,
+        catalog_root: 2u32,
+        page_count: 3u32,
+        freelist_head: 0u32,
+    };
+}
+
+fn init_data_page(page_buf: &[byte], payload: &[const byte], lsn: u64) !void {
+    try slotted_page_init(page_buf, PageType.DATA);
+    _ = try slotted_page_insert_copy(page_buf, payload);
+    const header: &PageHeader = page_header_from_buf(page_buf);
+    header.page_lsn = lsn;
+    _ = try page_checksum_finalize(page_buf);
+}
+
+fn prepare_upgrade_wal(stem: &const byte, lsn: u64) !void {
+    _ = try pager_create_at_stem(stem, NOSQLITE_PAGE_SIZE_DEFAULT);
+    var raw_page: [byte: 4096] = [];
+    const page_buf: &[byte] = raw_page[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try init_data_page(page_buf, &"phase13"[0: 7], lsn);
+    const commit: WalCommit = make_commit(lsn);
+    _ = try pager_commit_page_at_stem(stem, 2u32, page_buf, &commit, null);
+}
+
+test "nosqlite_phase13_incompatible_format_version_fails_fast" {
+    cleanup_stem(TEST_STEM_INCOMPAT_VERSION);
+    defer {
+        cleanup_stem(TEST_STEM_INCOMPAT_VERSION);
+    }
+
+    _ = try pager_create_at_stem(TEST_STEM_INCOMPAT_VERSION, NOSQLITE_PAGE_SIZE_DEFAULT);
+    try pager_test_rewrite_meta_format_at_stem(
+        TEST_STEM_INCOMPAT_VERSION,
+        NOSQLITE_FORMAT_VERSION_V1 + 1u32,
+        NOSQLITE_FORMAT_VERSION_V1 + 1u32,
+        0u64,
+    );
+
+    const opened: !PagerOpenInfo = pager_open_at_stem(TEST_STEM_INCOMPAT_VERSION);
+    try assert_eq_i32(opened.error_id as i32, @error_id(error.PagerIncompatibleFormat) as i32);
+}
+
+test "nosqlite_phase13_unknown_required_feature_flag_fails_fast" {
+    cleanup_stem(TEST_STEM_UNKNOWN_FLAG);
+    defer {
+        cleanup_stem(TEST_STEM_UNKNOWN_FLAG);
+    }
+
+    _ = try pager_create_at_stem(TEST_STEM_UNKNOWN_FLAG, NOSQLITE_PAGE_SIZE_DEFAULT);
+    try pager_test_rewrite_wal_header_format_at_stem(
+        TEST_STEM_UNKNOWN_FLAG,
+        NOSQLITE_FORMAT_VERSION_V1,
+        NOSQLITE_FORMAT_VERSION_V1,
+        1u64,
+    );
+
+    const opened: !PagerOpenInfo = pager_open_at_stem(TEST_STEM_UNKNOWN_FLAG);
+    try assert_eq_i32(opened.error_id as i32, @error_id(error.PagerUnknownFeatureFlags) as i32);
+}
+
+test "nosqlite_phase13_unknown_required_meta_feature_flag_fails_fast" {
+    cleanup_stem(TEST_STEM_UNKNOWN_META_FLAG);
+    defer {
+        cleanup_stem(TEST_STEM_UNKNOWN_META_FLAG);
+    }
+
+    _ = try pager_create_at_stem(TEST_STEM_UNKNOWN_META_FLAG, NOSQLITE_PAGE_SIZE_DEFAULT);
+    try pager_test_rewrite_meta_format_at_stem(
+        TEST_STEM_UNKNOWN_META_FLAG,
+        NOSQLITE_FORMAT_VERSION_V1,
+        NOSQLITE_FORMAT_VERSION_V1,
+        1u64,
+    );
+
+    const opened: !PagerOpenInfo = pager_open_at_stem(TEST_STEM_UNKNOWN_META_FLAG);
+    try assert_eq_i32(opened.error_id as i32, @error_id(error.PagerUnknownFeatureFlags) as i32);
+}
+
+test "nosqlite_phase13_upgrade_checkpoints_and_truncates_wal_first" {
+    cleanup_stem(TEST_STEM_UPGRADE);
+    defer {
+        cleanup_stem(TEST_STEM_UPGRADE);
+    }
+
+    try prepare_upgrade_wal(TEST_STEM_UPGRADE, 13u64);
+    const before_wal_bytes: u64 = try pager_wal_size_at_stem(TEST_STEM_UPGRADE);
+    try assert_eq_bool(before_wal_bytes > wal_header_encoded_size() as u64, true);
+
+    const plan: PagerUpgradePlan = PagerUpgradePlan{
+        target_format_version: NOSQLITE_FORMAT_VERSION_V1,
+        target_min_reader_version: NOSQLITE_FORMAT_VERSION_V1,
+        target_feature_flags: 0u64,
+    };
+    const report: PagerUpgradeReport = try pager_upgrade_at_stem(TEST_STEM_UPGRADE, &plan);
+    try assert_eq_bool(report.wal_bytes_before > wal_header_encoded_size() as u64, true);
+    try assert_eq_u64(report.wal_bytes_after, wal_header_encoded_size() as u64);
+    try assert_eq_u64(report.checkpoint_lsn, 13u64);
+
+    const opened: PagerOpenInfo = try pager_open_at_stem(TEST_STEM_UPGRADE);
+    try assert_eq_u64(opened.meta.checkpoint_lsn, opened.meta.commit_lsn);
+    try assert_eq_i32(opened.meta.format_version as i32, NOSQLITE_FORMAT_VERSION_V1 as i32);
+    try assert_eq_u64(try pager_wal_size_at_stem(TEST_STEM_UPGRADE), wal_header_encoded_size() as u64);
+}
+
+test "nosqlite_phase13_failed_upgrade_rolls_back_to_openable_store" {
+    cleanup_stem(TEST_STEM_UPGRADE);
+    defer {
+        cleanup_stem(TEST_STEM_UPGRADE);
+    }
+
+    try prepare_upgrade_wal(TEST_STEM_UPGRADE, 17u64);
+
+    const failing_plan: PagerUpgradePlan = PagerUpgradePlan{
+        target_format_version: NOSQLITE_FORMAT_VERSION_V1,
+        target_min_reader_version: NOSQLITE_FORMAT_VERSION_V1,
+        target_feature_flags: 0u64,
+    };
+    const failed: !PagerUpgradeReport = pager_test_upgrade_fail_after_checkpoint_at_stem(TEST_STEM_UPGRADE, &failing_plan);
+    try assert_eq_i32(failed.error_id as i32, @error_id(error.PagerUpgradeFailed) as i32);
+
+    const opened: PagerOpenInfo = try pager_open_at_stem(TEST_STEM_UPGRADE);
+    try assert_eq_i32(opened.meta.format_version as i32, NOSQLITE_FORMAT_VERSION_V1 as i32);
+    try assert_eq_i32(opened.meta.min_reader_version as i32, NOSQLITE_FORMAT_VERSION_V1 as i32);
+    try assert_eq_u64(opened.meta.feature_flags, 0u64);
+    try assert_eq_u64(opened.meta.commit_lsn, 17u64);
+    try assert_eq_u64(opened.meta.checkpoint_lsn, 17u64);
+    try assert_eq_u64(try pager_wal_size_at_stem(TEST_STEM_UPGRADE), wal_header_encoded_size() as u64);
+}

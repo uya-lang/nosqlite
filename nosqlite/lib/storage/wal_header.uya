@@ -2,6 +2,7 @@
 // 模块路径：lib/storage/wal_header.uya → use lib.storage.wal_header;
 
 use lib.core.NOSQLITE_FORMAT_VERSION_V1;
+use lib.core.nosqlite_format_compatible;
 use lib.core.page_size_is_supported;
 
 export error WalHeaderInvalidBuffer;
@@ -35,9 +36,7 @@ export fn wal_header_magic_valid(header: &WalHeader) bool {
 
 export fn wal_header_supported(header: &WalHeader) bool {
     return wal_header_magic_valid(header) &&
-        header.format_version == NOSQLITE_FORMAT_VERSION_V1 &&
-        header.min_reader_version <= NOSQLITE_FORMAT_VERSION_V1 &&
-        header.feature_flags == 0 &&
+        nosqlite_format_compatible(header.format_version, header.min_reader_version, header.feature_flags) &&
         page_size_is_supported(header.page_size);
 }
 

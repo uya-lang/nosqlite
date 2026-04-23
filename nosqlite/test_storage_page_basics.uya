@@ -85,6 +85,19 @@ test "nosqlite_core_page_size_support_matrix" {
     try assert_eq_bool(page_size_is_supported(16384), false);
 }
 
+test "nosqlite_core_format_compatibility_matrix" {
+    try assert_eq_bool(nosqlite_format_version_supported(NOSQLITE_FORMAT_VERSION_V1), true);
+    try assert_eq_bool(nosqlite_format_version_supported(NOSQLITE_FORMAT_VERSION_V1 + 1u32), false);
+    try assert_eq_bool(nosqlite_min_reader_version_supported(NOSQLITE_FORMAT_VERSION_V1), true);
+    try assert_eq_bool(nosqlite_min_reader_version_supported(0u32), false);
+    try assert_eq_bool(nosqlite_min_reader_version_supported(NOSQLITE_FORMAT_VERSION_V1 + 1u32), false);
+    try assert_eq_bool(nosqlite_feature_flags_supported(0u64), true);
+    try assert_eq_bool(nosqlite_feature_flags_supported(1u64), false);
+    try assert_eq_bool(nosqlite_format_compatible(NOSQLITE_FORMAT_VERSION_V1, NOSQLITE_FORMAT_VERSION_V1, 0u64), true);
+    try assert_eq_bool(nosqlite_format_compatible(NOSQLITE_FORMAT_VERSION_V1 + 1u32, NOSQLITE_FORMAT_VERSION_V1, 0u64), false);
+    try assert_eq_bool(nosqlite_format_compatible(NOSQLITE_FORMAT_VERSION_V1, NOSQLITE_FORMAT_VERSION_V1, 1u64), false);
+}
+
 test "nosqlite_storage_meta_page_slot_and_support" {
     var ok_magic: MetaPage = make_meta(0, NOSQLITE_PAGE_SIZE_DEFAULT, NOSQLITE_FORMAT_VERSION_V1);
     try assert_eq_bool(meta_page_magic_valid(&ok_magic), true);

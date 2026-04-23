@@ -45,6 +45,7 @@
 - `nosqlite/test_storage_pager_runtime.uya` -> `tests/storage/`
 - `nosqlite/test_storage_slotted_page_runtime.uya` -> `tests/storage/`
 - `nosqlite/test_storage_wal_runtime.uya` -> `tests/storage/`
+- `nosqlite/test_phase13_format_upgrade.uya` -> `tests/storage/`
 - `nosqlite/test_catalog_basics.uya` -> `tests/storage/`
 - `nosqlite/test_index_btree.uya` -> `tests/storage/`
 - `nosqlite/tests/verify_phase12_5_async_boundary.sh` -> Phase 12.5 async boundary verification

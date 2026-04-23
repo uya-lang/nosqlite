@@ -4,6 +4,7 @@
 use lib.core.NOSQLITE_FORMAT_VERSION_V1;
 use lib.core.NOSQLITE_META_SLOT_A;
 use lib.core.NOSQLITE_META_SLOT_B;
+use lib.core.nosqlite_format_compatible;
 use lib.core.page_size_is_supported;
 
 export error MetaPageInvalidBuffer;
@@ -48,9 +49,7 @@ export fn meta_page_magic_valid(page: &MetaPage) bool {
 
 export fn meta_page_supported(page: &MetaPage) bool {
     return meta_page_magic_valid(page) &&
-        page.format_version == NOSQLITE_FORMAT_VERSION_V1 &&
-        page.min_reader_version <= NOSQLITE_FORMAT_VERSION_V1 &&
-        page.feature_flags == 0 &&
+        nosqlite_format_compatible(page.format_version, page.min_reader_version, page.feature_flags) &&
         page_size_is_supported(page.page_size) &&
         meta_page_slot_valid(page.active_meta_slot);
 }

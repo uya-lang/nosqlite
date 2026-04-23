@@ -34,6 +34,9 @@ export const NOSQLITE_ERR_FORMAT_WAL_HEADER_INVALID: u32 = 2002;
 export const NOSQLITE_ERR_FORMAT_PAGE_CHECKSUM_INVALID: u32 = 2003;
 export const NOSQLITE_ERR_FORMAT_PAGE_BOUNDS_INVALID: u32 = 2004;
 export const NOSQLITE_ERR_FORMAT_WAL_RECORD_INVALID: u32 = 2005;
+export const NOSQLITE_ERR_FORMAT_INCOMPATIBLE: u32 = 2006;
+export const NOSQLITE_ERR_FORMAT_UNKNOWN_FEATURE: u32 = 2007;
+export const NOSQLITE_ERR_FORMAT_UPGRADE_FAILED: u32 = 2008;
 
 export const NOSQLITE_ERR_RESOURCE_WRITER_LOCK_BUSY: u32 = 3001;
 export const NOSQLITE_ERR_RESOURCE_PAGE_PIN_CONFLICT: u32 = 3002;
@@ -66,6 +69,9 @@ export fn nosqlite_error_code_valid(code: u32) bool {
         code == NOSQLITE_ERR_FORMAT_PAGE_CHECKSUM_INVALID ||
         code == NOSQLITE_ERR_FORMAT_PAGE_BOUNDS_INVALID ||
         code == NOSQLITE_ERR_FORMAT_WAL_RECORD_INVALID ||
+        code == NOSQLITE_ERR_FORMAT_INCOMPATIBLE ||
+        code == NOSQLITE_ERR_FORMAT_UNKNOWN_FEATURE ||
+        code == NOSQLITE_ERR_FORMAT_UPGRADE_FAILED ||
         code == NOSQLITE_ERR_RESOURCE_WRITER_LOCK_BUSY ||
         code == NOSQLITE_ERR_RESOURCE_PAGE_PIN_CONFLICT ||
         code == NOSQLITE_ERR_SNAPSHOT_PRESSURE ||
@@ -118,6 +124,8 @@ export fn nosqlite_error_is_fatal(code: u32) bool {
         code == NOSQLITE_ERR_FORMAT_WAL_HEADER_INVALID ||
         code == NOSQLITE_ERR_FORMAT_PAGE_CHECKSUM_INVALID ||
         code == NOSQLITE_ERR_FORMAT_WAL_RECORD_INVALID ||
+        code == NOSQLITE_ERR_FORMAT_INCOMPATIBLE ||
+        code == NOSQLITE_ERR_FORMAT_UNKNOWN_FEATURE ||
         code == NOSQLITE_ERR_INTERNAL_INVARIANT_BROKEN;
 }
 
@@ -166,6 +174,15 @@ export fn nosqlite_error_name(code: u32) &[byte] {
     }
     if code == NOSQLITE_ERR_FORMAT_WAL_RECORD_INVALID {
         return &"FORMAT_WAL_RECORD_INVALID"[0: 25];
+    }
+    if code == NOSQLITE_ERR_FORMAT_INCOMPATIBLE {
+        return &"FORMAT_INCOMPATIBLE"[0: 19];
+    }
+    if code == NOSQLITE_ERR_FORMAT_UNKNOWN_FEATURE {
+        return &"FORMAT_UNKNOWN_FEATURE"[0: 22];
+    }
+    if code == NOSQLITE_ERR_FORMAT_UPGRADE_FAILED {
+        return &"FORMAT_UPGRADE_FAILED"[0: 21];
     }
     if code == NOSQLITE_ERR_RESOURCE_WRITER_LOCK_BUSY {
         return &"RESOURCE_WRITER_LOCK_BUSY"[0: 25];
@@ -242,6 +259,15 @@ export fn nosqlite_error_message(code: u32) &[byte] {
     }
     if code == NOSQLITE_ERR_FORMAT_WAL_RECORD_INVALID {
         return &"WAL record stream is truncated, corrupt, or out of order"[0: 57];
+    }
+    if code == NOSQLITE_ERR_FORMAT_INCOMPATIBLE {
+        return &"file format version is not supported by this NoSQLite binary"[0: 60];
+    }
+    if code == NOSQLITE_ERR_FORMAT_UNKNOWN_FEATURE {
+        return &"file uses feature flags this NoSQLite binary does not understand"[0: 64];
+    }
+    if code == NOSQLITE_ERR_FORMAT_UPGRADE_FAILED {
+        return &"format upgrade failed; previous on-disk format remains authoritative"[0: 68];
     }
     if code == NOSQLITE_ERR_RESOURCE_WRITER_LOCK_BUSY {
         return &"writer lock is busy"[0: 19];

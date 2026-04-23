@@ -285,13 +285,13 @@
 
 ## Phase 13 - 格式兼容与升级
 
-- [ ] 先写失败测试：不兼容版本拒绝打开、未知 feature flag 拒绝、失败升级回滚
-- [ ] 定义文件格式兼容矩阵
-- [ ] 实现不兼容 `format_version` fail-fast
-- [ ] 实现未知必需 `feature_flags` fail-fast
-- [ ] 设计显式 upgrade 路径
-- [ ] 验证升级前必须 checkpoint 并截断 WAL
-- [ ] 验证失败升级后的回滚流程
+- [x] 先写失败测试：不兼容版本拒绝打开、未知 feature flag 拒绝、失败升级回滚
+- [x] 定义文件格式兼容矩阵
+- [x] 实现不兼容 `format_version` fail-fast
+- [x] 实现未知必需 `feature_flags` fail-fast
+- [x] 设计显式 upgrade 路径
+- [x] 验证升级前必须 checkpoint 并截断 WAL
+- [x] 验证失败升级后的回滚流程
 
 ## Phase 14 - 编译期增强
 
@@ -314,7 +314,7 @@
 - [ ] 点查、顺扫、写入、恢复四类 benchmark 至少达到设计文档第 18 节 `floor`
 - [ ] 大整数与精确小数无静默降精度
 - [ ] 快照与 WAL 资源在生产策略下保持有界
-- [ ] 文件格式升级/拒绝打开不兼容版本行为经过验证
+- [x] 文件格式升级/拒绝打开不兼容版本行为经过验证
 - [ ] 核心资源类型完成 `drop` 封装
 - [ ] 核心错误路径完成 `errdefer` 回滚
 - [ ] 锁与 pin 完成 guard 化

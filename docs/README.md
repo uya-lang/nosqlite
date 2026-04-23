@@ -8,6 +8,7 @@
 - [最小 API 草案](./nosqlite-api-draft.md)
 - [SQL 语法说明](./nosqlite-sql-syntax.md)
 - [Benchmark 输出格式](./nosqlite-benchmark-format.md)
+- [格式兼容与升级](./nosqlite-format-compat.md)
 - [示例](./nosqlite-examples.md)
 - [Phase 12.5 异步能力评估](./nosqlite-phase12_5-async.md)
 - [Bug Report: split-C `wal_header.c` 重复生成与栈限制](./bugreport-uya-split-c-wal-header-duplicate-and-stack-limit.md)

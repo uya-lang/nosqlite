@@ -44,6 +44,14 @@ cursor_row(cursor: &QueryCursor) !RowRef
 db_exec(db: &DbHandle, sql: &[byte]) !void
 ```
 
+### 显式格式升级
+
+```text
+db_upgrade_format(db: &DbHandle, plan: &PagerUpgradePlan) !PagerUpgradeReport
+```
+
+升级入口不会在普通 open/query/exec 路径中隐式触发。升级前会先执行 checkpoint，并要求 WAL 截断到 header 大小。
+
 ## 最小配置对象
 
 ```text

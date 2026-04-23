@@ -35,6 +35,16 @@ export fn nosqlite_error_code_from_runtime_error_id(error_id: u32) u32 {
         error_id == @error_id(error.WalInvalidChecksum) {
         return NOSQLITE_ERR_FORMAT_WAL_RECORD_INVALID;
     }
+    if error_id == @error_id(error.PagerIncompatibleFormat) ||
+        error_id == @error_id(error.PagerUpgradeUnsupportedTarget) {
+        return NOSQLITE_ERR_FORMAT_INCOMPATIBLE;
+    }
+    if error_id == @error_id(error.PagerUnknownFeatureFlags) {
+        return NOSQLITE_ERR_FORMAT_UNKNOWN_FEATURE;
+    }
+    if error_id == @error_id(error.PagerUpgradeFailed) {
+        return NOSQLITE_ERR_FORMAT_UPGRADE_FAILED;
+    }
     if error_id == @error_id(error.SnapshotPressure) {
         return NOSQLITE_ERR_SNAPSHOT_PRESSURE;
     }
