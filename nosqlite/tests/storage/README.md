@@ -12,10 +12,11 @@
 
 当前入口文件：
 
-- `nosqlite/test_storage_page_basics.uya`
-- `nosqlite/test_storage_pager_runtime.uya`
-- `nosqlite/test_storage_slotted_page_runtime.uya`
-- `nosqlite/test_storage_wal_runtime.uya`
-- `nosqlite/test_phase13_format_upgrade.uya`
-- `nosqlite/test_catalog_basics.uya`
-- `nosqlite/test_index_btree.uya`
+- `nosqlite/tests/storage/test_storage_page_basics.uya`
+- `nosqlite/tests/storage/test_storage_pager_runtime.uya`
+- `nosqlite/tests/storage/test_storage_slotted_page_runtime.uya`
+- `nosqlite/tests/storage/test_storage_wal_runtime.uya`
+- `nosqlite/tests/storage/test_phase13_format_upgrade.uya`
+- `nosqlite/tests/storage/test_catalog_basics.uya`
+- `nosqlite/tests/storage/test_index_btree.uya`
+- `nosqlite/tests/storage/test_phase11_stability.uya`

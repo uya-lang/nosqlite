@@ -9,7 +9,7 @@
 当前结论：
 
 - 这不是 NoSQLite `Phase 12` 业务逻辑本身的正确性问题。
-- 这是当前 Uya split-C 构建链上的老问题，在集成用例 [test_phase12_features.uya](/home/winger/nosqlite/nosqlite/test_phase12_features.uya) 上被稳定触发。
+- 这是当前 Uya split-C 构建链上的老问题，在集成用例 [test_phase12_features.uya](/home/winger/nosqlite/nosqlite/tests/exec/test_phase12_features.uya) 上被稳定触发。
 - 目前至少包含两类现象：
   - 生成物 `.uyacache/nosqlite/lib/storage/wal_header.c` 出现整段重复代码，导致 C 编译阶段 redefinition。
   - 手工修掉重复代码后，默认栈限制下运行 `.uyacache/a.out` 会 segfault；放大栈后可通过。
@@ -44,7 +44,7 @@
 
 当前最直接的复现文件：
 
-- [test_phase12_features.uya](/home/winger/nosqlite/nosqlite/test_phase12_features.uya)
+- [test_phase12_features.uya](/home/winger/nosqlite/nosqlite/tests/exec/test_phase12_features.uya)
 
 这是当前 `Phase 12` 的集成用例，覆盖：
 
@@ -61,7 +61,7 @@
 
 ```bash
 rm -rf .uyacache
-./uya/bin/uya nosqlite/test_phase12_features.uya
+./uya/bin/uya nosqlite/tests/exec/test_phase12_features.uya
 ```
 
 随后构建 split-C 产物：
@@ -217,7 +217,7 @@ use lib.storage.wal_header;
 
 ```bash
 rm -rf .uyacache
-./uya/bin/uya nosqlite/test_phase12_features.uya
+./uya/bin/uya nosqlite/tests/exec/test_phase12_features.uya
 make -C .uyacache UYA_OUT=a.out -j4
 ./.uyacache/a.out
 ```

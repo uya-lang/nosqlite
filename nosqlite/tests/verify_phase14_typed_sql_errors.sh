@@ -25,8 +25,8 @@ run_static_error() {
     fi
 }
 
-run_static_error "nosqlite/error_phase14_typed_sql_missing_field.uya" "typed_sql: field not declared in static schema"
-run_static_error "nosqlite/error_phase14_typed_sql_type_mismatch.uya" "typed_sql: expression type mismatch against static schema"
-run_static_error "nosqlite/error_phase14_typed_sql_collection_mismatch.uya" "typed_sql: collection not declared in static schema"
+run_static_error "nosqlite/tests/sql/error_phase14_typed_sql_missing_field.uya" "typed_sql: field not declared in static schema"
+run_static_error "nosqlite/tests/sql/error_phase14_typed_sql_type_mismatch.uya" "typed_sql: expression type mismatch against static schema"
+run_static_error "nosqlite/tests/sql/error_phase14_typed_sql_collection_mismatch.uya" "typed_sql: collection not declared in static schema"
 
 echo "phase14 typed_sql static-error checks ok"

@@ -12,8 +12,11 @@
 
 当前入口文件：
 
-- `nosqlite/test_sql_parser.uya`
-- `nosqlite/test_phase14_typed_sql.uya`
+- `nosqlite/tests/sql/test_sql_parser.uya`
+- `nosqlite/tests/sql/test_phase14_typed_sql.uya`
+- `nosqlite/tests/sql/error_phase14_typed_sql_missing_field.uya`
+- `nosqlite/tests/sql/error_phase14_typed_sql_type_mismatch.uya`
+- `nosqlite/tests/sql/error_phase14_typed_sql_collection_mismatch.uya`
 
 辅助验证脚本：
 

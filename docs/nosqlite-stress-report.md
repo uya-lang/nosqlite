@@ -2,12 +2,12 @@
 
 日期：2026-04-23
 
-本报告记录 `nosqlite/test_stress_runtime.uya` 当前压力门的覆盖范围、执行结果和边界说明。它是封板验收的稳定性压力门，不是吞吐 benchmark；吞吐指标仍以 `docs/nosqlite-benchmark-v0.*` 为准。
+本报告记录 `nosqlite/tests/exec/test_stress_runtime.uya` 当前压力门的覆盖范围、执行结果和边界说明。它是封板验收的稳定性压力门，不是吞吐 benchmark；吞吐指标仍以 `docs/nosqlite-benchmark-v0.*` 为准。
 
 ## 运行命令
 
 ```bash
-./uya/bin/uya nosqlite/test_stress_runtime.uya
+./uya/bin/uya nosqlite/tests/exec/test_stress_runtime.uya
 .uyacache/a.out
 ```
 
@@ -21,7 +21,7 @@ bash nosqlite/tests/verify_definition_of_done.sh
 
 | 项目 | 结果 |
 | --- | --- |
-| 测试入口 | `nosqlite/test_stress_runtime.uya` |
+| 测试入口 | `nosqlite/tests/exec/test_stress_runtime.uya` |
 | 退出码 | `0` |
 | run-only elapsed | `4.384787 s` |
 | run-only user time | `4.308895 s` |

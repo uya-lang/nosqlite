@@ -13,4 +13,4 @@
 
 当前入口文件：
 
-- `nosqlite/test_binder_planner.uya`
+- `nosqlite/tests/plan/test_binder_planner.uya`

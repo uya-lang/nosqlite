@@ -65,5 +65,5 @@ const q: &[const byte] = typed_sql(
 
 测试覆盖：
 
-- `nosqlite/test_phase14_typed_sql.uya`
+- `nosqlite/tests/sql/test_phase14_typed_sql.uya`
 - `nosqlite/tests/verify_phase14_typed_sql_errors.sh`

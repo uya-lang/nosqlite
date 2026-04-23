@@ -57,5 +57,5 @@ v1 暂不定义任何可打开的 feature flag，因此当前支持 mask 为 `0x
 
 覆盖测试：
 
-- `nosqlite/test_storage_page_basics.uya`：核心格式兼容矩阵。
-- `nosqlite/test_phase13_format_upgrade.uya`：不兼容版本拒绝、未知 feature flag 拒绝、升级前 checkpoint/WAL 截断、失败升级回滚。
+- `nosqlite/tests/storage/test_storage_page_basics.uya`：核心格式兼容矩阵。
+- `nosqlite/tests/storage/test_phase13_format_upgrade.uya`：不兼容版本拒绝、未知 feature flag 拒绝、升级前 checkpoint/WAL 截断、失败升级回滚。

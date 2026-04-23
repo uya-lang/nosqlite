@@ -11,7 +11,7 @@
 当前结论：
 
 - 原始复现文件 [repro_uya_codegen_test_block_segfault.uya](/home/winger/nosqlite/nosqlite/repro_uya_codegen_test_block_segfault.uya) 已可稳定通过 `uya --c99 --nostdlib`，不再在 codegen 阶段 segfault。
-- 页面基础测试 [test_storage_page_basics.uya](/home/winger/nosqlite/nosqlite/test_storage_page_basics.uya) 也可正常编译生成 C。
+- 页面基础测试 [test_storage_page_basics.uya](/home/winger/nosqlite/nosqlite/tests/storage/test_storage_page_basics.uya) 也可正常编译生成 C。
 
 说明：
 
@@ -49,7 +49,7 @@
 - 失败复现：
   [repro_uya_codegen_test_block_segfault.uya](/home/winger/nosqlite/nosqlite/repro_uya_codegen_test_block_segfault.uya)
 - 成功对照：
-  [test_storage_slotted_page_runtime.uya](/home/winger/nosqlite/nosqlite/test_storage_slotted_page_runtime.uya)
+  [test_storage_slotted_page_runtime.uya](/home/winger/nosqlite/nosqlite/tests/storage/test_storage_slotted_page_runtime.uya)
 
 两者的核心业务逻辑接近，区别主要在于：
 
@@ -105,7 +105,7 @@
 
 ```bash
 ./uya/bin/uya --c99 --nostdlib nosqlite/repro_uya_codegen_test_block_segfault.uya -o /tmp/repro_codegen_test_block_segfault.c
-./uya/bin/uya --c99 --nostdlib nosqlite/test_storage_page_basics.uya -o /tmp/nosqlite_test_storage_page_basics.c
+./uya/bin/uya --c99 --nostdlib nosqlite/tests/storage/test_storage_page_basics.uya -o /tmp/nosqlite_test_storage_page_basics.c
 ```
 
 这说明：
@@ -118,7 +118,7 @@
 下面这条命令可以通过：
 
 ```bash
-./uya/bin/uya --c99 --nostdlib nosqlite/test_storage_slotted_page_runtime.uya -o /tmp/nosqlite_test_storage_slotted_page_runtime.c
+./uya/bin/uya --c99 --nostdlib nosqlite/tests/storage/test_storage_slotted_page_runtime.uya -o /tmp/nosqlite_test_storage_slotted_page_runtime.c
 ```
 
 并且后续可以链接运行：
@@ -161,7 +161,7 @@ gcc --std=c99 -nostartfiles -no-pie /tmp/nosqlite_test_storage_slotted_page_runt
 - 改写成 `main() -> i32` 的 runtime smoke
 - 通过进程返回码判断成败
 
-这就是当前 [test_storage_slotted_page_runtime.uya](/home/winger/nosqlite/nosqlite/test_storage_slotted_page_runtime.uya) 的用途。
+这就是当前 [test_storage_slotted_page_runtime.uya](/home/winger/nosqlite/nosqlite/tests/storage/test_storage_slotted_page_runtime.uya) 的用途。
 
 ## 可能的排查方向
 
@@ -218,7 +218,7 @@ gcc --std=c99 -nostartfiles -no-pie /tmp/nosqlite_test_storage_slotted_page_runt
 
 当前仓库里，页面基础测试文件：
 
-- [test_storage_page_basics.uya](/home/winger/nosqlite/nosqlite/test_storage_page_basics.uya)
+- [test_storage_page_basics.uya](/home/winger/nosqlite/nosqlite/tests/storage/test_storage_page_basics.uya)
 
 已经可以正常编译、生成 C、链接并运行。
 

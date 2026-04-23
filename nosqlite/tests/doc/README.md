@@ -10,6 +10,6 @@
 
 当前入口文件：
 
-- `nosqlite/test_docblob_basics.uya`
-- `nosqlite/test_docblob_codec.uya`
-- `nosqlite/test_docblob_path.uya`
+- `nosqlite/tests/doc/test_docblob_basics.uya`
+- `nosqlite/tests/doc/test_docblob_codec.uya`
+- `nosqlite/tests/doc/test_docblob_path.uya`

@@ -2,11 +2,11 @@
 
 这个目录承载测试分组说明、fixtures 规划和后续 golden/corruption 数据。
 
-当前仓库有一个现实约束：
+当前仓库有一个 Uya 模块根约束：
 
 - Uya 会按测试入口文件所在目录推导项目根目录。
-- 因此可直接执行的 `.uya` 测试入口目前仍放在 `nosqlite/` 根下。
-- `nosqlite/tests/` 先作为“测试组织层”，而不是直接承载可执行入口。
+- 因此每个分类目录都包含一个 `lib -> ../../lib` 符号链接，让移动后的测试仍能使用 `use lib...` 模块路径。
+- 可执行 `.uya` 测试入口现在按分类直接放在 `nosqlite/tests/<group>/` 下。
 
 当前目录结构：
 
@@ -33,23 +33,25 @@
 
 当前测试入口与逻辑分组映射：
 
-- `nosqlite/test_core_foundation.uya` -> `tests/core/`
-- `nosqlite/test_docblob_basics.uya` -> `tests/doc/`
-- `nosqlite/test_docblob_codec.uya` -> `tests/doc/`
-- `nosqlite/test_docblob_path.uya` -> `tests/doc/`
-- `nosqlite/test_sql_parser.uya` -> `tests/sql/`
-- `nosqlite/test_phase14_typed_sql.uya` -> `tests/sql/`
-- `nosqlite/test_binder_planner.uya` -> `tests/plan/`
-- `nosqlite/test_exec_runtime.uya` -> `tests/exec/`
-- `nosqlite/test_phase12_async.uya` -> `tests/exec/`
-- `nosqlite/test_storage_page_basics.uya` -> `tests/storage/`
-- `nosqlite/test_storage_pager_runtime.uya` -> `tests/storage/`
-- `nosqlite/test_storage_slotted_page_runtime.uya` -> `tests/storage/`
-- `nosqlite/test_storage_wal_runtime.uya` -> `tests/storage/`
-- `nosqlite/test_phase13_format_upgrade.uya` -> `tests/storage/`
-- `nosqlite/test_catalog_basics.uya` -> `tests/storage/`
-- `nosqlite/test_index_btree.uya` -> `tests/storage/`
-- `nosqlite/test_stress_runtime.uya` -> `tests/exec/` + `tests/storage/` stress gate
+- `nosqlite/tests/core/test_core_foundation.uya`
+- `nosqlite/tests/doc/test_docblob_basics.uya`
+- `nosqlite/tests/doc/test_docblob_codec.uya`
+- `nosqlite/tests/doc/test_docblob_path.uya`
+- `nosqlite/tests/sql/test_sql_parser.uya`
+- `nosqlite/tests/sql/test_phase14_typed_sql.uya`
+- `nosqlite/tests/plan/test_binder_planner.uya`
+- `nosqlite/tests/exec/test_exec_runtime.uya`
+- `nosqlite/tests/exec/test_phase12_async.uya`
+- `nosqlite/tests/exec/test_phase12_features.uya`
+- `nosqlite/tests/exec/test_stress_runtime.uya`
+- `nosqlite/tests/storage/test_storage_page_basics.uya`
+- `nosqlite/tests/storage/test_storage_pager_runtime.uya`
+- `nosqlite/tests/storage/test_storage_slotted_page_runtime.uya`
+- `nosqlite/tests/storage/test_storage_wal_runtime.uya`
+- `nosqlite/tests/storage/test_phase13_format_upgrade.uya`
+- `nosqlite/tests/storage/test_catalog_basics.uya`
+- `nosqlite/tests/storage/test_index_btree.uya`
+- `nosqlite/tests/storage/test_phase11_stability.uya`
 - `nosqlite/tests/verify_phase12_5_async_boundary.sh` -> Phase 12.5 async boundary verification
 - `nosqlite/tests/verify_phase14_typed_sql_errors.sh` -> Phase 14 typed SQL static-error verification
 - `nosqlite/tests/verify_definition_of_done.sh` -> Definition of Done verification

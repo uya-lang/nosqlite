@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 
-RUNNER = "nosqlite/test_phase11_stability.uya"
+RUNNER = "nosqlite/tests/storage/test_phase11_stability.uya"
 RUNNER_BIN = ".uyacache/a.out"
 CASES = [
     ("warm_primary_lookup", "warm-read", "primary_lookup"),

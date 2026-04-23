@@ -9,4 +9,4 @@
 
 当前入口文件：
 
-- `nosqlite/test_core_foundation.uya`
+- `nosqlite/tests/core/test_core_foundation.uya`

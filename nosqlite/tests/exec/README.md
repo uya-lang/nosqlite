@@ -27,4 +27,7 @@
 
 当前入口文件：
 
-- `nosqlite/test_exec_runtime.uya`
+- `nosqlite/tests/exec/test_exec_runtime.uya`
+- `nosqlite/tests/exec/test_phase12_async.uya`
+- `nosqlite/tests/exec/test_phase12_features.uya`
+- `nosqlite/tests/exec/test_stress_runtime.uya`

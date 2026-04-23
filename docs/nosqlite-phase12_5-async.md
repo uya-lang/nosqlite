@@ -34,7 +34,7 @@
 
 ## 验证入口
 
-- [`test_phase12_async.uya`](/home/winger/nosqlite/nosqlite/test_phase12_async.uya)
+- [`test_phase12_async.uya`](/home/winger/nosqlite/nosqlite/tests/exec/test_phase12_async.uya)
   覆盖 `checkpoint_async`、`build_index_async`、`vacuum_async`、query stream wrapper
 - [`verify_phase12_5_async_boundary.sh`](/home/winger/nosqlite/nosqlite/tests/verify_phase12_5_async_boundary.sh)
   校验 `@async_fn` 仅停留在 `lib/api/db_async.uya`

@@ -48,14 +48,14 @@ bash nosqlite/tests/verify_definition_of_done.sh
 运行一个代表性的运行时测试：
 
 ```bash
-./uya/bin/uya nosqlite/test_exec_runtime.uya
+./uya/bin/uya nosqlite/tests/exec/test_exec_runtime.uya
 .uyacache/a.out
 ```
 
 运行压力测试：
 
 ```bash
-./uya/bin/uya nosqlite/test_stress_runtime.uya
+./uya/bin/uya nosqlite/tests/exec/test_stress_runtime.uya
 .uyacache/a.out
 ```
 
@@ -140,7 +140,7 @@ SQL Text
 ## 验收
 
 顶层验收脚本会串行运行当前全部可执行 Uya 测试、Phase 12.5 async boundary 检查、Phase 14 typed SQL 静态错误检查，以及 benchmark floor 检查：
-其中包含 `nosqlite/test_stress_runtime.uya` 压力门。
+其中包含 `nosqlite/tests/exec/test_stress_runtime.uya` 压力门。
 
 ```bash
 bash nosqlite/tests/verify_definition_of_done.sh
