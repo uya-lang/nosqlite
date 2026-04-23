@@ -78,6 +78,36 @@ fn sql_keyword_kind(text: &[const byte]) SqlTokenKind {
     if sql_keyword_eq(text, "JSON") {
         return SqlTokenKind.KW_JSON;
     }
+    if sql_keyword_eq(text, "UPDATE") {
+        return SqlTokenKind.KW_UPDATE;
+    }
+    if sql_keyword_eq(text, "DELETE") {
+        return SqlTokenKind.KW_DELETE;
+    }
+    if sql_keyword_eq(text, "SET") {
+        return SqlTokenKind.KW_SET;
+    }
+    if sql_keyword_eq(text, "INDEX") {
+        return SqlTokenKind.KW_INDEX;
+    }
+    if sql_keyword_eq(text, "ON") {
+        return SqlTokenKind.KW_ON;
+    }
+    if sql_keyword_eq(text, "ORDER") {
+        return SqlTokenKind.KW_ORDER;
+    }
+    if sql_keyword_eq(text, "BY") {
+        return SqlTokenKind.KW_BY;
+    }
+    if sql_keyword_eq(text, "ASC") {
+        return SqlTokenKind.KW_ASC;
+    }
+    if sql_keyword_eq(text, "DESC") {
+        return SqlTokenKind.KW_DESC;
+    }
+    if sql_keyword_eq(text, "EXPLAIN") {
+        return SqlTokenKind.KW_EXPLAIN;
+    }
     if sql_keyword_eq(text, "CREATE") {
         return SqlTokenKind.KW_CREATE;
     }

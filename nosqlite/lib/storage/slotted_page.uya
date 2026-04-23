@@ -143,7 +143,7 @@ export fn slotted_page_cell_view(page_buf: &[byte], slot_idx: u16) !SlottedPageC
     };
 }
 
-export fn slotted_page_insert_copy(page_buf: &[byte], cell: &[byte]) !u16 {
+export fn slotted_page_insert_copy_with_flags(page_buf: &[byte], cell: &[byte], flags: u16) !u16 {
     const header: &PageHeader = slotted_page_header_ptr(page_buf);
     if header == null || !page_bounds_valid(header, page_buf.len as u32) {
         return error.SlottedPageInvalidHeader;
@@ -175,10 +175,14 @@ export fn slotted_page_insert_copy(page_buf: &[byte], cell: &[byte]) !u16 {
 
     slotp.off = new_upper_u16;
     slotp.len = cell_len_u16;
-    slotp.flags = SLOT_FLAG_USED;
+    slotp.flags = SLOT_FLAG_USED | flags;
 
     header.lower = header.lower + slot_size_u16;
     header.upper = new_upper_u16;
 
     return slot_idx;
+}
+
+export fn slotted_page_insert_copy(page_buf: &[byte], cell: &[byte]) !u16 {
+    return try slotted_page_insert_copy_with_flags(page_buf, cell, SLOT_FLAG_NONE);
 }

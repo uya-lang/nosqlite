@@ -29,6 +29,7 @@ use lib.catalog.schema.catalog_find_collection;
 use lib.catalog.schema.catalog_page_append_collection;
 use lib.catalog.schema.catalog_page_allocate_next_doc_id;
 use lib.catalog.schema.catalog_page_init;
+use lib.storage.wal_header;
 use lib.core.NOSQLITE_FORMAT_VERSION_V1;
 use lib.core.NOSQLITE_META_SLOT_A;
 use lib.core.NOSQLITE_META_SLOT_B;

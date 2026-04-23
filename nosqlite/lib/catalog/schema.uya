@@ -23,6 +23,9 @@ export error CatalogDocIdExhausted;
 export const CATALOG_ROOT_ENCODED_SIZE: usize = 16;
 export const COLLECTION_META_ENCODED_SIZE: usize = 32;
 export const INDEX_META_ENCODED_SIZE: usize = 20;
+const CATALOG_MAX_INDEXES_PER_COLLECTION: usize = 8;
+const CATALOG_MAX_INLINE_NAME: usize = 64;
+const CATALOG_MAX_INLINE_PATH: usize = 128;
 
 export struct CatalogRoot {
     collection_count: u32,
@@ -60,6 +63,30 @@ export struct CatalogView {
 export struct CatalogCollectionView {
     meta: CollectionMeta,
     name: &[byte],
+}
+
+export struct CatalogIndexView {
+    meta: IndexMeta,
+    name: &[byte],
+    path: &[byte],
+}
+
+struct CatalogScratchIndex {
+    present: bool,
+    meta: IndexMeta,
+    name_len: u16,
+    path_len: u16,
+    name: [byte: CATALOG_MAX_INLINE_NAME],
+    path: [byte: CATALOG_MAX_INLINE_PATH],
+}
+
+struct CatalogScratchCollection {
+    present: bool,
+    meta: CollectionMeta,
+    name_len: u16,
+    name: [byte: CATALOG_MAX_INLINE_NAME],
+    index_count: u16,
+    indexes: [CatalogScratchIndex: CATALOG_MAX_INDEXES_PER_COLLECTION],
 }
 
 export fn catalog_root_encoded_size() usize {
@@ -136,6 +163,18 @@ fn catalog_name_valid(name: &[byte]) bool {
 
 fn catalog_name_equal(a: &[byte], b: &[byte]) bool {
     return a.len == b.len && mem_cmp(a.ptr, b.ptr, a.len) == 0;
+}
+
+fn catalog_copy_inline_bytes(src: &[byte], out: &byte, len_out: &u16, max_len: usize) !void {
+    if src.ptr == null || out == null || len_out == null || src.len > max_len {
+        return error.CatalogNameTooLong;
+    }
+    len_out[0] = (src.len as! u16) catch {
+        return error.CatalogNameTooLong;
+    };
+    if src.len > 0 {
+        _ = mem_copy(out, src.ptr, src.len);
+    }
 }
 
 fn catalog_root_encode_inner(root: &CatalogRoot, out: &[byte], checksum: u32) !void {
@@ -392,6 +431,61 @@ export fn catalog_collection_at(view: &CatalogView, index: u32) !CatalogCollecti
     return try catalog_collection_at_unchecked(view.blob, &view.root, index);
 }
 
+fn catalog_collection_index_at_unchecked(blob: &[byte], collection: &CollectionMeta, index: u32) !CatalogIndexView {
+    if blob.ptr == null || collection == null || index >= collection.secondary_index_count {
+        return error.CatalogCorrupt;
+    }
+    const indexes_off: usize = (collection.indexes_off as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    const entry_off: usize = indexes_off + (index as! usize).value * INDEX_META_ENCODED_SIZE;
+    if entry_off + INDEX_META_ENCODED_SIZE > blob.len {
+        return error.CatalogCorrupt;
+    }
+    const meta: IndexMeta = try index_meta_decode(blob[entry_off: INDEX_META_ENCODED_SIZE]);
+
+    const name_off: usize = (meta.name_off as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    if name_off >= blob.len {
+        return error.CatalogCorrupt;
+    }
+    var name_end: usize = name_off;
+    while name_end < blob.len && blob.ptr[name_end] != 0 as byte {
+        name_end = name_end + 1usize;
+    }
+    if name_end >= blob.len {
+        return error.CatalogCorrupt;
+    }
+
+    const path_off: usize = (meta.path_off as! usize) catch {
+        return error.CatalogCorrupt;
+    };
+    if path_off >= blob.len {
+        return error.CatalogCorrupt;
+    }
+    var path_end: usize = path_off;
+    while path_end < blob.len && blob.ptr[path_end] != 0 as byte {
+        path_end = path_end + 1usize;
+    }
+    if path_end >= blob.len {
+        return error.CatalogCorrupt;
+    }
+
+    return CatalogIndexView{
+        meta: meta,
+        name: blob[name_off: name_end - name_off],
+        path: blob[path_off: path_end - path_off],
+    };
+}
+
+export fn catalog_collection_index_at(view: &CatalogView, collection: &CatalogCollectionView, index: u32) !CatalogIndexView {
+    if view == null || collection == null {
+        return error.CatalogInvalidBuffer;
+    }
+    return try catalog_collection_index_at_unchecked(view.blob, &collection.meta, index);
+}
+
 export fn catalog_find_collection(view: &CatalogView, name: &[byte]) !CatalogCollectionView {
     if view == null || !catalog_name_valid(name) {
         return error.CatalogNameInvalid;
@@ -494,6 +588,193 @@ fn catalog_page_prepare_scratch(scratch_buf: &[byte], page_buf: &[byte], total_b
     new_header.checksum = 0u32;
 }
 
+fn catalog_scratch_collection_reset(entry: &CatalogScratchCollection) void {
+    if entry == null {
+        return;
+    }
+    entry.present = false;
+    entry.meta = CollectionMeta{};
+    entry.name_len = 0u16;
+    entry.index_count = 0u16;
+    var i: usize = 0usize;
+    while i < CATALOG_MAX_INDEXES_PER_COLLECTION {
+        entry.indexes[i].present = false;
+        entry.indexes[i].meta = IndexMeta{};
+        entry.indexes[i].name_len = 0u16;
+        entry.indexes[i].path_len = 0u16;
+        i = i + 1usize;
+    }
+}
+
+fn catalog_load_scratch(view: &CatalogView, out: &[CatalogScratchCollection], count_out: &u16) !void {
+    if view == null || out.ptr == null || count_out == null {
+        return error.CatalogInvalidBuffer;
+    }
+    if view.root.collection_count as usize > out.len {
+        return error.CatalogNoSpace;
+    }
+    var i: usize = 0usize;
+    while i < out.len {
+        catalog_scratch_collection_reset(&out.ptr[i]);
+        i = i + 1usize;
+    }
+
+    i = 0usize;
+    while i < view.root.collection_count as usize {
+        const collection: CatalogCollectionView = try catalog_collection_at(view, i as u32);
+        out.ptr[i].present = true;
+        out.ptr[i].meta = collection.meta;
+        try catalog_copy_inline_bytes(collection.name, &out.ptr[i].name[0], &out.ptr[i].name_len, CATALOG_MAX_INLINE_NAME);
+        out.ptr[i].index_count = collection.meta.secondary_index_count;
+        if out.ptr[i].index_count as usize > CATALOG_MAX_INDEXES_PER_COLLECTION {
+            return error.CatalogNoSpace;
+        }
+        var index_idx: usize = 0usize;
+        while index_idx < collection.meta.secondary_index_count as usize {
+            const index_view: CatalogIndexView = try catalog_collection_index_at(view, &collection, index_idx as u32);
+            out.ptr[i].indexes[index_idx].present = true;
+            out.ptr[i].indexes[index_idx].meta = index_view.meta;
+            try catalog_copy_inline_bytes(index_view.name, &out.ptr[i].indexes[index_idx].name[0], &out.ptr[i].indexes[index_idx].name_len, CATALOG_MAX_INLINE_NAME);
+            try catalog_copy_inline_bytes(index_view.path, &out.ptr[i].indexes[index_idx].path[0], &out.ptr[i].indexes[index_idx].path_len, CATALOG_MAX_INLINE_PATH);
+            index_idx = index_idx + 1usize;
+        }
+        i = i + 1usize;
+    }
+    count_out[0] = (view.root.collection_count as! u16) catch {
+        return error.CatalogNoSpace;
+    };
+}
+
+fn catalog_rewrite_from_scratch(page_buf: &[byte], entries: &[CatalogScratchCollection], collection_count: u16) !void {
+    if page_buf.ptr == null || entries.ptr == null {
+        return error.CatalogInvalidBuffer;
+    }
+    var total_name_bytes: usize = 0usize;
+    var total_index_string_bytes: usize = 0usize;
+    var total_index_meta_bytes: usize = 0usize;
+    var i: usize = 0usize;
+    while i < collection_count as usize {
+        const entry: &CatalogScratchCollection = &entries.ptr[i];
+        if entry.present == false {
+            return error.CatalogCorrupt;
+        }
+        total_name_bytes = total_name_bytes + entry.name_len as usize;
+        total_index_meta_bytes = total_index_meta_bytes + entry.index_count as usize * INDEX_META_ENCODED_SIZE;
+        var index_idx: usize = 0usize;
+        while index_idx < entry.index_count as usize {
+            if entry.indexes[index_idx].present == false {
+                return error.CatalogCorrupt;
+            }
+            total_index_string_bytes = total_index_string_bytes +
+                entry.indexes[index_idx].name_len as usize + 1usize +
+                entry.indexes[index_idx].path_len as usize + 1usize;
+            index_idx = index_idx + 1usize;
+        }
+        i = i + 1usize;
+    }
+
+    const collections_bytes: usize = collection_count as usize * COLLECTION_META_ENCODED_SIZE;
+    const string_pool_off: usize = CATALOG_ROOT_ENCODED_SIZE + collections_bytes;
+    const total_blob_len: usize = string_pool_off + total_name_bytes + total_index_string_bytes + total_index_meta_bytes;
+    var scratch: [byte: 8192] = [];
+    const scratch_buf: &[byte] = scratch[0: page_buf.len];
+    try catalog_page_prepare_scratch(scratch_buf, page_buf, total_blob_len);
+    const blob: &[byte] = scratch_buf[page_body_offset(): total_blob_len];
+
+    const root: CatalogRoot = CatalogRoot{
+        collection_count: collection_count as u32,
+        collections_off: CATALOG_ROOT_ENCODED_SIZE as u32,
+        string_pool_off: (string_pool_off as! u32) catch {
+            return error.CatalogNoSpace;
+        },
+        checksum: 0u32,
+    };
+    try catalog_root_encode(&root, blob[0: CATALOG_ROOT_ENCODED_SIZE]);
+
+    var collection_name_offs: [u32: 32] = [];
+    var collection_indexes_offs: [u32: 32] = [];
+    var name_cursor: usize = string_pool_off;
+    i = 0usize;
+    while i < collection_count as usize {
+        const slot: usize = i;
+        const entry: &CatalogScratchCollection = &entries.ptr[i];
+        collection_name_offs[slot] = (name_cursor as! u32) catch {
+            return error.CatalogNoSpace;
+        };
+        if entry.name_len > 0u16 {
+            _ = mem_copy(&blob.ptr[name_cursor], &entry.name[0], entry.name_len as usize);
+        }
+        name_cursor = name_cursor + entry.name_len as usize;
+        i = i + 1usize;
+    }
+
+    var index_meta_cursor: usize = string_pool_off + total_name_bytes + total_index_string_bytes;
+    i = 0usize;
+    while i < collection_count as usize {
+        const slot: usize = i;
+        const entry: &CatalogScratchCollection = &entries.ptr[i];
+        if entry.index_count > 0u16 {
+            collection_indexes_offs[slot] = (index_meta_cursor as! u32) catch {
+                return error.CatalogNoSpace;
+            };
+        } else {
+            collection_indexes_offs[slot] = 0u32;
+        }
+        i = i + 1usize;
+    }
+
+    var index_string_cursor: usize = string_pool_off + total_name_bytes;
+    i = 0usize;
+    while i < collection_count as usize {
+        const entry: &CatalogScratchCollection = &entries.ptr[i];
+        var index_idx: usize = 0usize;
+        while index_idx < entry.index_count as usize {
+            const index_entry: &CatalogScratchIndex = &entry.indexes[index_idx];
+            var index_meta: IndexMeta = index_entry.meta;
+            index_meta.name_off = (index_string_cursor as! u32) catch {
+                return error.CatalogNoSpace;
+            };
+            if index_entry.name_len > 0u16 {
+                _ = mem_copy(&blob.ptr[index_string_cursor], &index_entry.name[0], index_entry.name_len as usize);
+            }
+            index_string_cursor = index_string_cursor + index_entry.name_len as usize;
+            blob.ptr[index_string_cursor] = 0 as byte;
+            index_string_cursor = index_string_cursor + 1usize;
+
+            index_meta.path_off = (index_string_cursor as! u32) catch {
+                return error.CatalogNoSpace;
+            };
+            if index_entry.path_len > 0u16 {
+                _ = mem_copy(&blob.ptr[index_string_cursor], &index_entry.path[0], index_entry.path_len as usize);
+            }
+            index_string_cursor = index_string_cursor + index_entry.path_len as usize;
+            blob.ptr[index_string_cursor] = 0 as byte;
+            index_string_cursor = index_string_cursor + 1usize;
+
+            try index_meta_encode(&index_meta, blob[index_meta_cursor: INDEX_META_ENCODED_SIZE]);
+            index_meta_cursor = index_meta_cursor + INDEX_META_ENCODED_SIZE;
+            index_idx = index_idx + 1usize;
+        }
+        i = i + 1usize;
+    }
+
+    i = 0usize;
+    while i < collection_count as usize {
+        const meta_off: usize = CATALOG_ROOT_ENCODED_SIZE + i * COLLECTION_META_ENCODED_SIZE;
+        var meta: CollectionMeta = entries.ptr[i].meta;
+        meta.name_len = entries.ptr[i].name_len;
+        meta.secondary_index_count = entries.ptr[i].index_count;
+        meta.name_off = collection_name_offs[i];
+        meta.indexes_off = collection_indexes_offs[i];
+        try collection_meta_encode(&meta, blob[meta_off: COLLECTION_META_ENCODED_SIZE]);
+        i = i + 1usize;
+    }
+
+    try catalog_blob_finalize_checksum(blob);
+    _ = try page_checksum_finalize(scratch_buf);
+    _ = mem_copy(page_buf.ptr, scratch_buf.ptr, scratch_buf.len);
+}
+
 export fn catalog_page_append_collection(page_buf: &[byte], name: &[byte]) !CollectionMeta {
     if !catalog_name_valid(name) {
         if name.len > 65535usize {
@@ -507,85 +788,39 @@ export fn catalog_page_append_collection(page_buf: &[byte], name: &[byte]) !Coll
     if existing.error_id == 0u32 {
         return error.CatalogCollectionExists;
     }
+    var scratch_entries: [CatalogScratchCollection: 32] = [];
+    var collection_count: u16 = 0u16;
+    try catalog_load_scratch(&view, scratch_entries[0: 32], &collection_count);
+    if collection_count as usize >= @len(scratch_entries) {
+        return error.CatalogNoSpace;
+    }
 
-    var total_name_bytes: usize = name.len;
     var max_collection_id: u32 = 0u32;
-    var i: u32 = 0u32;
-    while i < view.root.collection_count {
-        const entry: CatalogCollectionView = try catalog_collection_at(&view, i);
-        if entry.meta.secondary_index_count != 0u16 {
-            return error.CatalogCorrupt;
+    var i: usize = 0usize;
+    while i < collection_count as usize {
+        if scratch_entries[i].meta.collection_id > max_collection_id {
+            max_collection_id = scratch_entries[i].meta.collection_id;
         }
-        total_name_bytes = total_name_bytes + entry.name.len;
-        if entry.meta.collection_id > max_collection_id {
-            max_collection_id = entry.meta.collection_id;
-        }
-        i = i + 1u32;
+        i = i + 1usize;
     }
 
-    const new_count: u32 = view.root.collection_count + 1u32;
-    const collections_bytes: usize = (new_count as! usize) catch {
-        return error.CatalogCorrupt;
-    } * COLLECTION_META_ENCODED_SIZE;
-    const string_pool_off: usize = CATALOG_ROOT_ENCODED_SIZE + collections_bytes;
-    const total_blob_len: usize = string_pool_off + total_name_bytes;
-    var scratch: [byte: 8192] = [];
-    const scratch_buf: &[byte] = scratch[0: page_buf.len];
-    try catalog_page_prepare_scratch(scratch_buf, page_buf, total_blob_len);
-    const blob: &[byte] = scratch_buf[page_body_offset(): total_blob_len];
-
-    const root: CatalogRoot = CatalogRoot{
-        collection_count: new_count,
-        collections_off: CATALOG_ROOT_ENCODED_SIZE as u32,
-        string_pool_off: (string_pool_off as! u32) catch {
-            return error.CatalogNoSpace;
-        },
-        checksum: 0u32,
-    };
-    try catalog_root_encode(&root, blob[0: CATALOG_ROOT_ENCODED_SIZE]);
-
-    var name_cursor: usize = string_pool_off;
-    i = 0u32;
-    while i < view.root.collection_count {
-        const entry: CatalogCollectionView = try catalog_collection_at(&view, i);
-        var meta: CollectionMeta = entry.meta;
-        meta.name_off = (name_cursor as! u32) catch {
-            return error.CatalogNoSpace;
-        };
-        meta.indexes_off = 0u32;
-        const meta_off: usize = CATALOG_ROOT_ENCODED_SIZE + ((i as! usize).value * COLLECTION_META_ENCODED_SIZE);
-        try collection_meta_encode(&meta, blob[meta_off: COLLECTION_META_ENCODED_SIZE]);
-        _ = mem_copy(&blob.ptr[name_cursor], entry.name.ptr, entry.name.len);
-        name_cursor = name_cursor + entry.name.len;
-        i = i + 1u32;
-    }
-
-    const new_index: usize = (view.root.collection_count as! usize) catch {
-        return error.CatalogCorrupt;
-    };
     const next_collection_id: u32 = max_collection_id + 1u32;
-    const created: CollectionMeta = CollectionMeta{
+    scratch_entries[collection_count as usize].present = true;
+    scratch_entries[collection_count as usize].meta = CollectionMeta{
         collection_id: next_collection_id,
-        name_len: (name.len as! u16) catch {
-            return error.CatalogNameTooLong;
-        },
+        name_len: 0u16,
         flags: 0u16,
         next_doc_id: 1u64,
         primary_root_page: 2u32 + next_collection_id,
         secondary_index_count: 0u16,
         rsv: 0u16,
-        name_off: (name_cursor as! u32) catch {
-            return error.CatalogNoSpace;
-        },
+        name_off: 0u32,
         indexes_off: 0u32,
     };
-    try collection_meta_encode(&created, blob[CATALOG_ROOT_ENCODED_SIZE + new_index * COLLECTION_META_ENCODED_SIZE: COLLECTION_META_ENCODED_SIZE]);
-    _ = mem_copy(&blob.ptr[name_cursor], name.ptr, name.len);
-
-    try catalog_blob_finalize_checksum(blob);
-    _ = try page_checksum_finalize(scratch_buf);
-    _ = mem_copy(page_buf.ptr, scratch_buf.ptr, scratch_buf.len);
-    return created;
+    try catalog_copy_inline_bytes(name, &scratch_entries[collection_count as usize].name[0], &scratch_entries[collection_count as usize].name_len, CATALOG_MAX_INLINE_NAME);
+    scratch_entries[collection_count as usize].index_count = 0u16;
+    try catalog_rewrite_from_scratch(page_buf, scratch_entries[0: 32], collection_count + 1u16);
+    return scratch_entries[collection_count as usize].meta;
 }
 
 export fn catalog_page_allocate_next_doc_id(page_buf: &[byte], name: &[byte]) !u64 {
@@ -594,70 +829,91 @@ export fn catalog_page_allocate_next_doc_id(page_buf: &[byte], name: &[byte]) !u
     }
 
     const view: CatalogView = try catalog_view_from_page(page_buf);
-    var total_name_bytes: usize = 0usize;
-    var i: u32 = 0u32;
+    var scratch_entries: [CatalogScratchCollection: 32] = [];
+    var collection_count: u16 = 0u16;
+    try catalog_load_scratch(&view, scratch_entries[0: 32], &collection_count);
+    var i: usize = 0usize;
     var found: bool = false;
     var assigned_doc_id: u64 = 0u64;
-    while i < view.root.collection_count {
-        const entry: CatalogCollectionView = try catalog_collection_at(&view, i);
-        if entry.meta.secondary_index_count != 0u16 {
-            return error.CatalogCorrupt;
-        }
-        total_name_bytes = total_name_bytes + entry.name.len;
-        if catalog_name_equal(entry.name, name) {
-            if entry.meta.next_doc_id == 0u64 || entry.meta.next_doc_id == 18446744073709551615u64 {
+    while i < collection_count as usize {
+        const entry_name: &[byte] = scratch_entries[i].name[0: scratch_entries[i].name_len as usize];
+        if catalog_name_equal(entry_name, name) {
+            if scratch_entries[i].meta.next_doc_id == 0u64 || scratch_entries[i].meta.next_doc_id == 18446744073709551615u64 {
                 return error.CatalogDocIdExhausted;
             }
             found = true;
-            assigned_doc_id = entry.meta.next_doc_id;
+            assigned_doc_id = scratch_entries[i].meta.next_doc_id;
+            scratch_entries[i].meta.next_doc_id = scratch_entries[i].meta.next_doc_id + 1u64;
+            break;
         }
-        i = i + 1u32;
+        i = i + 1usize;
     }
     if !found {
         return error.CatalogCollectionNotFound;
     }
+    try catalog_rewrite_from_scratch(page_buf, scratch_entries[0: 32], collection_count);
+    return assigned_doc_id;
+}
 
-    const collections_bytes: usize = (view.root.collection_count as! usize) catch {
-        return error.CatalogCorrupt;
-    } * COLLECTION_META_ENCODED_SIZE;
-    const string_pool_off: usize = CATALOG_ROOT_ENCODED_SIZE + collections_bytes;
-    const total_blob_len: usize = string_pool_off + total_name_bytes;
-    var scratch: [byte: 8192] = [];
-    const scratch_buf: &[byte] = scratch[0: page_buf.len];
-    try catalog_page_prepare_scratch(scratch_buf, page_buf, total_blob_len);
-    const blob: &[byte] = scratch_buf[page_body_offset(): total_blob_len];
-
-    const root: CatalogRoot = CatalogRoot{
-        collection_count: view.root.collection_count,
-        collections_off: CATALOG_ROOT_ENCODED_SIZE as u32,
-        string_pool_off: (string_pool_off as! u32) catch {
-            return error.CatalogNoSpace;
-        },
-        checksum: 0u32,
-    };
-    try catalog_root_encode(&root, blob[0: CATALOG_ROOT_ENCODED_SIZE]);
-
-    var name_cursor: usize = string_pool_off;
-    i = 0u32;
-    while i < view.root.collection_count {
-        const entry: CatalogCollectionView = try catalog_collection_at(&view, i);
-        var meta: CollectionMeta = entry.meta;
-        meta.name_off = (name_cursor as! u32) catch {
-            return error.CatalogNoSpace;
-        };
-        meta.indexes_off = 0u32;
-        if catalog_name_equal(entry.name, name) {
-            meta.next_doc_id = meta.next_doc_id + 1u64;
-        }
-        const meta_off: usize = CATALOG_ROOT_ENCODED_SIZE + ((i as! usize).value * COLLECTION_META_ENCODED_SIZE);
-        try collection_meta_encode(&meta, blob[meta_off: COLLECTION_META_ENCODED_SIZE]);
-        _ = mem_copy(&blob.ptr[name_cursor], entry.name.ptr, entry.name.len);
-        name_cursor = name_cursor + entry.name.len;
-        i = i + 1u32;
+export fn catalog_page_append_index(page_buf: &[byte], collection_name: &[byte], index_name: &[byte], path: &[byte], path_segment_count: u16) !IndexMeta {
+    if !catalog_name_valid(collection_name) || !catalog_name_valid(index_name) || path.ptr == null || path.len == 0 || path.len > CATALOG_MAX_INLINE_PATH {
+        return error.CatalogNameInvalid;
     }
 
-    try catalog_blob_finalize_checksum(blob);
-    _ = try page_checksum_finalize(scratch_buf);
-    _ = mem_copy(page_buf.ptr, scratch_buf.ptr, scratch_buf.len);
-    return assigned_doc_id;
+    const view: CatalogView = try catalog_view_from_page(page_buf);
+    var scratch_entries: [CatalogScratchCollection: 32] = [];
+    var collection_count: u16 = 0u16;
+    try catalog_load_scratch(&view, scratch_entries[0: 32], &collection_count);
+
+    var collection_idx: usize = 0usize;
+    var found: bool = false;
+    while collection_idx < collection_count as usize {
+        const name_slice: &[byte] = scratch_entries[collection_idx].name[0: scratch_entries[collection_idx].name_len as usize];
+        if catalog_name_equal(name_slice, collection_name) {
+            found = true;
+            break;
+        }
+        collection_idx = collection_idx + 1usize;
+    }
+    if !found {
+        return error.CatalogCollectionNotFound;
+    }
+    if scratch_entries[collection_idx].index_count as usize >= CATALOG_MAX_INDEXES_PER_COLLECTION {
+        return error.CatalogNoSpace;
+    }
+
+    var max_index_id: u32 = 0u32;
+    var index_idx: usize = 0usize;
+    while index_idx < scratch_entries[collection_idx].index_count as usize {
+        const existing_name: &[byte] = scratch_entries[collection_idx].indexes[index_idx].name[0: scratch_entries[collection_idx].indexes[index_idx].name_len as usize];
+        const existing_path: &[byte] = scratch_entries[collection_idx].indexes[index_idx].path[0: scratch_entries[collection_idx].indexes[index_idx].path_len as usize];
+        if catalog_name_equal(existing_name, index_name) || catalog_name_equal(existing_path, path) {
+            return error.CatalogCollectionExists;
+        }
+        if scratch_entries[collection_idx].indexes[index_idx].meta.index_id > max_index_id {
+            max_index_id = scratch_entries[collection_idx].indexes[index_idx].meta.index_id;
+        }
+        index_idx = index_idx + 1usize;
+    }
+
+    const slot: usize = scratch_entries[collection_idx].index_count as usize;
+    if slot >= CATALOG_MAX_INDEXES_PER_COLLECTION {
+        return error.CatalogNoSpace;
+    }
+    scratch_entries[collection_idx].indexes[slot].present = true;
+    scratch_entries[collection_idx].indexes[slot].meta = IndexMeta{
+        index_id: max_index_id + 1u32,
+        root_page: 0u32,
+        flags: 0u16,
+        path_segment_count: path_segment_count,
+        name_off: 0u32,
+        path_off: 0u32,
+    };
+    try catalog_copy_inline_bytes(index_name, &scratch_entries[collection_idx].indexes[slot].name[0], &scratch_entries[collection_idx].indexes[slot].name_len, CATALOG_MAX_INLINE_NAME);
+    try catalog_copy_inline_bytes(path, &scratch_entries[collection_idx].indexes[slot].path[0], &scratch_entries[collection_idx].indexes[slot].path_len, CATALOG_MAX_INLINE_PATH);
+    scratch_entries[collection_idx].index_count = scratch_entries[collection_idx].index_count + 1u16;
+    scratch_entries[collection_idx].meta.secondary_index_count = scratch_entries[collection_idx].index_count;
+
+    try catalog_rewrite_from_scratch(page_buf, scratch_entries[0: 32], collection_count);
+    return scratch_entries[collection_idx].indexes[slot].meta;
 }

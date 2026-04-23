@@ -8,18 +8,18 @@
 
 ## 1. 范围
 
-当前支持三类语句：
+当前支持七类语句：
 
 - `CREATE COLLECTION`
 - `INSERT INTO ... JSON ...`
-- `SELECT ... FROM ... [WHERE ...] [LIMIT ...]`
+- `SELECT ... FROM ... [WHERE ...] [ORDER BY ...] [LIMIT ...]`
+- `UPDATE ... SET ... [WHERE ...]`
+- `DELETE FROM ... [WHERE ...]`
+- `CREATE INDEX ... ON ... (...)`
+- `EXPLAIN SELECT ...`
 
 当前不支持：
 
-- `UPDATE`
-- `DELETE`
-- `CREATE INDEX`
-- `ORDER BY`
 - `GROUP BY`
 - `JOIN`
 - 子查询

@@ -359,6 +359,9 @@ fn sql_parse_select(parser: &SqlParser, stmt: &SqlStmt) !void {
     stmt.select_stmt.item_count = 0u16;
     stmt.select_stmt.has_where = false;
     stmt.select_stmt.where_expr = -1;
+    stmt.select_stmt.has_order_by = false;
+    stmt.select_stmt.order_expr = -1;
+    stmt.select_stmt.order_desc = false;
     stmt.select_stmt.has_limit = false;
     stmt.select_stmt.limit_value = 0u32;
 
@@ -383,6 +386,16 @@ fn sql_parse_select(parser: &SqlParser, stmt: &SqlStmt) !void {
     if sql_parser_match(parser, SqlTokenKind.KW_WHERE) {
         stmt.select_stmt.has_where = true;
         stmt.select_stmt.where_expr = try sql_parse_expr(parser, stmt);
+    }
+    if sql_parser_match(parser, SqlTokenKind.KW_ORDER) {
+        _ = try sql_parser_expect(parser, SqlTokenKind.KW_BY);
+        stmt.select_stmt.has_order_by = true;
+        stmt.select_stmt.order_expr = try sql_parse_expr(parser, stmt);
+        if sql_parser_match(parser, SqlTokenKind.KW_DESC) {
+            stmt.select_stmt.order_desc = true;
+        } else {
+            _ = sql_parser_match(parser, SqlTokenKind.KW_ASC);
+        }
     }
     if sql_parser_match(parser, SqlTokenKind.KW_LIMIT) {
         stmt.select_stmt.has_limit = true;
@@ -414,6 +427,47 @@ fn sql_parse_create_collection(parser: &SqlParser, stmt: &SqlStmt) !void {
     stmt.create_collection.collection_name = try sql_parser_expect_identifier(parser);
 }
 
+fn sql_parse_update(parser: &SqlParser, stmt: &SqlStmt) !void {
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_UPDATE);
+    stmt.kind = SqlStmtKind.UPDATE;
+    stmt.update_stmt.collection_name = try sql_parser_expect_identifier(parser);
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_SET);
+    stmt.update_stmt.target_path = try sql_parse_path_expr(parser);
+    _ = try sql_parser_expect(parser, SqlTokenKind.EQ);
+    stmt.update_stmt.value_expr = try sql_parse_expr(parser, stmt);
+    stmt.update_stmt.has_where = false;
+    stmt.update_stmt.where_expr = -1;
+    if sql_parser_match(parser, SqlTokenKind.KW_WHERE) {
+        stmt.update_stmt.has_where = true;
+        stmt.update_stmt.where_expr = try sql_parse_expr(parser, stmt);
+    }
+}
+
+fn sql_parse_delete(parser: &SqlParser, stmt: &SqlStmt) !void {
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_DELETE);
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_FROM);
+    stmt.kind = SqlStmtKind.DELETE;
+    stmt.delete_stmt.collection_name = try sql_parser_expect_identifier(parser);
+    stmt.delete_stmt.has_where = false;
+    stmt.delete_stmt.where_expr = -1;
+    if sql_parser_match(parser, SqlTokenKind.KW_WHERE) {
+        stmt.delete_stmt.has_where = true;
+        stmt.delete_stmt.where_expr = try sql_parse_expr(parser, stmt);
+    }
+}
+
+fn sql_parse_create_index(parser: &SqlParser, stmt: &SqlStmt) !void {
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_CREATE);
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_INDEX);
+    stmt.kind = SqlStmtKind.CREATE_INDEX;
+    stmt.create_index_stmt.index_name = try sql_parser_expect_identifier(parser);
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_ON);
+    stmt.create_index_stmt.collection_name = try sql_parser_expect_identifier(parser);
+    _ = try sql_parser_expect(parser, SqlTokenKind.LPAREN);
+    stmt.create_index_stmt.target_path = try sql_parse_path_expr(parser);
+    _ = try sql_parser_expect(parser, SqlTokenKind.RPAREN);
+}
+
 export fn sql_parse(input: &[const byte]) !SqlStmt {
     var parser: SqlParser = SqlParser{
         tokens: try sql_lex(input),
@@ -423,10 +477,29 @@ export fn sql_parse(input: &[const byte]) !SqlStmt {
     const first: SqlTokenKind = sql_parser_current(&parser).kind;
     if first == SqlTokenKind.KW_SELECT {
         try sql_parse_select(&parser, &stmt);
+    } else if first == SqlTokenKind.KW_UPDATE {
+        try sql_parse_update(&parser, &stmt);
+    } else if first == SqlTokenKind.KW_DELETE {
+        try sql_parse_delete(&parser, &stmt);
     } else if first == SqlTokenKind.KW_INSERT {
         try sql_parse_insert(&parser, &stmt);
     } else if first == SqlTokenKind.KW_CREATE {
-        try sql_parse_create_collection(&parser, &stmt);
+        var lookahead: SqlParser = SqlParser{
+            tokens: parser.tokens,
+            pos: parser.pos + 1u16,
+        };
+        const second: SqlTokenKind = sql_parser_current(&lookahead).kind;
+        if second == SqlTokenKind.KW_COLLECTION {
+            try sql_parse_create_collection(&parser, &stmt);
+        } else if second == SqlTokenKind.KW_INDEX {
+            try sql_parse_create_index(&parser, &stmt);
+        } else {
+            return error.SqlParseUnexpectedToken;
+        }
+    } else if first == SqlTokenKind.KW_EXPLAIN {
+        _ = try sql_parser_expect(&parser, SqlTokenKind.KW_EXPLAIN);
+        try sql_parse_select(&parser, &stmt);
+        stmt.kind = SqlStmtKind.EXPLAIN;
     } else {
         return error.SqlParseUnexpectedToken;
     }

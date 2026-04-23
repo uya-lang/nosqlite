@@ -14,7 +14,9 @@ export const PLAN_MAX_NODES: usize = 16;
 export enum PlanNodeKind {
     SEQ_SCAN,
     PRIMARY_LOOKUP,
+    INDEX_SCAN,
     FILTER,
+    SORT,
     LIMIT,
 }
 
@@ -22,6 +24,9 @@ export struct PlanNode {
     kind: PlanNodeKind,
     child: i16,
     filter_expr: i16,
+    order_expr: i16,
+    order_desc: bool,
+    index_slot: u16,
     limit_value: u32,
     lookup_doc_id: u64,
 }
@@ -38,10 +43,24 @@ struct PrimaryLookupMatch {
     key: u64,
 }
 
+struct SecondaryLookupMatch {
+    found: bool,
+    index_slot: u16,
+    expr_index: i16,
+}
+
 fn plan_no_lookup() PrimaryLookupMatch {
     return PrimaryLookupMatch{
         found: false,
         key: 0u64,
+    };
+}
+
+fn plan_no_secondary_lookup() SecondaryLookupMatch {
+    return SecondaryLookupMatch{
+        found: false,
+        index_slot: 0u16,
+        expr_index: -1,
     };
 }
 
@@ -128,6 +147,68 @@ fn plan_find_primary_lookup(bound: &BoundSelect, expr_index: i16) !PrimaryLookup
         return plan_no_lookup();
     }
     return try plan_expr_direct_primary_lookup(bound, expr_index);
+}
+
+fn plan_bound_paths_equal(a: &BoundPath, b: &BoundPath) bool {
+    if a == null || b == null || a.len != b.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < a.len as usize {
+        if a.bytes[i] != b.bytes[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn plan_expr_direct_secondary_lookup(bound: &BoundSelect, expr_index: i16) !SecondaryLookupMatch {
+    const expr: &BoundExprNode = try bound_expr_node(bound, expr_index);
+    if expr.kind != BoundExprKind.BINARY || expr.binary_op != SqlBinaryOp.EQ {
+        return plan_no_secondary_lookup();
+    }
+    const left: &BoundExprNode = try bound_expr_node(bound, expr.left);
+    const right: &BoundExprNode = try bound_expr_node(bound, expr.right);
+    var path_expr: &BoundExprNode = null;
+    var literal_expr: &BoundExprNode = null;
+    if left.kind == BoundExprKind.PATH && right.kind == BoundExprKind.LITERAL {
+        path_expr = left;
+        literal_expr = right;
+    } else if right.kind == BoundExprKind.PATH && left.kind == BoundExprKind.LITERAL {
+        path_expr = right;
+        literal_expr = left;
+    } else {
+        return plan_no_secondary_lookup();
+    }
+    if path_expr == null || literal_expr == null {
+        return plan_no_secondary_lookup();
+    }
+    var index_slot: u16 = 0u16;
+    while index_slot < bound.secondary_index_count {
+        const index_ref: &BoundIndexRef = try bound_index_at(bound, index_slot);
+        if plan_bound_paths_equal(&index_ref.path, &path_expr.path) {
+            return SecondaryLookupMatch{
+                found: true,
+                index_slot: index_slot,
+                expr_index: expr_index,
+            };
+        }
+        index_slot = index_slot + 1u16;
+    }
+    return plan_no_secondary_lookup();
+}
+
+fn plan_find_secondary_lookup(bound: &BoundSelect, expr_index: i16) !SecondaryLookupMatch {
+    const expr: &BoundExprNode = try bound_expr_node(bound, expr_index);
+    if expr.kind == BoundExprKind.BINARY && expr.binary_op == SqlBinaryOp.AND {
+        const left_match: SecondaryLookupMatch = try plan_find_secondary_lookup(bound, expr.left);
+        if left_match.found {
+            return left_match;
+        }
+        return try plan_find_secondary_lookup(bound, expr.right);
+    }
+    return try plan_expr_direct_secondary_lookup(bound, expr_index);
 }
 
 fn plan_append_bytes(out: &[byte], cursor: &usize, data: &[const byte]) !void {
@@ -227,6 +308,31 @@ fn plan_explain_node(plan: &QueryPlan, node_index: i16, out: &[byte], cursor: &u
         try plan_append_byte(out, cursor, 10 as byte);
         return;
     }
+    if node.kind == PlanNodeKind.INDEX_SCAN {
+        try plan_append_bytes(out, cursor, &"IndexScan "[0: 10]);
+        try plan_append_bytes(out, cursor, sql_identifier_slice(&plan.bound.collection_name));
+        try plan_append_byte(out, cursor, 32 as byte);
+        const index_ref: &BoundIndexRef = try bound_index_at(&plan.bound, node.index_slot);
+        try plan_append_bytes(out, cursor, bound_index_name_slice(index_ref) as &[const byte]);
+        try plan_append_byte(out, cursor, 32 as byte);
+        const tmp_len: usize = try bound_expr_pretty_print(&plan.bound, node.filter_expr, out[cursor[0]: out.len - cursor[0]]);
+        cursor[0] = cursor[0] + tmp_len;
+        try plan_append_byte(out, cursor, 10 as byte);
+        return;
+    }
+    if node.kind == PlanNodeKind.SORT {
+        try plan_append_bytes(out, cursor, &"Sort "[0: 5]);
+        const tmp_len: usize = try bound_expr_pretty_print(&plan.bound, node.order_expr, out[cursor[0]: out.len - cursor[0]]);
+        cursor[0] = cursor[0] + tmp_len;
+        if node.order_desc {
+            try plan_append_bytes(out, cursor, &" DESC"[0: 5]);
+        } else {
+            try plan_append_bytes(out, cursor, &" ASC"[0: 4]);
+        }
+        try plan_append_byte(out, cursor, 10 as byte);
+        try plan_explain_node(plan, node.child, out, cursor);
+        return;
+    }
     try plan_append_bytes(out, cursor, &"SeqScan "[0: 8]);
     try plan_append_bytes(out, cursor, sql_identifier_slice(&plan.bound.collection_name));
     try plan_append_byte(out, cursor, 10 as byte);
@@ -252,6 +358,9 @@ export fn plan_select(bound: &BoundSelect) !QueryPlan {
                 kind: PlanNodeKind.PRIMARY_LOOKUP,
                 child: -1,
                 filter_expr: -1,
+                order_expr: -1,
+                order_desc: false,
+                index_slot: 0u16,
                 limit_value: 0u32,
                 lookup_doc_id: direct_match.key,
             });
@@ -262,10 +371,42 @@ export fn plan_select(bound: &BoundSelect) !QueryPlan {
                     kind: PlanNodeKind.PRIMARY_LOOKUP,
                     child: -1,
                     filter_expr: -1,
+                    order_expr: -1,
+                    order_desc: false,
+                    index_slot: 0u16,
                     limit_value: 0u32,
                     lookup_doc_id: nested_match.key,
                 });
                 add_filter = true;
+            } else {
+                const direct_secondary: SecondaryLookupMatch = try plan_expr_direct_secondary_lookup(bound, bound.where_expr);
+                if direct_secondary.found {
+                    base_node = try plan_add_node(&plan, &PlanNode{
+                        kind: PlanNodeKind.INDEX_SCAN,
+                        child: -1,
+                        filter_expr: direct_secondary.expr_index,
+                        order_expr: -1,
+                        order_desc: false,
+                        index_slot: direct_secondary.index_slot,
+                        limit_value: 0u32,
+                        lookup_doc_id: 0u64,
+                    });
+                } else {
+                    const nested_secondary: SecondaryLookupMatch = try plan_find_secondary_lookup(bound, bound.where_expr);
+                    if nested_secondary.found {
+                        base_node = try plan_add_node(&plan, &PlanNode{
+                            kind: PlanNodeKind.INDEX_SCAN,
+                            child: -1,
+                            filter_expr: nested_secondary.expr_index,
+                            order_expr: -1,
+                            order_desc: false,
+                            index_slot: nested_secondary.index_slot,
+                            limit_value: 0u32,
+                            lookup_doc_id: 0u64,
+                        });
+                        add_filter = true;
+                    }
+                }
             }
         }
     }
@@ -274,6 +415,9 @@ export fn plan_select(bound: &BoundSelect) !QueryPlan {
             kind: PlanNodeKind.SEQ_SCAN,
             child: -1,
             filter_expr: -1,
+            order_expr: -1,
+            order_desc: false,
+            index_slot: 0u16,
             limit_value: 0u32,
             lookup_doc_id: 0u64,
         });
@@ -284,6 +428,21 @@ export fn plan_select(bound: &BoundSelect) !QueryPlan {
             kind: PlanNodeKind.FILTER,
             child: base_node,
             filter_expr: bound.where_expr,
+            order_expr: -1,
+            order_desc: false,
+            index_slot: 0u16,
+            limit_value: 0u32,
+            lookup_doc_id: 0u64,
+        });
+    }
+    if bound.has_order_by {
+        base_node = try plan_add_node(&plan, &PlanNode{
+            kind: PlanNodeKind.SORT,
+            child: base_node,
+            filter_expr: -1,
+            order_expr: bound.order_expr,
+            order_desc: bound.order_desc,
+            index_slot: 0u16,
             limit_value: 0u32,
             lookup_doc_id: 0u64,
         });
@@ -293,6 +452,9 @@ export fn plan_select(bound: &BoundSelect) !QueryPlan {
             kind: PlanNodeKind.LIMIT,
             child: base_node,
             filter_expr: -1,
+            order_expr: -1,
+            order_desc: false,
+            index_slot: 0u16,
             limit_value: bound.limit_value,
             lookup_doc_id: 0u64,
         });

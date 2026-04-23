@@ -5,6 +5,11 @@ use std.mem.mem.mem_copy;
 use lib.sql.ast;
 use lib.doc.path;
 use lib.storage.pager;
+use lib.catalog.schema.CatalogView;
+use lib.catalog.schema.CatalogCollectionView;
+use lib.catalog.schema.CatalogIndexView;
+use lib.catalog.schema.catalog_view_from_page;
+use lib.catalog.schema.catalog_collection_index_at;
 
 export error BindUnsupportedStmt;
 export error BindCollectionNotFound;
@@ -13,6 +18,8 @@ export error BindLiteralTooLong;
 export error BindInvalidLiteral;
 export error BindInvalidExpr;
 export error BindPathCompileFailed;
+
+export const BOUND_MAX_COLLECTION_INDEXES: usize = 8;
 
 export enum BoundLiteralKind {
     NULL,
@@ -57,14 +64,27 @@ export struct BoundExprNode {
     path: BoundPath,
 }
 
+export struct BoundIndexRef {
+    index_id: u32,
+    root_page: u32,
+    name_len: u16,
+    name: [byte: SQL_MAX_IDENTIFIER_LEN],
+    path: BoundPath,
+}
+
 export struct BoundSelect {
     collection_id: u32,
     primary_root_page: u32,
     collection_name: SqlIdentifier,
+    secondary_index_count: u16,
+    secondary_indexes: [BoundIndexRef: BOUND_MAX_COLLECTION_INDEXES],
     projection_count: u16,
     projection_exprs: [i16: SQL_MAX_SELECT_ITEMS],
     has_where: bool,
     where_expr: i16,
+    has_order_by: bool,
+    order_expr: i16,
+    order_desc: bool,
     has_limit: bool,
     limit_value: u32,
     expr_count: u16,
@@ -268,6 +288,31 @@ fn bind_copy_path_expr(path_expr: &SqlPathExpr, out: &BoundPath) !void {
         _ = mem_copy(&out.bytes[0], slice.ptr, slice.len);
     }
     out.program = try path_program_compile(slice);
+}
+
+fn bind_copy_path_bytes(path_bytes: &[byte], out: &BoundPath) !void {
+    if path_bytes.ptr == null || out == null || path_bytes.len > SQL_MAX_PATH_LEN {
+        return error.BindPathCompileFailed;
+    }
+    out.len = (path_bytes.len as! u16) catch {
+        return error.BindPathCompileFailed;
+    };
+    if path_bytes.len > 0 {
+        _ = mem_copy(&out.bytes[0], path_bytes.ptr, path_bytes.len);
+    }
+    out.program = try path_program_compile(path_bytes as &[const byte]);
+}
+
+fn bind_copy_identifier_bytes(text: &[byte], out: &[byte], len_out: &u16) !void {
+    if text.ptr == null || out.ptr == null || len_out == null || text.len > SQL_MAX_IDENTIFIER_LEN {
+        return error.BindLiteralTooLong;
+    }
+    len_out[0] = (text.len as! u16) catch {
+        return error.BindLiteralTooLong;
+    };
+    if text.len > 0 {
+        _ = mem_copy(out.ptr, text.ptr, text.len);
+    }
 }
 
 fn bind_add_expr(bound: &BoundSelect, node: &BoundExprNode) !i16 {
@@ -564,8 +609,28 @@ export fn bound_expr_pretty_print(bound: &BoundSelect, expr_index: i16, out: &[b
     return cursor;
 }
 
+export fn bound_index_name_slice(index_ref: &BoundIndexRef) &[byte] {
+    if index_ref == null {
+        return &""[0: 0];
+    }
+    return index_ref.name[0: index_ref.name_len as usize];
+}
+
+export fn bound_index_at(bound: &BoundSelect, index_slot: u16) !&BoundIndexRef {
+    if bound == null || index_slot >= bound.secondary_index_count || index_slot as usize >= BOUND_MAX_COLLECTION_INDEXES {
+        return error.BindInvalidExpr;
+    }
+    const idx: usize = (index_slot as! usize) catch {
+        return error.BindInvalidExpr;
+    };
+    if idx >= BOUND_MAX_COLLECTION_INDEXES {
+        return error.BindInvalidExpr;
+    }
+    return &bound.secondary_indexes[idx];
+}
+
 export fn bind_select_with_snapshot(snapshot: &CatalogSnapshot, stmt: &SqlStmt) !BoundSelect {
-    if snapshot == null || stmt == null || stmt.kind != SqlStmtKind.SELECT {
+    if snapshot == null || stmt == null || (stmt.kind != SqlStmtKind.SELECT && stmt.kind != SqlStmtKind.EXPLAIN) {
         return error.BindUnsupportedStmt;
     }
 
@@ -574,20 +639,49 @@ export fn bind_select_with_snapshot(snapshot: &CatalogSnapshot, stmt: &SqlStmt) 
     const collection: CatalogCollectionView = (catalog_snapshot_find_collection(snapshot, collection_name) catch {
         return error.BindCollectionNotFound;
     });
+    const view: CatalogView = try catalog_view_from_page(snapshot.page[0: snapshot.page_size as usize]);
 
     var bound: BoundSelect = BoundSelect{
         collection_id: collection.meta.collection_id,
         primary_root_page: collection.meta.primary_root_page,
         collection_name: stmt.select_stmt.collection_name,
+        secondary_index_count: 0u16,
+        secondary_indexes: [],
         projection_count: stmt.select_stmt.item_count,
         projection_exprs: [],
         has_where: stmt.select_stmt.has_where,
         where_expr: -1,
+        has_order_by: stmt.select_stmt.has_order_by,
+        order_expr: -1,
+        order_desc: stmt.select_stmt.order_desc,
         has_limit: stmt.select_stmt.has_limit,
         limit_value: stmt.select_stmt.limit_value,
         expr_count: 0u16,
         expr_nodes: [],
     };
+
+    var index_idx: u16 = 0u16;
+    while index_idx < collection.meta.secondary_index_count {
+        const slot: usize = (index_idx as! usize) catch {
+            return error.BindInvalidExpr;
+        };
+        if slot >= BOUND_MAX_COLLECTION_INDEXES {
+            return error.BindInvalidExpr;
+        }
+        const index_view: CatalogIndexView = try catalog_collection_index_at(&view, &collection, index_idx as u32);
+        bound.secondary_indexes[slot] = BoundIndexRef{
+            index_id: index_view.meta.index_id,
+            root_page: index_view.meta.root_page,
+            name_len: 0u16,
+            name: [],
+            path: BoundPath{},
+        };
+        const index_ref: &BoundIndexRef = &bound.secondary_indexes[slot];
+        try bind_copy_identifier_bytes(index_view.name, index_ref.name[0: SQL_MAX_IDENTIFIER_LEN], &index_ref.name_len);
+        try bind_copy_path_bytes(index_view.path, &index_ref.path);
+        bound.secondary_index_count = bound.secondary_index_count + 1u16;
+        index_idx = index_idx + 1u16;
+    }
 
     var i: usize = 0usize;
     while i < stmt.select_stmt.item_count as usize {
@@ -596,6 +690,9 @@ export fn bind_select_with_snapshot(snapshot: &CatalogSnapshot, stmt: &SqlStmt) 
     }
     if stmt.select_stmt.has_where {
         bound.where_expr = try bind_expr(stmt, stmt.select_stmt.where_expr, &bound);
+    }
+    if stmt.select_stmt.has_order_by {
+        bound.order_expr = try bind_expr(stmt, stmt.select_stmt.order_expr, &bound);
     }
     return bound;
 }

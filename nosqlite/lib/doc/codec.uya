@@ -539,3 +539,48 @@ export fn doc_object_field(node: &[byte], key: &[byte]) !&[byte] {
     }
     return error.DocBlobMissingField;
 }
+
+export fn doc_object_key_at(node: &[byte], index: u32) !&[byte] {
+    const prefix: &ObjectNodePrefix = doc_object_prefix_ptr(node);
+    const entries: &ObjectEntry = doc_object_entries_ptr(node);
+    if prefix == null || entries == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    if (try doc_node_tag_from_code(prefix.hdr.tag)) != DocNodeTag.OBJECT {
+        return error.DocBlobWrongNodeType;
+    }
+    if index >= prefix.count {
+        return error.DocBlobIndexOutOfBounds;
+    }
+    const entry: &ObjectEntry = &entries[index as usize];
+    const key_off: usize = entry.key_off as usize;
+    const key_len: usize = entry.key_len as usize;
+    if key_off + key_len > node.len {
+        return error.DocBlobInvalidBuffer;
+    }
+    return node[key_off: key_len];
+}
+
+export fn doc_object_value_at(node: &[byte], index: u32) !&[byte] {
+    const prefix: &ObjectNodePrefix = doc_object_prefix_ptr(node);
+    const entries: &ObjectEntry = doc_object_entries_ptr(node);
+    if prefix == null || entries == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    if (try doc_node_tag_from_code(prefix.hdr.tag)) != DocNodeTag.OBJECT {
+        return error.DocBlobWrongNodeType;
+    }
+    if index >= prefix.count {
+        return error.DocBlobIndexOutOfBounds;
+    }
+    const entry: &ObjectEntry = &entries[index as usize];
+    const val_off: usize = entry.val_off as usize;
+    if val_off >= node.len {
+        return error.DocBlobInvalidBuffer;
+    }
+    const size: usize = try doc_node_total_size(node[val_off: node.len - val_off]);
+    if val_off + size > node.len {
+        return error.DocBlobInvalidBuffer;
+    }
+    return node[val_off: size];
+}

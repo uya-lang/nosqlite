@@ -265,15 +265,15 @@
 
 ## Phase 12 - v1.5 功能扩展
 
-- [ ] 先写失败测试：`UPDATE`、`DELETE`、二级索引、`ORDER BY`
-- [ ] 实现 `UPDATE`
-- [ ] 实现 `DELETE`
-- [ ] 实现 tombstone 读取过滤
-- [ ] 实现 `CREATE INDEX`
-- [ ] 实现单列二级索引
-- [ ] 实现 `IndexScan`
-- [ ] 实现简单 `ORDER BY`
-- [ ] 增强 `EXPLAIN`
+- [x] 先写失败测试：`UPDATE`、`DELETE`、二级索引、`ORDER BY`
+- [x] 实现 `UPDATE`
+- [x] 实现 `DELETE`
+- [x] 实现 tombstone 读取过滤
+- [x] 实现 `CREATE INDEX`
+- [x] 实现单列二级索引
+- [x] 实现 `IndexScan`
+- [x] 实现简单 `ORDER BY`
+- [x] 增强 `EXPLAIN`
 
 ## Phase 12.5 - 外围异步能力
 

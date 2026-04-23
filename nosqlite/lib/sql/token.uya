@@ -30,6 +30,16 @@ export enum SqlTokenKind {
     KW_INSERT,
     KW_INTO,
     KW_JSON,
+    KW_UPDATE,
+    KW_DELETE,
+    KW_SET,
+    KW_INDEX,
+    KW_ON,
+    KW_ORDER,
+    KW_BY,
+    KW_ASC,
+    KW_DESC,
+    KW_EXPLAIN,
     KW_CREATE,
     KW_COLLECTION,
     KW_AND,
@@ -132,6 +142,36 @@ export fn sql_token_kind_name(kind: SqlTokenKind) &[const byte] {
     }
     if kind == SqlTokenKind.KW_JSON {
         return &"JSON"[0: 4];
+    }
+    if kind == SqlTokenKind.KW_UPDATE {
+        return &"UPDATE"[0: 6];
+    }
+    if kind == SqlTokenKind.KW_DELETE {
+        return &"DELETE"[0: 6];
+    }
+    if kind == SqlTokenKind.KW_SET {
+        return &"SET"[0: 3];
+    }
+    if kind == SqlTokenKind.KW_INDEX {
+        return &"INDEX"[0: 5];
+    }
+    if kind == SqlTokenKind.KW_ON {
+        return &"ON"[0: 2];
+    }
+    if kind == SqlTokenKind.KW_ORDER {
+        return &"ORDER"[0: 5];
+    }
+    if kind == SqlTokenKind.KW_BY {
+        return &"BY"[0: 2];
+    }
+    if kind == SqlTokenKind.KW_ASC {
+        return &"ASC"[0: 3];
+    }
+    if kind == SqlTokenKind.KW_DESC {
+        return &"DESC"[0: 4];
+    }
+    if kind == SqlTokenKind.KW_EXPLAIN {
+        return &"EXPLAIN"[0: 7];
     }
     if kind == SqlTokenKind.KW_CREATE {
         return &"CREATE"[0: 6];

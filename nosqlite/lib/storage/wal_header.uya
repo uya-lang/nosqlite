@@ -1,5 +1,5 @@
 // lib.storage - WAL 文件头
-// 模块路径：lib/storage/wal_header.uya → use lib.storage;
+// 模块路径：lib/storage/wal_header.uya → use lib.storage.wal_header;
 
 use lib.core.NOSQLITE_FORMAT_VERSION_V1;
 use lib.core.page_size_is_supported;

@@ -104,6 +104,36 @@ test "nosqlite_sql_parse_json_path_and_invalid_syntax" {
     return error.AssertionFailed;
 }
 
+test "nosqlite_sql_parse_phase12_statements" {
+    const update_stmt: SqlStmt = try sql_parse("UPDATE users SET $.age = 26 WHERE _id = 1;");
+    try assert_eq_i32(update_stmt.kind as i32, SqlStmtKind.UPDATE as i32);
+    try assert_eq_bool(byte_slices_equal(sql_identifier_slice(&update_stmt.update_stmt.collection_name), "users"), true);
+    try assert_eq_bool(byte_slices_equal(sql_path_slice(&update_stmt.update_stmt.target_path), "$.age"), true);
+    try assert_eq_bool(update_stmt.update_stmt.has_where, true);
+
+    const delete_stmt: SqlStmt = try sql_parse("DELETE FROM users WHERE $.active = FALSE;");
+    try assert_eq_i32(delete_stmt.kind as i32, SqlStmtKind.DELETE as i32);
+    try assert_eq_bool(byte_slices_equal(sql_identifier_slice(&delete_stmt.delete_stmt.collection_name), "users"), true);
+    try assert_eq_bool(delete_stmt.delete_stmt.has_where, true);
+
+    const create_index_stmt: SqlStmt = try sql_parse("CREATE INDEX users_age_idx ON users ($.age);");
+    try assert_eq_i32(create_index_stmt.kind as i32, SqlStmtKind.CREATE_INDEX as i32);
+    try assert_eq_bool(byte_slices_equal(sql_identifier_slice(&create_index_stmt.create_index_stmt.index_name), "users_age_idx"), true);
+    try assert_eq_bool(byte_slices_equal(sql_identifier_slice(&create_index_stmt.create_index_stmt.collection_name), "users"), true);
+    try assert_eq_bool(byte_slices_equal(sql_path_slice(&create_index_stmt.create_index_stmt.target_path), "$.age"), true);
+
+    const explain_stmt: SqlStmt = try sql_parse("EXPLAIN SELECT _id FROM users ORDER BY $.age DESC LIMIT 2;");
+    try assert_eq_i32(explain_stmt.kind as i32, SqlStmtKind.EXPLAIN as i32);
+    try assert_eq_bool(explain_stmt.select_stmt.has_order_by, true);
+    try assert_eq_bool(explain_stmt.select_stmt.order_desc, true);
+    try assert_eq_bool(explain_stmt.select_stmt.has_limit, true);
+    try assert_eq_i32(explain_stmt.select_stmt.limit_value as i32, 2);
+
+    const order_expr: &SqlExprNode = try sql_expr_node(&explain_stmt, explain_stmt.select_stmt.order_expr);
+    try assert_eq_i32(order_expr.kind as i32, SqlExprKind.PATH as i32);
+    try assert_eq_bool(byte_slices_equal(sql_path_slice(&order_expr.path), "$.age"), true);
+}
+
 test "nosqlite_sql_pretty_print_roundtrip" {
     const sql: &[const byte] = "select _id, $.name from users where $.age >= 18 and $.active = true limit 10;";
     const stmt: SqlStmt = try sql_parse(sql);
@@ -112,4 +142,24 @@ test "nosqlite_sql_pretty_print_roundtrip" {
     const expected: &[const byte] = "SELECT _id, $.name FROM users WHERE $.age >= 18 AND $.active = TRUE LIMIT 10;";
     try assert_eq_u64(len as u64, expected.len as u64);
     try assert_eq_bool(byte_slices_equal(out[0: len], expected), true);
+}
+
+test "nosqlite_sql_pretty_print_phase12_roundtrip" {
+    var out: [byte: 256] = [];
+
+    const update_stmt: SqlStmt = try sql_parse("update users set $.age = 26 where _id = 1;");
+    var len: usize = try sql_stmt_pretty_print(&update_stmt, out[0: 256]);
+    try assert_eq_bool(byte_slices_equal(out[0: len], "UPDATE users SET $.age = 26 WHERE _id = 1;"), true);
+
+    const delete_stmt: SqlStmt = try sql_parse("delete from users where $.active = false;");
+    len = try sql_stmt_pretty_print(&delete_stmt, out[0: 256]);
+    try assert_eq_bool(byte_slices_equal(out[0: len], "DELETE FROM users WHERE $.active = FALSE;"), true);
+
+    const create_index_stmt: SqlStmt = try sql_parse("create index users_age_idx on users ($.age);");
+    len = try sql_stmt_pretty_print(&create_index_stmt, out[0: 256]);
+    try assert_eq_bool(byte_slices_equal(out[0: len], "CREATE INDEX users_age_idx ON users ($.age);"), true);
+
+    const explain_stmt: SqlStmt = try sql_parse("explain select _id from users order by $.age desc limit 2;");
+    len = try sql_stmt_pretty_print(&explain_stmt, out[0: 256]);
+    try assert_eq_bool(byte_slices_equal(out[0: len], "EXPLAIN SELECT _id FROM users ORDER BY $.age DESC LIMIT 2;"), true);
 }

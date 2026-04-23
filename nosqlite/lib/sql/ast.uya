@@ -41,6 +41,10 @@ export enum SqlStmtKind {
     CREATE_COLLECTION,
     INSERT,
     SELECT,
+    UPDATE,
+    DELETE,
+    CREATE_INDEX,
+    EXPLAIN,
 }
 
 export struct SqlIdentifier {
@@ -115,12 +119,35 @@ export struct SqlInsertStmt {
     json_text: SqlLiteral,
 }
 
+export struct SqlUpdateStmt {
+    collection_name: SqlIdentifier,
+    target_path: SqlPathExpr,
+    value_expr: i16,
+    has_where: bool,
+    where_expr: i16,
+}
+
+export struct SqlDeleteStmt {
+    collection_name: SqlIdentifier,
+    has_where: bool,
+    where_expr: i16,
+}
+
+export struct SqlCreateIndexStmt {
+    index_name: SqlIdentifier,
+    collection_name: SqlIdentifier,
+    target_path: SqlPathExpr,
+}
+
 export struct SqlSelectStmt {
     collection_name: SqlIdentifier,
     item_count: u16,
     items: [SqlSelectItem: SQL_MAX_SELECT_ITEMS],
     has_where: bool,
     where_expr: i16,
+    has_order_by: bool,
+    order_expr: i16,
+    order_desc: bool,
     has_limit: bool,
     limit_value: u32,
 }
@@ -131,6 +158,9 @@ export struct SqlStmt {
     expr_nodes: [SqlExprNode: SQL_MAX_EXPR_NODES],
     create_collection: SqlCreateCollectionStmt,
     insert_stmt: SqlInsertStmt,
+    update_stmt: SqlUpdateStmt,
+    delete_stmt: SqlDeleteStmt,
+    create_index_stmt: SqlCreateIndexStmt,
     select_stmt: SqlSelectStmt,
 }
 
@@ -392,6 +422,43 @@ export fn sql_stmt_pretty_print(stmt: &SqlStmt, out: &[byte]) !usize {
         try sql_append_byte(out, &cursor, 59 as byte);
         return cursor;
     }
+    if stmt.kind == SqlStmtKind.UPDATE {
+        try sql_append_bytes(out, &cursor, &"UPDATE "[0: 7]);
+        try sql_append_bytes(out, &cursor, sql_identifier_slice(&stmt.update_stmt.collection_name));
+        try sql_append_bytes(out, &cursor, &" SET "[0: 5]);
+        try sql_append_bytes(out, &cursor, sql_path_slice(&stmt.update_stmt.target_path));
+        try sql_append_bytes(out, &cursor, &" = "[0: 3]);
+        try sql_pretty_print_expr(stmt, stmt.update_stmt.value_expr, out, &cursor);
+        if stmt.update_stmt.has_where {
+            try sql_append_bytes(out, &cursor, &" WHERE "[0: 7]);
+            try sql_pretty_print_expr(stmt, stmt.update_stmt.where_expr, out, &cursor);
+        }
+        try sql_append_byte(out, &cursor, 59 as byte);
+        return cursor;
+    }
+    if stmt.kind == SqlStmtKind.DELETE {
+        try sql_append_bytes(out, &cursor, &"DELETE FROM "[0: 12]);
+        try sql_append_bytes(out, &cursor, sql_identifier_slice(&stmt.delete_stmt.collection_name));
+        if stmt.delete_stmt.has_where {
+            try sql_append_bytes(out, &cursor, &" WHERE "[0: 7]);
+            try sql_pretty_print_expr(stmt, stmt.delete_stmt.where_expr, out, &cursor);
+        }
+        try sql_append_byte(out, &cursor, 59 as byte);
+        return cursor;
+    }
+    if stmt.kind == SqlStmtKind.CREATE_INDEX {
+        try sql_append_bytes(out, &cursor, &"CREATE INDEX "[0: 13]);
+        try sql_append_bytes(out, &cursor, sql_identifier_slice(&stmt.create_index_stmt.index_name));
+        try sql_append_bytes(out, &cursor, &" ON "[0: 4]);
+        try sql_append_bytes(out, &cursor, sql_identifier_slice(&stmt.create_index_stmt.collection_name));
+        try sql_append_bytes(out, &cursor, &" ("[0: 2]);
+        try sql_append_bytes(out, &cursor, sql_path_slice(&stmt.create_index_stmt.target_path));
+        try sql_append_bytes(out, &cursor, &");"[0: 2]);
+        return cursor;
+    }
+    if stmt.kind == SqlStmtKind.EXPLAIN {
+        try sql_append_bytes(out, &cursor, &"EXPLAIN "[0: 8]);
+    }
     try sql_append_bytes(out, &cursor, &"SELECT "[0: 7]);
     var i: usize = 0usize;
     while i < stmt.select_stmt.item_count as usize {
@@ -406,6 +473,15 @@ export fn sql_stmt_pretty_print(stmt: &SqlStmt, out: &[byte]) !usize {
     if stmt.select_stmt.has_where {
         try sql_append_bytes(out, &cursor, &" WHERE "[0: 7]);
         try sql_pretty_print_expr(stmt, stmt.select_stmt.where_expr, out, &cursor);
+    }
+    if stmt.select_stmt.has_order_by {
+        try sql_append_bytes(out, &cursor, &" ORDER BY "[0: 10]);
+        try sql_pretty_print_expr(stmt, stmt.select_stmt.order_expr, out, &cursor);
+        if stmt.select_stmt.order_desc {
+            try sql_append_bytes(out, &cursor, &" DESC"[0: 5]);
+        } else {
+            try sql_append_bytes(out, &cursor, &" ASC"[0: 4]);
+        }
     }
     if stmt.select_stmt.has_limit {
         try sql_append_bytes(out, &cursor, &" LIMIT "[0: 7]);
