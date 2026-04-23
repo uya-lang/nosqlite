@@ -1,0 +1,381 @@
+use std.runtime.entry.set_process_stack_limit_bytes;
+
+use libc.snprintf;
+
+use lib.api.db.DB_MAX_ROWS_PER_COLLECTION;
+use lib.api.db.DbHandle;
+use lib.api.db.DbCheckReport;
+use lib.api.db.db_check;
+use lib.api.db.db_checkpoint;
+use lib.api.db.db_exec;
+use lib.api.db.db_query;
+use lib.api.db.db_query_cursor;
+use lib.api.db.db_test_create_at_stem;
+use lib.api.db.db_test_create_collection;
+use lib.api.db.db_test_insert_json;
+use lib.api.db.db_test_open_at_stem;
+use lib.api.db.db_test_set_snapshot_policy;
+use lib.api.db.db_test_snapshot_status;
+use lib.api.db.cursor_next;
+use lib.api.db.query_cursor_is_open;
+use lib.api.db.QueryCursor;
+use lib.api.result.QueryResult;
+use lib.api.result.OwnedRow;
+use lib.api.result.query_result_row;
+use lib.api.result.owned_row_cell_i64;
+use lib.api.result.owned_row_cell_u64;
+use lib.storage.pager.SnapshotPressurePolicy;
+use lib.storage.pager.SnapshotPressureStatus;
+use lib.storage.pager.catalog_cleanup_stem;
+
+const STRESS_STEM_FILL: *const byte = "/tmp/nosqlite_stress_fill" as *const byte;
+const STRESS_STEM_CHURN: *const byte = "/tmp/nosqlite_stress_churn" as *const byte;
+const STRESS_STEM_PRESSURE: *const byte = "/tmp/nosqlite_stress_pressure" as *const byte;
+const STRESS_ROWS: u64 = 20u64;
+const STRESS_CHURN_ROWS: u64 = 16u64;
+
+var g_fill_db: DbHandle = DbHandle{};
+var g_reopened_db: DbHandle = DbHandle{};
+var g_churn_db: DbHandle = DbHandle{};
+var g_pressure_db: DbHandle = DbHandle{};
+
+error StressBufferTooSmall;
+
+fn cleanup(stem: &const byte) void {
+    _ = catalog_cleanup_stem(stem) catch {};
+}
+
+fn build_user_json(doc_id: u64, out: &[byte]) !usize {
+    if out.ptr == null || out.len < 96usize {
+        return error.StressBufferTooSmall;
+    }
+    const age: u64 = 18u64 + (doc_id % 41u64);
+    const score_minor: u64 = doc_id % 100u64;
+    const len_i32: i32 = snprintf(
+        out.ptr,
+        out.len,
+        "{\"name\":\"stress-%lu\",\"age\":%lu,\"score\":12.%02lu,\"active\":true}\0" as &const byte,
+        doc_id,
+        age,
+        score_minor,
+    );
+    if len_i32 <= 0 {
+        return error.StressBufferTooSmall;
+    }
+    const len: usize = (len_i32 as! usize) catch {
+        return error.StressBufferTooSmall;
+    };
+    if len + 1usize > out.len {
+        return error.StressBufferTooSmall;
+    }
+    return len;
+}
+
+fn build_id_lookup_sql(doc_id: u64, out: &[byte]) !usize {
+    if out.ptr == null || out.len < 96usize {
+        return error.StressBufferTooSmall;
+    }
+    const len_i32: i32 = snprintf(
+        out.ptr,
+        out.len,
+        "SELECT _id FROM users WHERE _id = %lu LIMIT 1;\0" as &const byte,
+        doc_id,
+    );
+    if len_i32 <= 0 {
+        return error.StressBufferTooSmall;
+    }
+    return (len_i32 as! usize) catch {
+        return error.StressBufferTooSmall;
+    };
+}
+
+fn build_update_age_sql(doc_id: u64, age: u64, out: &[byte]) !usize {
+    if out.ptr == null || out.len < 128usize {
+        return error.StressBufferTooSmall;
+    }
+    const len_i32: i32 = snprintf(
+        out.ptr,
+        out.len,
+        "UPDATE users SET $.age = %lu WHERE _id = %lu;\0" as &const byte,
+        age,
+        doc_id,
+    );
+    if len_i32 <= 0 {
+        return error.StressBufferTooSmall;
+    }
+    return (len_i32 as! usize) catch {
+        return error.StressBufferTooSmall;
+    };
+}
+
+fn build_age_lookup_sql(age: u64, out: &[byte]) !usize {
+    if out.ptr == null || out.len < 128usize {
+        return error.StressBufferTooSmall;
+    }
+    const len_i32: i32 = snprintf(
+        out.ptr,
+        out.len,
+        "SELECT _id, $.age FROM users WHERE $.age = %lu LIMIT 64;\0" as &const byte,
+        age,
+    );
+    if len_i32 <= 0 {
+        return error.StressBufferTooSmall;
+    }
+    return (len_i32 as! usize) catch {
+        return error.StressBufferTooSmall;
+    };
+}
+
+fn insert_stress_doc(db: &DbHandle, doc_id: u64) !u64 {
+    var json_buf: [byte: 192] = [];
+    const json_len: usize = try build_user_json(doc_id, json_buf[0: 192]);
+    return try db_test_insert_json(db, "users", json_buf[0: json_len]);
+}
+
+fn query_count_all(db: &DbHandle) !u32 {
+    const result: QueryResult = try db_query(db, "SELECT _id FROM users WHERE $.age >= 18 LIMIT 64;");
+    return result.row_count;
+}
+
+fn assert_primary_lookup(db: &DbHandle, doc_id: u64) !void {
+    var sql_buf: [byte: 96] = [];
+    const sql_len: usize = try build_id_lookup_sql(doc_id, sql_buf[0: 96]);
+    const result: QueryResult = try db_query(db, sql_buf[0: sql_len]);
+    if result.row_count != 1u32 {
+        return error.StressBufferTooSmall;
+    }
+    const row: &OwnedRow = try query_result_row(&result, 0u32);
+    const actual: u64 = try owned_row_cell_u64(row, 0u16);
+    if actual != doc_id {
+        return error.StressBufferTooSmall;
+    }
+}
+
+fn run_fill_checkpoint_reopen_stress() i32 {
+    cleanup(STRESS_STEM_FILL);
+    defer {
+        cleanup(STRESS_STEM_FILL);
+    }
+
+    _ = db_test_create_at_stem(&g_fill_db, STRESS_STEM_FILL) catch {
+        return 1;
+    };
+    _ = db_test_create_collection(&g_fill_db, "users") catch {
+        return 2;
+    };
+
+    var i: u64 = 1u64;
+    while i <= STRESS_ROWS {
+        const inserted: u64 = insert_stress_doc(&g_fill_db, i) catch {
+            return 100 + i as i32;
+        };
+        if inserted != i {
+            return 4;
+        }
+
+        if i % 8u64 == 0u64 {
+            const count: u32 = query_count_all(&g_fill_db) catch {
+                return 5;
+            };
+            if count != i as u32 {
+                return 6;
+            }
+            const report: DbCheckReport = db_check(&g_fill_db) catch {
+                return 7;
+            };
+            if report.row_count != i as u32 {
+                return 8;
+            }
+        }
+        i = i + 1u64;
+    }
+
+    _ = db_exec(&g_fill_db, "CREATE INDEX users_age_idx ON users ($.age);") catch {
+        return 9;
+    };
+    _ = assert_primary_lookup(&g_fill_db, STRESS_ROWS) catch {
+        return 10;
+    };
+
+    const checkpoint_report: DbCheckReport = db_checkpoint(&g_fill_db) catch {
+        return 11;
+    };
+    if checkpoint_report.row_count != STRESS_ROWS as u32 {
+        return 12;
+    }
+
+    _ = db_test_open_at_stem(&g_reopened_db, STRESS_STEM_FILL) catch {
+        return 13;
+    };
+    const reopened_count: u32 = query_count_all(&g_reopened_db) catch {
+        return 14;
+    };
+    if reopened_count != STRESS_ROWS as u32 {
+        return 15;
+    }
+    _ = assert_primary_lookup(&g_reopened_db, STRESS_ROWS) catch {
+        return 16;
+    };
+
+    if STRESS_ROWS > DB_MAX_ROWS_PER_COLLECTION as u64 {
+        return 17;
+    }
+    return 0;
+}
+
+fn run_update_index_churn_stress() i32 {
+    cleanup(STRESS_STEM_CHURN);
+    defer {
+        cleanup(STRESS_STEM_CHURN);
+    }
+
+    _ = db_test_create_at_stem(&g_churn_db, STRESS_STEM_CHURN) catch {
+        return 31;
+    };
+    _ = db_test_create_collection(&g_churn_db, "users") catch {
+        return 32;
+    };
+
+    var i: u64 = 1u64;
+    while i <= STRESS_CHURN_ROWS {
+        _ = insert_stress_doc(&g_churn_db, i) catch {
+            return 33;
+        };
+        i = i + 1u64;
+    }
+
+    _ = db_exec(&g_churn_db, "CREATE INDEX users_age_idx ON users ($.age);") catch {
+        return 34;
+    };
+
+    var round: u64 = 0u64;
+    while round < 12u64 {
+        const target_id: u64 = (round % STRESS_CHURN_ROWS) + 1u64;
+        const target_age: u64 = 70u64 + round;
+        var update_sql: [byte: 128] = [];
+        const update_len: usize = build_update_age_sql(target_id, target_age, update_sql[0: 128]) catch {
+            return 35;
+        };
+        _ = db_exec(&g_churn_db, update_sql[0: update_len]) catch {
+            return 36;
+        };
+
+        var lookup_sql: [byte: 128] = [];
+        const lookup_len: usize = build_age_lookup_sql(target_age, lookup_sql[0: 128]) catch {
+            return 37;
+        };
+        const result: QueryResult = db_query(&g_churn_db, lookup_sql[0: lookup_len]) catch {
+            return 38;
+        };
+        if result.row_count != 1u32 {
+            return 39;
+        }
+        const row: &OwnedRow = query_result_row(&result, 0u32) catch {
+            return 40;
+        };
+        const age: i64 = owned_row_cell_i64(row, 1u16) catch {
+            return 41;
+        };
+        if age != target_age as i64 {
+            return 42;
+        }
+
+        if round % 4u64 == 3u64 {
+            const report: DbCheckReport = db_checkpoint(&g_churn_db) catch {
+                return 43;
+            };
+            if report.row_count != STRESS_CHURN_ROWS as u32 {
+                return 44;
+            }
+        }
+        round = round + 1u64;
+    }
+    return 0;
+}
+
+fn run_snapshot_pressure_cycle_stress() i32 {
+    cleanup(STRESS_STEM_PRESSURE);
+    defer {
+        cleanup(STRESS_STEM_PRESSURE);
+    }
+
+    _ = db_test_create_at_stem(&g_pressure_db, STRESS_STEM_PRESSURE) catch {
+        return 61;
+    };
+    _ = db_test_create_collection(&g_pressure_db, "users") catch {
+        return 62;
+    };
+    _ = insert_stress_doc(&g_pressure_db, 1u64) catch {
+        return 63;
+    };
+    _ = insert_stress_doc(&g_pressure_db, 2u64) catch {
+        return 64;
+    };
+
+    db_test_set_snapshot_policy(&g_pressure_db, SnapshotPressurePolicy{
+        soft_retired_bytes: 64u64,
+        hard_retired_bytes: 128u64,
+        max_retired_views: 1u32,
+        cursor_lease_ms: 30000u64,
+    });
+
+    var cycle: u64 = 0u64;
+    while cycle < 8u64 {
+        {
+            var cursor: QueryCursor = db_query_cursor(&g_pressure_db, "SELECT _id FROM users LIMIT 64;") catch {
+                return 65;
+            };
+            if !query_cursor_is_open(&cursor) {
+                return 66;
+            }
+            _ = insert_stress_doc(&g_pressure_db, 3u64 + cycle) catch {
+                return 67;
+            };
+            const status: SnapshotPressureStatus = db_test_snapshot_status(&g_pressure_db);
+            if status.retired_views != 1u32 || status.retired_bytes < 128u64 {
+                return 68;
+            }
+            const blocked: !u64 = insert_stress_doc(&g_pressure_db, 100u64 + cycle);
+            if blocked.error_id == 0u32 {
+                return 69;
+            }
+            if !(cursor_next(&cursor) catch {
+                return 70;
+            }) {
+                return 71;
+            }
+        }
+
+        const cleaned: SnapshotPressureStatus = db_test_snapshot_status(&g_pressure_db);
+        if cleaned.retired_views != 0u32 || cleaned.retired_bytes != 0u64 {
+            return 72;
+        }
+        cycle = cycle + 1u64;
+    }
+
+    const count: u32 = query_count_all(&g_pressure_db) catch {
+        return 73;
+    };
+    if count != 10u32 {
+        return 74;
+    }
+    return 0;
+}
+
+fn main() i32 {
+    set_process_stack_limit_bytes(64u64 * 1024u64 * 1024u64);
+
+    const a: i32 = run_fill_checkpoint_reopen_stress();
+    if a != 0 {
+        return a;
+    }
+    const b: i32 = run_update_index_churn_stress();
+    if b != 0 {
+        return b;
+    }
+    const c: i32 = run_snapshot_pressure_cycle_stress();
+    if c != 0 {
+        return c;
+    }
+    return 0;
+}

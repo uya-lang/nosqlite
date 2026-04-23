@@ -49,6 +49,7 @@
 - `nosqlite/test_phase13_format_upgrade.uya` -> `tests/storage/`
 - `nosqlite/test_catalog_basics.uya` -> `tests/storage/`
 - `nosqlite/test_index_btree.uya` -> `tests/storage/`
+- `nosqlite/test_stress_runtime.uya` -> `tests/exec/` + `tests/storage/` stress gate
 - `nosqlite/tests/verify_phase12_5_async_boundary.sh` -> Phase 12.5 async boundary verification
 - `nosqlite/tests/verify_phase14_typed_sql_errors.sh` -> Phase 14 typed SQL static-error verification
 - `nosqlite/tests/verify_definition_of_done.sh` -> Definition of Done verification

@@ -4,6 +4,7 @@
 - [详细设计](./nosqlite-design.md)
 - [实施 TODO](./nosqlite-todo.md)
 - [Definition of Done 验收矩阵](./nosqlite-definition-of-done.md)
+- [压力测试报告](./nosqlite-stress-report.md)
 - [资源模型](./nosqlite-resource-model.md)
 - [TDD 执行说明](./nosqlite-tdd.md)
 - [最小 API 草案](./nosqlite-api-draft.md)

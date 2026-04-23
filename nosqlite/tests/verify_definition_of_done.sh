@@ -29,6 +29,7 @@ run_uya_test "nosqlite/test_storage_wal_runtime.uya"
 run_uya_test "nosqlite/test_catalog_basics.uya"
 run_uya_test "nosqlite/test_index_btree.uya"
 run_uya_test "nosqlite/test_phase11_stability.uya"
+run_uya_test "nosqlite/test_stress_runtime.uya"
 
 bash nosqlite/tests/verify_phase12_5_async_boundary.sh >/tmp/nosqlite_dod_phase12_5.log 2>&1
 bash nosqlite/tests/verify_phase14_typed_sql_errors.sh >/tmp/nosqlite_dod_phase14.log 2>&1
