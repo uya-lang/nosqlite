@@ -6,6 +6,7 @@
 - [资源模型](./nosqlite-resource-model.md)
 - [TDD 执行说明](./nosqlite-tdd.md)
 - [最小 API 草案](./nosqlite-api-draft.md)
+- [SQL 语法说明](./nosqlite-sql-syntax.md)
 
 这组三份文档的关系是：
 

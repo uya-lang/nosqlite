@@ -1,0 +1,120 @@
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_u64;
+use std.string.strlen;
+
+use lib.doc.path.PathProgram;
+use lib.doc.path.path_program_compile;
+use lib.sql.token;
+use lib.sql.lexer;
+use lib.sql.ast;
+use lib.sql.parser;
+
+fn byte_slices_equal(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn cstr_slice(s: &const byte) &[byte] {
+    return s[0: strlen(s)];
+}
+
+test "nosqlite_sql_lexer_keywords_and_tokens" {
+    const sql: &[byte] = cstr_slice("SeLeCt _id, $.age FROM users WHERE $.age >= 18 LIMIT 10;");
+    const tokens: SqlTokenBuffer = try sql_lex(sql);
+
+    try assert_eq_i32(sql_token_count(&tokens) as i32, 18);
+    try assert_eq_i32((try sql_token_at(&tokens, 0u16)).kind as i32, SqlTokenKind.KW_SELECT as i32);
+    try assert_eq_i32((try sql_token_at(&tokens, 1u16)).kind as i32, SqlTokenKind.IDENT as i32);
+    try assert_eq_bool(byte_slices_equal((try sql_token_at(&tokens, 1u16)).text, &"_id"[0: 3]), true);
+    try assert_eq_i32((try sql_token_at(&tokens, 2u16)).kind as i32, SqlTokenKind.COMMA as i32);
+    try assert_eq_i32((try sql_token_at(&tokens, 3u16)).kind as i32, SqlTokenKind.DOLLAR as i32);
+    try assert_eq_i32((try sql_token_at(&tokens, 4u16)).kind as i32, SqlTokenKind.DOT as i32);
+    try assert_eq_i32((try sql_token_at(&tokens, 5u16)).kind as i32, SqlTokenKind.IDENT as i32);
+    try assert_eq_i32((try sql_token_at(&tokens, 6u16)).kind as i32, SqlTokenKind.KW_FROM as i32);
+    try assert_eq_i32((try sql_token_at(&tokens, 8u16)).kind as i32, SqlTokenKind.KW_WHERE as i32);
+    try assert_eq_i32((try sql_token_at(&tokens, 12u16)).kind as i32, SqlTokenKind.GE as i32);
+    try assert_eq_i32((try sql_token_at(&tokens, 13u16)).kind as i32, SqlTokenKind.INT as i32);
+    try assert_eq_i32((try sql_token_at(&tokens, 14u16)).kind as i32, SqlTokenKind.KW_LIMIT as i32);
+    try assert_eq_i32((try sql_token_at(&tokens, 15u16)).kind as i32, SqlTokenKind.INT as i32);
+    try assert_eq_i32((try sql_token_at(&tokens, 16u16)).kind as i32, SqlTokenKind.SEMI as i32);
+    try assert_eq_i32((try sql_token_at(&tokens, 17u16)).kind as i32, SqlTokenKind.EOF as i32);
+}
+
+test "nosqlite_sql_parse_create_collection_and_insert" {
+    const create_stmt: SqlStmt = try sql_parse(cstr_slice("CREATE COLLECTION users;"));
+    try assert_eq_i32(create_stmt.kind as i32, SqlStmtKind.CREATE_COLLECTION as i32);
+    try assert_eq_bool(byte_slices_equal(sql_identifier_slice(&create_stmt.create_collection.collection_name), &"users"[0: 5]), true);
+
+    const insert_sql: &[byte] = cstr_slice("INSERT INTO users JSON '{\"name\":\"ann\",\"age\":25}';");
+    const insert_stmt: SqlStmt = try sql_parse(insert_sql);
+    try assert_eq_i32(insert_stmt.kind as i32, SqlStmtKind.INSERT as i32);
+    try assert_eq_bool(byte_slices_equal(sql_identifier_slice(&insert_stmt.insert_stmt.collection_name), &"users"[0: 5]), true);
+    try assert_eq_bool(byte_slices_equal(insert_stmt.insert_stmt.json_text.text[0: insert_stmt.insert_stmt.json_text.text_len as usize], cstr_slice("{\"name\":\"ann\",\"age\":25}")), true);
+}
+
+test "nosqlite_sql_parse_select_precedence_and_limit" {
+    const sql: &[byte] = cstr_slice("SELECT _id, $.name FROM users WHERE NOT $.age < 18 AND $.active = TRUE OR $.score >= 10 LIMIT 5;");
+    const stmt: SqlStmt = try sql_parse(sql);
+    try assert_eq_i32(stmt.kind as i32, SqlStmtKind.SELECT as i32);
+    try assert_eq_i32(stmt.select_stmt.item_count as i32, 2);
+    try assert_eq_bool(byte_slices_equal(sql_identifier_slice(&stmt.select_stmt.collection_name), &"users"[0: 5]), true);
+    try assert_eq_bool(stmt.select_stmt.has_where, true);
+    try assert_eq_bool(stmt.select_stmt.has_limit, true);
+    try assert_eq_i32(stmt.select_stmt.limit_value as i32, 5);
+
+    const root: &SqlExprNode = try sql_expr_node(&stmt, stmt.select_stmt.where_expr);
+    try assert_eq_i32(root.kind as i32, SqlExprKind.BINARY as i32);
+    try assert_eq_i32(root.binary_op as i32, SqlBinaryOp.OR as i32);
+
+    const left_and: &SqlExprNode = try sql_expr_node(&stmt, root.left);
+    try assert_eq_i32(left_and.kind as i32, SqlExprKind.BINARY as i32);
+    try assert_eq_i32(left_and.binary_op as i32, SqlBinaryOp.AND as i32);
+
+    const not_node: &SqlExprNode = try sql_expr_node(&stmt, left_and.left);
+    try assert_eq_i32(not_node.kind as i32, SqlExprKind.UNARY as i32);
+    try assert_eq_i32(not_node.unary_op as i32, SqlUnaryOp.NOT as i32);
+
+    const compare_node: &SqlExprNode = try sql_expr_node(&stmt, not_node.left);
+    try assert_eq_i32(compare_node.kind as i32, SqlExprKind.BINARY as i32);
+    try assert_eq_i32(compare_node.binary_op as i32, SqlBinaryOp.LT as i32);
+}
+
+test "nosqlite_sql_parse_json_path_and_invalid_syntax" {
+    const stmt: SqlStmt = try sql_parse(cstr_slice("SELECT $.user.scores[1] FROM users;"));
+    const item_expr: &SqlExprNode = try sql_expr_node(&stmt, stmt.select_stmt.items[0].expr_index);
+    try assert_eq_i32(item_expr.kind as i32, SqlExprKind.PATH as i32);
+    try assert_eq_bool(byte_slices_equal(sql_path_slice(&item_expr.path), cstr_slice("$.user.scores[1]")), true);
+
+    const program: PathProgram = try path_program_compile(sql_path_slice(&item_expr.path));
+    try assert_eq_i32(program.step_count as i32, 3);
+
+    const bad0: !SqlStmt = sql_parse(cstr_slice("SELECT $ FROM users;"));
+    _ = bad0 catch {
+        const bad1: !SqlStmt = sql_parse(cstr_slice("CREATE COLLECTION SELECT;"));
+        _ = bad1 catch {
+            return;
+        };
+        return error.AssertionFailed;
+    };
+    return error.AssertionFailed;
+}
+
+test "nosqlite_sql_pretty_print_roundtrip" {
+    const sql: &[byte] = cstr_slice("select _id, $.name from users where $.age >= 18 and $.active = true limit 10;");
+    const stmt: SqlStmt = try sql_parse(sql);
+    var out: [byte: 256] = [];
+    const len: usize = try sql_stmt_pretty_print(&stmt, out[0: 256]);
+    const expected: &[byte] = cstr_slice("SELECT _id, $.name FROM users WHERE $.age >= 18 AND $.active = TRUE LIMIT 10;");
+    try assert_eq_u64(len as u64, expected.len as u64);
+    try assert_eq_bool(byte_slices_equal(out[0: len], expected), true);
+}

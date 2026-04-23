@@ -142,17 +142,17 @@
 
 ## Phase 6 - SQL Lexer / Parser
 
-- [ ] 先写失败测试：关键字、路径、表达式优先级、错误语法
-- [ ] 定义 token 集合
-- [ ] 实现 SQL lexer
-- [ ] 实现 `SELECT` 解析
-- [ ] 实现 `INSERT` 解析
-- [ ] 实现 `CREATE COLLECTION` 解析
-- [ ] 实现表达式解析
-- [ ] 实现 JSON path 语法解析
-- [ ] 实现 AST pretty print
-- [ ] 编写语法错误测试
-- [ ] 编写保留字测试
+- [x] 先写失败测试：关键字、路径、表达式优先级、错误语法
+- [x] 定义 token 集合
+- [x] 实现 SQL lexer
+- [x] 实现 `SELECT` 解析
+- [x] 实现 `INSERT` 解析
+- [x] 实现 `CREATE COLLECTION` 解析
+- [x] 实现表达式解析
+- [x] 实现 JSON path 语法解析
+- [x] 实现 AST pretty print
+- [x] 编写语法错误测试
+- [x] 编写保留字测试
 
 ## Phase 7 - Binder / Planner
 

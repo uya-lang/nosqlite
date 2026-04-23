@@ -14,6 +14,8 @@
   对应基础类型、错误码、资源模型、配置轮廓。
 - `nosqlite/tests/doc/`
   对应 `DocBlob`、路径、数值语义与编码规则。
+- `nosqlite/tests/sql/`
+  对应 SQL token、lexer、parser、JSON path 语法与 AST pretty print。
 - `nosqlite/tests/storage/`
   对应 pager、page header、meta page、WAL header、slotted page。
 - `nosqlite/tests/fixtures/`
@@ -31,6 +33,7 @@
 - `nosqlite/test_docblob_basics.uya` -> `tests/doc/`
 - `nosqlite/test_docblob_codec.uya` -> `tests/doc/`
 - `nosqlite/test_docblob_path.uya` -> `tests/doc/`
+- `nosqlite/test_sql_parser.uya` -> `tests/sql/`
 - `nosqlite/test_storage_page_basics.uya` -> `tests/storage/`
 - `nosqlite/test_storage_pager_runtime.uya` -> `tests/storage/`
 - `nosqlite/test_storage_slotted_page_runtime.uya` -> `tests/storage/`

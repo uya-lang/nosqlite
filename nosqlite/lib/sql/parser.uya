@@ -1,0 +1,437 @@
+// lib.sql - SQL parser
+// 模块路径：lib/sql/parser.uya → use lib.sql.parser;
+
+use lib.sql.token;
+use lib.sql.lexer;
+use lib.sql.ast;
+
+export error SqlParseUnexpectedToken;
+export error SqlParseTooManyItems;
+export error SqlParseTooManyExprNodes;
+export error SqlParseInvalidPath;
+
+struct SqlParser {
+    tokens: SqlTokenBuffer,
+    pos: u16,
+}
+
+fn sql_parser_current(parser: &SqlParser) SqlToken {
+    if parser == null || parser.pos as usize >= SQL_MAX_TOKENS || parser.pos >= parser.tokens.token_count {
+        return SqlToken{
+            kind: SqlTokenKind.EOF,
+            offset: 0u16,
+            len: 0u16,
+            text: &""[0: 0],
+        };
+    }
+    const pos: usize = parser.pos as usize;
+    if pos >= SQL_MAX_TOKENS {
+        return SqlToken{
+            kind: SqlTokenKind.EOF,
+            offset: 0u16,
+            len: 0u16,
+            text: &""[0: 0],
+        };
+    }
+    return parser.tokens.tokens[pos];
+}
+
+fn sql_parser_advance(parser: &SqlParser) void {
+    if parser.pos < parser.tokens.token_count {
+        parser.pos = parser.pos + 1u16;
+    }
+}
+
+fn sql_parser_match(parser: &SqlParser, kind: SqlTokenKind) bool {
+    if sql_parser_current(parser).kind == kind {
+        sql_parser_advance(parser);
+        return true;
+    }
+    return false;
+}
+
+fn sql_parser_expect(parser: &SqlParser, kind: SqlTokenKind) !SqlToken {
+    const token: SqlToken = sql_parser_current(parser);
+    if token.kind != kind {
+        return error.SqlParseUnexpectedToken;
+    }
+    sql_parser_advance(parser);
+    return token;
+}
+
+fn sql_parser_expect_identifier(parser: &SqlParser) !SqlIdentifier {
+    const token: SqlToken = try sql_parser_expect(parser, SqlTokenKind.IDENT);
+    return try sql_identifier_from_slice(token.text);
+}
+
+fn sql_parser_add_expr(stmt: &SqlStmt, node: &SqlExprNode) !i16 {
+    if stmt == null || node == null || stmt.expr_count as usize >= SQL_MAX_EXPR_NODES {
+        return error.SqlParseTooManyExprNodes;
+    }
+    const slot: usize = stmt.expr_count as usize;
+    stmt.expr_nodes[slot] = node[0];
+    stmt.expr_count = stmt.expr_count + 1u16;
+    return (slot as! i16) catch {
+        return error.SqlParseTooManyExprNodes;
+    };
+}
+
+fn sql_parse_path_expr(parser: &SqlParser) !SqlPathExpr {
+    _ = try sql_parser_expect(parser, SqlTokenKind.DOLLAR);
+    var path_buf: [byte: SQL_MAX_PATH_LEN] = [];
+    var cursor: usize = 0usize;
+    path_buf[cursor] = 36 as byte;
+    cursor = cursor + 1usize;
+
+    var step_seen: bool = false;
+    while true {
+        const token: SqlToken = sql_parser_current(parser);
+        if token.kind == SqlTokenKind.DOT {
+            if cursor + 1usize >= SQL_MAX_PATH_LEN {
+                return error.SqlParseInvalidPath;
+            }
+            path_buf[cursor] = 46 as byte;
+            cursor = cursor + 1usize;
+            sql_parser_advance(parser);
+            const field: SqlToken = try sql_parser_expect(parser, SqlTokenKind.IDENT);
+            if cursor + field.text.len > SQL_MAX_PATH_LEN {
+                return error.SqlParseInvalidPath;
+            }
+            var i: usize = 0usize;
+            while i < field.text.len {
+                path_buf[cursor] = field.text.ptr[i];
+                cursor = cursor + 1usize;
+                i = i + 1usize;
+            }
+            step_seen = true;
+            continue;
+        }
+        if token.kind == SqlTokenKind.LBRACKET {
+            if cursor + 1usize >= SQL_MAX_PATH_LEN {
+                return error.SqlParseInvalidPath;
+            }
+            path_buf[cursor] = 91 as byte;
+            cursor = cursor + 1usize;
+            sql_parser_advance(parser);
+            const index_token: SqlToken = try sql_parser_expect(parser, SqlTokenKind.INT);
+            if cursor + index_token.text.len + 1usize > SQL_MAX_PATH_LEN {
+                return error.SqlParseInvalidPath;
+            }
+            var i: usize = 0usize;
+            while i < index_token.text.len {
+                path_buf[cursor] = index_token.text.ptr[i];
+                cursor = cursor + 1usize;
+                i = i + 1usize;
+            }
+            _ = try sql_parser_expect(parser, SqlTokenKind.RBRACKET);
+            path_buf[cursor] = 93 as byte;
+            cursor = cursor + 1usize;
+            step_seen = true;
+            continue;
+        }
+        break;
+    }
+    if !step_seen {
+        return error.SqlParseInvalidPath;
+    }
+    return try sql_path_from_slice(path_buf[0: cursor]);
+}
+
+fn sql_parse_primary(parser: &SqlParser, stmt: &SqlStmt) !i16 {
+    const token: SqlToken = sql_parser_current(parser);
+    if token.kind == SqlTokenKind.IDENT {
+        sql_parser_advance(parser);
+        if token.text.len == 3 &&
+            token.text.ptr[0] == 95 &&
+            token.text.ptr[1] == 105 &&
+            token.text.ptr[2] == 100 {
+            return try sql_parser_add_expr(stmt, &SqlExprNode{
+                kind: SqlExprKind.SYSTEM_ID,
+                left: -1,
+                right: -1,
+                binary_op: SqlBinaryOp.EQ,
+                unary_op: SqlUnaryOp.NOT,
+                literal: SqlLiteral{},
+                path: SqlPathExpr{},
+            });
+        }
+        return error.SqlParseUnexpectedToken;
+    }
+    if token.kind == SqlTokenKind.DOLLAR {
+        const path_expr: SqlPathExpr = try sql_parse_path_expr(parser);
+        return try sql_parser_add_expr(stmt, &SqlExprNode{
+            kind: SqlExprKind.PATH,
+            left: -1,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: SqlUnaryOp.NOT,
+            literal: SqlLiteral{},
+            path: path_expr,
+        });
+    }
+    if token.kind == SqlTokenKind.INT || token.kind == SqlTokenKind.NUMBER {
+        sql_parser_advance(parser);
+        return try sql_parser_add_expr(stmt, &SqlExprNode{
+            kind: SqlExprKind.LITERAL,
+            left: -1,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: SqlUnaryOp.NOT,
+            literal: try sql_literal_from_text(SqlLiteralKind.NUMBER, token.text),
+            path: SqlPathExpr{},
+        });
+    }
+    if token.kind == SqlTokenKind.STRING {
+        sql_parser_advance(parser);
+        return try sql_parser_add_expr(stmt, &SqlExprNode{
+            kind: SqlExprKind.LITERAL,
+            left: -1,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: SqlUnaryOp.NOT,
+            literal: try sql_literal_from_text(SqlLiteralKind.STRING, token.text),
+            path: SqlPathExpr{},
+        });
+    }
+    if token.kind == SqlTokenKind.KW_TRUE {
+        sql_parser_advance(parser);
+        return try sql_parser_add_expr(stmt, &SqlExprNode{
+            kind: SqlExprKind.LITERAL,
+            left: -1,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: SqlUnaryOp.NOT,
+            literal: sql_literal_bool(true),
+            path: SqlPathExpr{},
+        });
+    }
+    if token.kind == SqlTokenKind.KW_FALSE {
+        sql_parser_advance(parser);
+        return try sql_parser_add_expr(stmt, &SqlExprNode{
+            kind: SqlExprKind.LITERAL,
+            left: -1,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: SqlUnaryOp.NOT,
+            literal: sql_literal_bool(false),
+            path: SqlPathExpr{},
+        });
+    }
+    if token.kind == SqlTokenKind.KW_NULL {
+        sql_parser_advance(parser);
+        return try sql_parser_add_expr(stmt, &SqlExprNode{
+            kind: SqlExprKind.LITERAL,
+            left: -1,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: SqlUnaryOp.NOT,
+            literal: sql_literal_null(),
+            path: SqlPathExpr{},
+        });
+    }
+    if token.kind == SqlTokenKind.LPAREN {
+        sql_parser_advance(parser);
+        const expr: i16 = try sql_parse_expr(parser, stmt);
+        _ = try sql_parser_expect(parser, SqlTokenKind.RPAREN);
+        return expr;
+    }
+    return error.SqlParseUnexpectedToken;
+}
+
+fn sql_parse_prefix(parser: &SqlParser, stmt: &SqlStmt) !i16 {
+    if sql_parser_match(parser, SqlTokenKind.MINUS) {
+        const child: i16 = try sql_parse_prefix(parser, stmt);
+        return try sql_parser_add_expr(stmt, &SqlExprNode{
+            kind: SqlExprKind.UNARY,
+            left: child,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: SqlUnaryOp.NEGATE,
+            literal: SqlLiteral{},
+            path: SqlPathExpr{},
+        });
+    }
+    return try sql_parse_primary(parser, stmt);
+}
+
+fn sql_parse_comparison(parser: &SqlParser, stmt: &SqlStmt) !i16 {
+    var left: i16 = try sql_parse_prefix(parser, stmt);
+    if sql_parser_match(parser, SqlTokenKind.KW_IS) {
+        _ = try sql_parser_expect(parser, SqlTokenKind.KW_NULL);
+        return try sql_parser_add_expr(stmt, &SqlExprNode{
+            kind: SqlExprKind.IS_NULL,
+            left: left,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: SqlUnaryOp.NOT,
+            literal: SqlLiteral{},
+            path: SqlPathExpr{},
+        });
+    }
+    const token: SqlToken = sql_parser_current(parser);
+    var op: SqlBinaryOp = SqlBinaryOp.EQ;
+    if token.kind == SqlTokenKind.EQ {
+        op = SqlBinaryOp.EQ;
+    } else if token.kind == SqlTokenKind.NE {
+        op = SqlBinaryOp.NE;
+    } else if token.kind == SqlTokenKind.LT {
+        op = SqlBinaryOp.LT;
+    } else if token.kind == SqlTokenKind.LE {
+        op = SqlBinaryOp.LE;
+    } else if token.kind == SqlTokenKind.GT {
+        op = SqlBinaryOp.GT;
+    } else if token.kind == SqlTokenKind.GE {
+        op = SqlBinaryOp.GE;
+    } else {
+        return left;
+    }
+    sql_parser_advance(parser);
+    const right: i16 = try sql_parse_prefix(parser, stmt);
+    left = try sql_parser_add_expr(stmt, &SqlExprNode{
+        kind: SqlExprKind.BINARY,
+        left: left,
+        right: right,
+        binary_op: op,
+        unary_op: SqlUnaryOp.NOT,
+        literal: SqlLiteral{},
+        path: SqlPathExpr{},
+    });
+    return left;
+}
+
+fn sql_parse_not(parser: &SqlParser, stmt: &SqlStmt) !i16 {
+    if sql_parser_match(parser, SqlTokenKind.KW_NOT) {
+        const child: i16 = try sql_parse_not(parser, stmt);
+        return try sql_parser_add_expr(stmt, &SqlExprNode{
+            kind: SqlExprKind.UNARY,
+            left: child,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: SqlUnaryOp.NOT,
+            literal: SqlLiteral{},
+            path: SqlPathExpr{},
+        });
+    }
+    return try sql_parse_comparison(parser, stmt);
+}
+
+fn sql_parse_and(parser: &SqlParser, stmt: &SqlStmt) !i16 {
+    var left: i16 = try sql_parse_not(parser, stmt);
+    while sql_parser_match(parser, SqlTokenKind.KW_AND) {
+        const right: i16 = try sql_parse_not(parser, stmt);
+        left = try sql_parser_add_expr(stmt, &SqlExprNode{
+            kind: SqlExprKind.BINARY,
+            left: left,
+            right: right,
+            binary_op: SqlBinaryOp.AND,
+            unary_op: SqlUnaryOp.NOT,
+            literal: SqlLiteral{},
+            path: SqlPathExpr{},
+        });
+    }
+    return left;
+}
+
+fn sql_parse_or(parser: &SqlParser, stmt: &SqlStmt) !i16 {
+    var left: i16 = try sql_parse_and(parser, stmt);
+    while sql_parser_match(parser, SqlTokenKind.KW_OR) {
+        const right: i16 = try sql_parse_and(parser, stmt);
+        left = try sql_parser_add_expr(stmt, &SqlExprNode{
+            kind: SqlExprKind.BINARY,
+            left: left,
+            right: right,
+            binary_op: SqlBinaryOp.OR,
+            unary_op: SqlUnaryOp.NOT,
+            literal: SqlLiteral{},
+            path: SqlPathExpr{},
+        });
+    }
+    return left;
+}
+
+fn sql_parse_expr(parser: &SqlParser, stmt: &SqlStmt) !i16 {
+    return try sql_parse_or(parser, stmt);
+}
+
+fn sql_parse_select(parser: &SqlParser, stmt: &SqlStmt) !void {
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_SELECT);
+    stmt.kind = SqlStmtKind.SELECT;
+    stmt.select_stmt.item_count = 0u16;
+    stmt.select_stmt.has_where = false;
+    stmt.select_stmt.where_expr = -1;
+    stmt.select_stmt.has_limit = false;
+    stmt.select_stmt.limit_value = 0u32;
+
+    while true {
+        if stmt.select_stmt.item_count as usize >= SQL_MAX_SELECT_ITEMS {
+            return error.SqlParseTooManyItems;
+        }
+        const expr_index: i16 = try sql_parse_expr(parser, stmt);
+        const slot: usize = stmt.select_stmt.item_count as usize;
+        if slot >= SQL_MAX_SELECT_ITEMS {
+            return error.SqlParseTooManyItems;
+        }
+        stmt.select_stmt.items[slot].expr_index = expr_index;
+        stmt.select_stmt.item_count = stmt.select_stmt.item_count + 1u16;
+        if !sql_parser_match(parser, SqlTokenKind.COMMA) {
+            break;
+        }
+    }
+
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_FROM);
+    stmt.select_stmt.collection_name = try sql_parser_expect_identifier(parser);
+    if sql_parser_match(parser, SqlTokenKind.KW_WHERE) {
+        stmt.select_stmt.has_where = true;
+        stmt.select_stmt.where_expr = try sql_parse_expr(parser, stmt);
+    }
+    if sql_parser_match(parser, SqlTokenKind.KW_LIMIT) {
+        stmt.select_stmt.has_limit = true;
+        const limit_token: SqlToken = try sql_parser_expect(parser, SqlTokenKind.INT);
+        var value: u32 = 0u32;
+        var i: usize = 0usize;
+        while i < limit_token.text.len {
+            value = value * 10u32 + (limit_token.text.ptr[i] as u32 - 48u32);
+            i = i + 1usize;
+        }
+        stmt.select_stmt.limit_value = value;
+    }
+}
+
+fn sql_parse_insert(parser: &SqlParser, stmt: &SqlStmt) !void {
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_INSERT);
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_INTO);
+    stmt.kind = SqlStmtKind.INSERT;
+    stmt.insert_stmt.collection_name = try sql_parser_expect_identifier(parser);
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_JSON);
+    const json_token: SqlToken = try sql_parser_expect(parser, SqlTokenKind.STRING);
+    stmt.insert_stmt.json_text = try sql_literal_from_text(SqlLiteralKind.STRING, json_token.text);
+}
+
+fn sql_parse_create_collection(parser: &SqlParser, stmt: &SqlStmt) !void {
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_CREATE);
+    _ = try sql_parser_expect(parser, SqlTokenKind.KW_COLLECTION);
+    stmt.kind = SqlStmtKind.CREATE_COLLECTION;
+    stmt.create_collection.collection_name = try sql_parser_expect_identifier(parser);
+}
+
+export fn sql_parse(input: &[byte]) !SqlStmt {
+    var parser: SqlParser = SqlParser{
+        tokens: try sql_lex(input),
+        pos: 0u16,
+    };
+    var stmt: SqlStmt = SqlStmt{};
+    const first: SqlTokenKind = sql_parser_current(&parser).kind;
+    if first == SqlTokenKind.KW_SELECT {
+        try sql_parse_select(&parser, &stmt);
+    } else if first == SqlTokenKind.KW_INSERT {
+        try sql_parse_insert(&parser, &stmt);
+    } else if first == SqlTokenKind.KW_CREATE {
+        try sql_parse_create_collection(&parser, &stmt);
+    } else {
+        return error.SqlParseUnexpectedToken;
+    }
+
+    _ = sql_parser_match(&parser, SqlTokenKind.SEMI);
+    _ = try sql_parser_expect(&parser, SqlTokenKind.EOF);
+    return stmt;
+}

@@ -1,0 +1,164 @@
+// lib.sql - SQL token definitions
+// 模块路径：lib/sql/token.uya → use lib.sql.token;
+
+export enum SqlTokenKind {
+    EOF,
+    IDENT,
+    INT,
+    NUMBER,
+    STRING,
+    COMMA,
+    SEMI,
+    DOT,
+    DOLLAR,
+    LBRACKET,
+    RBRACKET,
+    LPAREN,
+    RPAREN,
+    EQ,
+    NE,
+    LT,
+    LE,
+    GT,
+    GE,
+    PLUS,
+    MINUS,
+    KW_SELECT,
+    KW_FROM,
+    KW_WHERE,
+    KW_LIMIT,
+    KW_INSERT,
+    KW_INTO,
+    KW_JSON,
+    KW_CREATE,
+    KW_COLLECTION,
+    KW_AND,
+    KW_OR,
+    KW_NOT,
+    KW_IS,
+    KW_NULL,
+    KW_TRUE,
+    KW_FALSE,
+}
+
+export struct SqlToken {
+    kind: SqlTokenKind,
+    offset: u16,
+    len: u16,
+    text: &[byte],
+}
+
+export fn sql_token_kind_name(kind: SqlTokenKind) &[byte] {
+    if kind == SqlTokenKind.EOF {
+        return &"EOF"[0: 3];
+    }
+    if kind == SqlTokenKind.IDENT {
+        return &"IDENT"[0: 5];
+    }
+    if kind == SqlTokenKind.INT {
+        return &"INT"[0: 3];
+    }
+    if kind == SqlTokenKind.NUMBER {
+        return &"NUMBER"[0: 6];
+    }
+    if kind == SqlTokenKind.STRING {
+        return &"STRING"[0: 6];
+    }
+    if kind == SqlTokenKind.COMMA {
+        return &"COMMA"[0: 5];
+    }
+    if kind == SqlTokenKind.SEMI {
+        return &"SEMI"[0: 4];
+    }
+    if kind == SqlTokenKind.DOT {
+        return &"DOT"[0: 3];
+    }
+    if kind == SqlTokenKind.DOLLAR {
+        return &"DOLLAR"[0: 6];
+    }
+    if kind == SqlTokenKind.LBRACKET {
+        return &"LBRACKET"[0: 8];
+    }
+    if kind == SqlTokenKind.RBRACKET {
+        return &"RBRACKET"[0: 8];
+    }
+    if kind == SqlTokenKind.LPAREN {
+        return &"LPAREN"[0: 6];
+    }
+    if kind == SqlTokenKind.RPAREN {
+        return &"RPAREN"[0: 6];
+    }
+    if kind == SqlTokenKind.EQ {
+        return &"EQ"[0: 2];
+    }
+    if kind == SqlTokenKind.NE {
+        return &"NE"[0: 2];
+    }
+    if kind == SqlTokenKind.LT {
+        return &"LT"[0: 2];
+    }
+    if kind == SqlTokenKind.LE {
+        return &"LE"[0: 2];
+    }
+    if kind == SqlTokenKind.GT {
+        return &"GT"[0: 2];
+    }
+    if kind == SqlTokenKind.GE {
+        return &"GE"[0: 2];
+    }
+    if kind == SqlTokenKind.PLUS {
+        return &"PLUS"[0: 4];
+    }
+    if kind == SqlTokenKind.MINUS {
+        return &"MINUS"[0: 5];
+    }
+    if kind == SqlTokenKind.KW_SELECT {
+        return &"SELECT"[0: 6];
+    }
+    if kind == SqlTokenKind.KW_FROM {
+        return &"FROM"[0: 4];
+    }
+    if kind == SqlTokenKind.KW_WHERE {
+        return &"WHERE"[0: 5];
+    }
+    if kind == SqlTokenKind.KW_LIMIT {
+        return &"LIMIT"[0: 5];
+    }
+    if kind == SqlTokenKind.KW_INSERT {
+        return &"INSERT"[0: 6];
+    }
+    if kind == SqlTokenKind.KW_INTO {
+        return &"INTO"[0: 4];
+    }
+    if kind == SqlTokenKind.KW_JSON {
+        return &"JSON"[0: 4];
+    }
+    if kind == SqlTokenKind.KW_CREATE {
+        return &"CREATE"[0: 6];
+    }
+    if kind == SqlTokenKind.KW_COLLECTION {
+        return &"COLLECTION"[0: 10];
+    }
+    if kind == SqlTokenKind.KW_AND {
+        return &"AND"[0: 3];
+    }
+    if kind == SqlTokenKind.KW_OR {
+        return &"OR"[0: 2];
+    }
+    if kind == SqlTokenKind.KW_NOT {
+        return &"NOT"[0: 3];
+    }
+    if kind == SqlTokenKind.KW_IS {
+        return &"IS"[0: 2];
+    }
+    if kind == SqlTokenKind.KW_NULL {
+        return &"NULL"[0: 4];
+    }
+    if kind == SqlTokenKind.KW_TRUE {
+        return &"TRUE"[0: 4];
+    }
+    if kind == SqlTokenKind.KW_FALSE {
+        return &"FALSE"[0: 5];
+    }
+    return &"UNKNOWN"[0: 7];
+}

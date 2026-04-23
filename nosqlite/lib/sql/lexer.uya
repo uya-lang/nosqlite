@@ -1,0 +1,320 @@
+// lib.sql - SQL lexer
+// 模块路径：lib/sql/lexer.uya → use lib.sql.lexer;
+
+use lib.sql.token;
+
+export error SqlLexerInvalidToken;
+export error SqlLexerUnterminatedString;
+export error SqlLexerTooManyTokens;
+export error SqlLexerIdentifierTooLong;
+
+export const SQL_MAX_TOKENS: usize = 256;
+
+export struct SqlTokenBuffer {
+    token_count: u16,
+    tokens: [SqlToken: SQL_MAX_TOKENS],
+}
+
+fn sql_is_space(b: byte) bool {
+    return b == 32 || b == 9 || b == 10 || b == 13;
+}
+
+fn sql_is_alpha(b: byte) bool {
+    return (b >= 65 && b <= 90) || (b >= 97 && b <= 122);
+}
+
+fn sql_is_digit(b: byte) bool {
+    return b >= 48 && b <= 57;
+}
+
+fn sql_is_ident_start(b: byte) bool {
+    return sql_is_alpha(b) || b == 95;
+}
+
+fn sql_is_ident_continue(b: byte) bool {
+    return sql_is_ident_start(b) || sql_is_digit(b);
+}
+
+fn sql_ascii_upper(b: byte) byte {
+    if b >= 97 && b <= 122 {
+        return b - 32;
+    }
+    return b;
+}
+
+fn sql_keyword_eq(text: &[byte], keyword: &[byte]) bool {
+    if text.len != keyword.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < text.len {
+        if sql_ascii_upper(text.ptr[i]) != keyword.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn sql_keyword_kind(text: &[byte]) SqlTokenKind {
+    if sql_keyword_eq(text, &"SELECT"[0: 6]) {
+        return SqlTokenKind.KW_SELECT;
+    }
+    if sql_keyword_eq(text, &"FROM"[0: 4]) {
+        return SqlTokenKind.KW_FROM;
+    }
+    if sql_keyword_eq(text, &"WHERE"[0: 5]) {
+        return SqlTokenKind.KW_WHERE;
+    }
+    if sql_keyword_eq(text, &"LIMIT"[0: 5]) {
+        return SqlTokenKind.KW_LIMIT;
+    }
+    if sql_keyword_eq(text, &"INSERT"[0: 6]) {
+        return SqlTokenKind.KW_INSERT;
+    }
+    if sql_keyword_eq(text, &"INTO"[0: 4]) {
+        return SqlTokenKind.KW_INTO;
+    }
+    if sql_keyword_eq(text, &"JSON"[0: 4]) {
+        return SqlTokenKind.KW_JSON;
+    }
+    if sql_keyword_eq(text, &"CREATE"[0: 6]) {
+        return SqlTokenKind.KW_CREATE;
+    }
+    if sql_keyword_eq(text, &"COLLECTION"[0: 10]) {
+        return SqlTokenKind.KW_COLLECTION;
+    }
+    if sql_keyword_eq(text, &"AND"[0: 3]) {
+        return SqlTokenKind.KW_AND;
+    }
+    if sql_keyword_eq(text, &"OR"[0: 2]) {
+        return SqlTokenKind.KW_OR;
+    }
+    if sql_keyword_eq(text, &"NOT"[0: 3]) {
+        return SqlTokenKind.KW_NOT;
+    }
+    if sql_keyword_eq(text, &"IS"[0: 2]) {
+        return SqlTokenKind.KW_IS;
+    }
+    if sql_keyword_eq(text, &"NULL"[0: 4]) {
+        return SqlTokenKind.KW_NULL;
+    }
+    if sql_keyword_eq(text, &"TRUE"[0: 4]) {
+        return SqlTokenKind.KW_TRUE;
+    }
+    if sql_keyword_eq(text, &"FALSE"[0: 5]) {
+        return SqlTokenKind.KW_FALSE;
+    }
+    return SqlTokenKind.IDENT;
+}
+
+fn sql_push_token(buf: &SqlTokenBuffer, kind: SqlTokenKind, offset: usize, len: usize, text: &[byte]) !void {
+    if buf == null || buf.token_count as usize >= SQL_MAX_TOKENS {
+        return error.SqlLexerTooManyTokens;
+    }
+    const slot: usize = buf.token_count as usize;
+    buf.tokens[slot] = SqlToken{
+        kind: kind,
+        offset: (offset as! u16) catch {
+            return error.SqlLexerTooManyTokens;
+        },
+        len: (len as! u16) catch {
+            return error.SqlLexerTooManyTokens;
+        },
+        text: text,
+    };
+    buf.token_count = buf.token_count + 1u16;
+}
+
+export fn sql_lex(input: &[byte]) !SqlTokenBuffer {
+    if input.ptr == null {
+        return error.SqlLexerInvalidToken;
+    }
+    var out: SqlTokenBuffer = SqlTokenBuffer{};
+    var pos: usize = 0;
+    while pos < input.len {
+        const b: byte = input.ptr[pos];
+        if sql_is_space(b) {
+            pos = pos + 1;
+            continue;
+        }
+
+        if sql_is_ident_start(b) {
+            const start: usize = pos;
+            pos = pos + 1;
+            while pos < input.len && sql_is_ident_continue(input.ptr[pos]) {
+                pos = pos + 1;
+            }
+            const text: &[byte] = input[start: pos - start];
+            try sql_push_token(&out, sql_keyword_kind(text), start, pos - start, text);
+            continue;
+        }
+
+        if sql_is_digit(b) {
+            const start: usize = pos;
+            var kind: SqlTokenKind = SqlTokenKind.INT;
+            pos = pos + 1;
+            while pos < input.len && sql_is_digit(input.ptr[pos]) {
+                pos = pos + 1;
+            }
+            if pos + 1 <= input.len && pos < input.len && input.ptr[pos] == 46 && pos + 1 < input.len && sql_is_digit(input.ptr[pos + 1]) {
+                kind = SqlTokenKind.NUMBER;
+                pos = pos + 1;
+                while pos < input.len && sql_is_digit(input.ptr[pos]) {
+                    pos = pos + 1;
+                }
+            }
+            if pos < input.len && (input.ptr[pos] == 101 || input.ptr[pos] == 69) {
+                const exp_pos: usize = pos;
+                var scan: usize = pos + 1;
+                if scan < input.len && (input.ptr[scan] == 43 || input.ptr[scan] == 45) {
+                    scan = scan + 1;
+                }
+                if scan >= input.len || !sql_is_digit(input.ptr[scan]) {
+                    return error.SqlLexerInvalidToken;
+                }
+                kind = SqlTokenKind.NUMBER;
+                pos = exp_pos + 1;
+                if pos < input.len && (input.ptr[pos] == 43 || input.ptr[pos] == 45) {
+                    pos = pos + 1;
+                }
+                while pos < input.len && sql_is_digit(input.ptr[pos]) {
+                    pos = pos + 1;
+                }
+            }
+            try sql_push_token(&out, kind, start, pos - start, input[start: pos - start]);
+            continue;
+        }
+
+        if b == 39 {
+            const start: usize = pos;
+            pos = pos + 1;
+            const text_start: usize = pos;
+            var closed: bool = false;
+            while pos < input.len {
+                if input.ptr[pos] == 39 {
+                    if pos + 1 < input.len && input.ptr[pos + 1] == 39 {
+                        pos = pos + 2;
+                        continue;
+                    }
+                    const text: &[byte] = input[text_start: pos - text_start];
+                    pos = pos + 1;
+                    try sql_push_token(&out, SqlTokenKind.STRING, start, pos - start, text);
+                    closed = true;
+                    break;
+                }
+                pos = pos + 1;
+            }
+            if !closed {
+                return error.SqlLexerUnterminatedString;
+            }
+            continue;
+        }
+
+        if b == 44 {
+            try sql_push_token(&out, SqlTokenKind.COMMA, pos, 1usize, input[pos: 1]);
+            pos = pos + 1;
+            continue;
+        }
+        if b == 59 {
+            try sql_push_token(&out, SqlTokenKind.SEMI, pos, 1usize, input[pos: 1]);
+            pos = pos + 1;
+            continue;
+        }
+        if b == 46 {
+            try sql_push_token(&out, SqlTokenKind.DOT, pos, 1usize, input[pos: 1]);
+            pos = pos + 1;
+            continue;
+        }
+        if b == 36 {
+            try sql_push_token(&out, SqlTokenKind.DOLLAR, pos, 1usize, input[pos: 1]);
+            pos = pos + 1;
+            continue;
+        }
+        if b == 91 {
+            try sql_push_token(&out, SqlTokenKind.LBRACKET, pos, 1usize, input[pos: 1]);
+            pos = pos + 1;
+            continue;
+        }
+        if b == 93 {
+            try sql_push_token(&out, SqlTokenKind.RBRACKET, pos, 1usize, input[pos: 1]);
+            pos = pos + 1;
+            continue;
+        }
+        if b == 40 {
+            try sql_push_token(&out, SqlTokenKind.LPAREN, pos, 1usize, input[pos: 1]);
+            pos = pos + 1;
+            continue;
+        }
+        if b == 41 {
+            try sql_push_token(&out, SqlTokenKind.RPAREN, pos, 1usize, input[pos: 1]);
+            pos = pos + 1;
+            continue;
+        }
+        if b == 43 {
+            try sql_push_token(&out, SqlTokenKind.PLUS, pos, 1usize, input[pos: 1]);
+            pos = pos + 1;
+            continue;
+        }
+        if b == 45 {
+            try sql_push_token(&out, SqlTokenKind.MINUS, pos, 1usize, input[pos: 1]);
+            pos = pos + 1;
+            continue;
+        }
+        if b == 61 {
+            try sql_push_token(&out, SqlTokenKind.EQ, pos, 1usize, input[pos: 1]);
+            pos = pos + 1;
+            continue;
+        }
+        if b == 33 {
+            if pos + 1 >= input.len || input.ptr[pos + 1] != 61 {
+                return error.SqlLexerInvalidToken;
+            }
+            try sql_push_token(&out, SqlTokenKind.NE, pos, 2usize, input[pos: 2]);
+            pos = pos + 2;
+            continue;
+        }
+        if b == 60 {
+            if pos + 1 < input.len && input.ptr[pos + 1] == 61 {
+                try sql_push_token(&out, SqlTokenKind.LE, pos, 2usize, input[pos: 2]);
+                pos = pos + 2;
+                continue;
+            }
+            try sql_push_token(&out, SqlTokenKind.LT, pos, 1usize, input[pos: 1]);
+            pos = pos + 1;
+            continue;
+        }
+        if b == 62 {
+            if pos + 1 < input.len && input.ptr[pos + 1] == 61 {
+                try sql_push_token(&out, SqlTokenKind.GE, pos, 2usize, input[pos: 2]);
+                pos = pos + 2;
+                continue;
+            }
+            try sql_push_token(&out, SqlTokenKind.GT, pos, 1usize, input[pos: 1]);
+            pos = pos + 1;
+            continue;
+        }
+
+        return error.SqlLexerInvalidToken;
+    }
+    try sql_push_token(&out, SqlTokenKind.EOF, input.len, 0usize, &""[0: 0]);
+    return out;
+}
+
+export fn sql_token_count(buf: &SqlTokenBuffer) u16 {
+    if buf == null {
+        return 0u16;
+    }
+    return buf.token_count;
+}
+
+export fn sql_token_at(buf: &SqlTokenBuffer, idx: u16) !SqlToken {
+    if buf == null || idx >= buf.token_count {
+        return error.SqlLexerInvalidToken;
+    }
+    const pos: usize = idx as usize;
+    if pos >= SQL_MAX_TOKENS {
+        return error.SqlLexerInvalidToken;
+    }
+    return buf.tokens[pos];
+}

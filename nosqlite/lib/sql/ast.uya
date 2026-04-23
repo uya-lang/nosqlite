@@ -1,0 +1,416 @@
+// lib.sql - SQL AST definitions and pretty print
+// 模块路径：lib/sql/ast.uya → use lib.sql.ast;
+
+use std.mem.mem.mem_copy;
+
+fn sql_expr_precedence(node: &SqlExprNode) i32 {
+    if node == null {
+        return 0;
+    }
+    if node.kind == SqlExprKind.BINARY {
+        if node.binary_op == SqlBinaryOp.OR {
+            return 1;
+        }
+        if node.binary_op == SqlBinaryOp.AND {
+            return 2;
+        }
+        return 3;
+    }
+    if node.kind == SqlExprKind.IS_NULL {
+        return 3;
+    }
+    if node.kind == SqlExprKind.UNARY {
+        return 4;
+    }
+    return 5;
+}
+
+export error SqlAstBufferTooSmall;
+export error SqlAstIdentifierTooLong;
+export error SqlAstLiteralTooLong;
+export error SqlAstPathTooLong;
+export error SqlAstInvalidNode;
+
+export const SQL_MAX_IDENTIFIER_LEN: usize = 64;
+export const SQL_MAX_PATH_LEN: usize = 128;
+export const SQL_MAX_LITERAL_LEN: usize = 2048;
+export const SQL_MAX_SELECT_ITEMS: usize = 16;
+export const SQL_MAX_EXPR_NODES: usize = 128;
+
+export enum SqlStmtKind {
+    CREATE_COLLECTION,
+    INSERT,
+    SELECT,
+}
+
+export struct SqlIdentifier {
+    len: u16,
+    bytes: [byte: SQL_MAX_IDENTIFIER_LEN],
+}
+
+export struct SqlPathExpr {
+    len: u16,
+    bytes: [byte: SQL_MAX_PATH_LEN],
+}
+
+export enum SqlLiteralKind {
+    NULL,
+    BOOL,
+    NUMBER,
+    STRING,
+}
+
+export struct SqlLiteral {
+    kind: SqlLiteralKind,
+    bool_value: bool,
+    text_len: u16,
+    text: [byte: SQL_MAX_LITERAL_LEN],
+}
+
+export enum SqlExprKind {
+    SYSTEM_ID,
+    PATH,
+    LITERAL,
+    BINARY,
+    UNARY,
+    IS_NULL,
+}
+
+export enum SqlBinaryOp {
+    OR,
+    AND,
+    EQ,
+    NE,
+    LT,
+    LE,
+    GT,
+    GE,
+}
+
+export enum SqlUnaryOp {
+    NOT,
+    NEGATE,
+}
+
+export struct SqlExprNode {
+    kind: SqlExprKind,
+    left: i16,
+    right: i16,
+    binary_op: SqlBinaryOp,
+    unary_op: SqlUnaryOp,
+    literal: SqlLiteral,
+    path: SqlPathExpr,
+}
+
+export struct SqlSelectItem {
+    expr_index: i16,
+}
+
+export struct SqlCreateCollectionStmt {
+    collection_name: SqlIdentifier,
+}
+
+export struct SqlInsertStmt {
+    collection_name: SqlIdentifier,
+    json_text: SqlLiteral,
+}
+
+export struct SqlSelectStmt {
+    collection_name: SqlIdentifier,
+    item_count: u16,
+    items: [SqlSelectItem: SQL_MAX_SELECT_ITEMS],
+    has_where: bool,
+    where_expr: i16,
+    has_limit: bool,
+    limit_value: u32,
+}
+
+export struct SqlStmt {
+    kind: SqlStmtKind,
+    expr_count: u16,
+    expr_nodes: [SqlExprNode: SQL_MAX_EXPR_NODES],
+    create_collection: SqlCreateCollectionStmt,
+    insert_stmt: SqlInsertStmt,
+    select_stmt: SqlSelectStmt,
+}
+
+fn sql_append_bytes(out: &[byte], cursor: &usize, data: &[byte]) !void {
+    if out.ptr == null || cursor == null || cursor[0] + data.len > out.len {
+        return error.SqlAstBufferTooSmall;
+    }
+    if data.len > 0 {
+        _ = mem_copy(&out.ptr[cursor[0]], data.ptr, data.len);
+    }
+    cursor[0] = cursor[0] + data.len;
+}
+
+fn sql_append_byte(out: &[byte], cursor: &usize, b: byte) !void {
+    if out.ptr == null || cursor == null || cursor[0] >= out.len {
+        return error.SqlAstBufferTooSmall;
+    }
+    out.ptr[cursor[0]] = b;
+    cursor[0] = cursor[0] + 1usize;
+}
+
+fn sql_append_u32_decimal(out: &[byte], cursor: &usize, value: u32) !void {
+    var digits: [byte: 16] = [];
+    var tmp: u32 = value;
+    var len: usize = 0usize;
+    if tmp == 0u32 {
+        digits[0] = 48 as byte;
+        len = 1usize;
+    } else {
+        while tmp > 0u32 {
+            if len >= @len(digits) {
+                return error.SqlAstBufferTooSmall;
+            }
+            digits[len] = ((48u32 + (tmp % 10u32)) as! byte).value;
+            len = len + 1usize;
+            tmp = tmp / 10u32;
+        }
+    }
+    while len > 0usize {
+        len = len - 1usize;
+        const digit_idx: usize = len;
+        if digit_idx >= @len(digits) {
+            return error.SqlAstBufferTooSmall;
+        }
+        try sql_append_byte(out, cursor, digits[digit_idx]);
+    }
+}
+
+fn sql_pretty_print_expr(stmt: &SqlStmt, expr_index: i16, out: &[byte], cursor: &usize) !void {
+    if stmt == null || expr_index < 0 || expr_index >= stmt.expr_count as i16 {
+        return error.SqlAstInvalidNode;
+    }
+    const node_idx: usize = (expr_index as! usize) catch {
+        return error.SqlAstInvalidNode;
+    };
+    if node_idx >= SQL_MAX_EXPR_NODES {
+        return error.SqlAstInvalidNode;
+    }
+    const node: &SqlExprNode = &stmt.expr_nodes[node_idx];
+    if node.kind == SqlExprKind.SYSTEM_ID {
+        try sql_append_bytes(out, cursor, &"_id"[0: 3]);
+        return;
+    }
+    if node.kind == SqlExprKind.PATH {
+        try sql_append_bytes(out, cursor, node.path.bytes[0: node.path.len as usize]);
+        return;
+    }
+    if node.kind == SqlExprKind.LITERAL {
+        if node.literal.kind == SqlLiteralKind.NULL {
+            try sql_append_bytes(out, cursor, &"NULL"[0: 4]);
+            return;
+        }
+        if node.literal.kind == SqlLiteralKind.BOOL {
+            if node.literal.bool_value {
+                try sql_append_bytes(out, cursor, &"TRUE"[0: 4]);
+            } else {
+                try sql_append_bytes(out, cursor, &"FALSE"[0: 5]);
+            }
+            return;
+        }
+        if node.literal.kind == SqlLiteralKind.STRING {
+            try sql_append_byte(out, cursor, 39 as byte);
+            try sql_append_bytes(out, cursor, node.literal.text[0: node.literal.text_len as usize]);
+            try sql_append_byte(out, cursor, 39 as byte);
+            return;
+        }
+        try sql_append_bytes(out, cursor, node.literal.text[0: node.literal.text_len as usize]);
+        return;
+    }
+    if node.kind == SqlExprKind.UNARY {
+        if node.unary_op == SqlUnaryOp.NOT {
+            try sql_append_bytes(out, cursor, &"NOT "[0: 4]);
+        } else {
+            try sql_append_byte(out, cursor, 45 as byte);
+        }
+        const child_node: &SqlExprNode = try sql_expr_node(stmt, node.left);
+        const need_paren: bool = sql_expr_precedence(child_node) < sql_expr_precedence(node);
+        if need_paren {
+            try sql_append_byte(out, cursor, 40 as byte);
+        }
+        try sql_pretty_print_expr(stmt, node.left, out, cursor);
+        if need_paren {
+            try sql_append_byte(out, cursor, 41 as byte);
+        }
+        return;
+    }
+    if node.kind == SqlExprKind.IS_NULL {
+        try sql_pretty_print_expr(stmt, node.left, out, cursor);
+        try sql_append_bytes(out, cursor, &" IS NULL"[0: 8]);
+        return;
+    }
+    if node.kind == SqlExprKind.BINARY {
+        const left_node: &SqlExprNode = try sql_expr_node(stmt, node.left);
+        const right_node: &SqlExprNode = try sql_expr_node(stmt, node.right);
+        const left_need_paren: bool = sql_expr_precedence(left_node) < sql_expr_precedence(node);
+        const right_need_paren: bool = sql_expr_precedence(right_node) < sql_expr_precedence(node);
+        if left_need_paren {
+            try sql_append_byte(out, cursor, 40 as byte);
+        }
+        try sql_pretty_print_expr(stmt, node.left, out, cursor);
+        if left_need_paren {
+            try sql_append_byte(out, cursor, 41 as byte);
+        }
+        if node.binary_op == SqlBinaryOp.OR {
+            try sql_append_bytes(out, cursor, &" OR "[0: 4]);
+        } else if node.binary_op == SqlBinaryOp.AND {
+            try sql_append_bytes(out, cursor, &" AND "[0: 5]);
+        } else if node.binary_op == SqlBinaryOp.EQ {
+            try sql_append_bytes(out, cursor, &" = "[0: 3]);
+        } else if node.binary_op == SqlBinaryOp.NE {
+            try sql_append_bytes(out, cursor, &" != "[0: 4]);
+        } else if node.binary_op == SqlBinaryOp.LT {
+            try sql_append_bytes(out, cursor, &" < "[0: 3]);
+        } else if node.binary_op == SqlBinaryOp.LE {
+            try sql_append_bytes(out, cursor, &" <= "[0: 4]);
+        } else if node.binary_op == SqlBinaryOp.GT {
+            try sql_append_bytes(out, cursor, &" > "[0: 3]);
+        } else {
+            try sql_append_bytes(out, cursor, &" >= "[0: 4]);
+        }
+        if right_need_paren {
+            try sql_append_byte(out, cursor, 40 as byte);
+        }
+        try sql_pretty_print_expr(stmt, node.right, out, cursor);
+        if right_need_paren {
+            try sql_append_byte(out, cursor, 41 as byte);
+        }
+        return;
+    }
+    return error.SqlAstInvalidNode;
+}
+
+export fn sql_identifier_from_slice(text: &[byte]) !SqlIdentifier {
+    if text.ptr == null || text.len == 0 || text.len > SQL_MAX_IDENTIFIER_LEN {
+        return error.SqlAstIdentifierTooLong;
+    }
+    var out: SqlIdentifier = SqlIdentifier{};
+    out.len = (text.len as! u16) catch {
+        return error.SqlAstIdentifierTooLong;
+    };
+    _ = mem_copy(&out.bytes[0], text.ptr, text.len);
+    return out;
+}
+
+export fn sql_path_from_slice(text: &[byte]) !SqlPathExpr {
+    if text.ptr == null || text.len == 0 || text.len > SQL_MAX_PATH_LEN {
+        return error.SqlAstPathTooLong;
+    }
+    var out: SqlPathExpr = SqlPathExpr{};
+    out.len = (text.len as! u16) catch {
+        return error.SqlAstPathTooLong;
+    };
+    _ = mem_copy(&out.bytes[0], text.ptr, text.len);
+    return out;
+}
+
+export fn sql_literal_from_text(kind: SqlLiteralKind, text: &[byte]) !SqlLiteral {
+    if text.ptr == null || text.len > SQL_MAX_LITERAL_LEN {
+        return error.SqlAstLiteralTooLong;
+    }
+    var out: SqlLiteral = SqlLiteral{
+        kind: kind,
+        bool_value: false,
+        text_len: 0u16,
+        text: [],
+    };
+    out.text_len = (text.len as! u16) catch {
+        return error.SqlAstLiteralTooLong;
+    };
+    if text.len > 0 {
+        _ = mem_copy(&out.text[0], text.ptr, text.len);
+    }
+    return out;
+}
+
+export fn sql_literal_bool(value: bool) SqlLiteral {
+    return SqlLiteral{
+        kind: SqlLiteralKind.BOOL,
+        bool_value: value,
+        text_len: 0u16,
+        text: [],
+    };
+}
+
+export fn sql_literal_null() SqlLiteral {
+    return SqlLiteral{
+        kind: SqlLiteralKind.NULL,
+        bool_value: false,
+        text_len: 0u16,
+        text: [],
+    };
+}
+
+export fn sql_identifier_slice(id: &SqlIdentifier) &[byte] {
+    if id == null {
+        return &""[0: 0];
+    }
+    return id.bytes[0: id.len as usize];
+}
+
+export fn sql_path_slice(path: &SqlPathExpr) &[byte] {
+    if path == null {
+        return &""[0: 0];
+    }
+    return path.bytes[0: path.len as usize];
+}
+
+export fn sql_expr_node(stmt: &SqlStmt, expr_index: i16) !&SqlExprNode {
+    if stmt == null || expr_index < 0 || expr_index >= stmt.expr_count as i16 {
+        return error.SqlAstInvalidNode;
+    }
+    const node_idx: usize = (expr_index as! usize) catch {
+        return error.SqlAstInvalidNode;
+    };
+    if node_idx >= SQL_MAX_EXPR_NODES {
+        return error.SqlAstInvalidNode;
+    }
+    return &stmt.expr_nodes[node_idx];
+}
+
+export fn sql_stmt_pretty_print(stmt: &SqlStmt, out: &[byte]) !usize {
+    if stmt == null || out.ptr == null {
+        return error.SqlAstBufferTooSmall;
+    }
+    var cursor: usize = 0usize;
+    if stmt.kind == SqlStmtKind.CREATE_COLLECTION {
+        try sql_append_bytes(out, &cursor, &"CREATE COLLECTION "[0: 18]);
+        try sql_append_bytes(out, &cursor, sql_identifier_slice(&stmt.create_collection.collection_name));
+        try sql_append_byte(out, &cursor, 59 as byte);
+        return cursor;
+    }
+    if stmt.kind == SqlStmtKind.INSERT {
+        try sql_append_bytes(out, &cursor, &"INSERT INTO "[0: 12]);
+        try sql_append_bytes(out, &cursor, sql_identifier_slice(&stmt.insert_stmt.collection_name));
+        try sql_append_bytes(out, &cursor, &" JSON "[0: 6]);
+        try sql_append_byte(out, &cursor, 39 as byte);
+        try sql_append_bytes(out, &cursor, stmt.insert_stmt.json_text.text[0: stmt.insert_stmt.json_text.text_len as usize]);
+        try sql_append_byte(out, &cursor, 39 as byte);
+        try sql_append_byte(out, &cursor, 59 as byte);
+        return cursor;
+    }
+    try sql_append_bytes(out, &cursor, &"SELECT "[0: 7]);
+    var i: usize = 0usize;
+    while i < stmt.select_stmt.item_count as usize {
+        if i > 0usize {
+            try sql_append_bytes(out, &cursor, &", "[0: 2]);
+        }
+        try sql_pretty_print_expr(stmt, stmt.select_stmt.items[i].expr_index, out, &cursor);
+        i = i + 1usize;
+    }
+    try sql_append_bytes(out, &cursor, &" FROM "[0: 6]);
+    try sql_append_bytes(out, &cursor, sql_identifier_slice(&stmt.select_stmt.collection_name));
+    if stmt.select_stmt.has_where {
+        try sql_append_bytes(out, &cursor, &" WHERE "[0: 7]);
+        try sql_pretty_print_expr(stmt, stmt.select_stmt.where_expr, out, &cursor);
+    }
+    if stmt.select_stmt.has_limit {
+        try sql_append_bytes(out, &cursor, &" LIMIT "[0: 7]);
+        try sql_append_u32_decimal(out, &cursor, stmt.select_stmt.limit_value);
+    }
+    try sql_append_byte(out, &cursor, 59 as byte);
+    return cursor;
+}
