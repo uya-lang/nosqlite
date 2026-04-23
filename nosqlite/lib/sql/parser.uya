@@ -21,7 +21,7 @@ fn sql_parser_current(parser: &SqlParser) SqlToken {
             kind: SqlTokenKind.EOF,
             offset: 0u16,
             len: 0u16,
-            text: &""[0: 0],
+            text: "",
         };
     }
     const pos: usize = parser.pos as usize;
@@ -30,7 +30,7 @@ fn sql_parser_current(parser: &SqlParser) SqlToken {
             kind: SqlTokenKind.EOF,
             offset: 0u16,
             len: 0u16,
-            text: &""[0: 0],
+            text: "",
         };
     }
     return parser.tokens.tokens[pos];
@@ -414,7 +414,7 @@ fn sql_parse_create_collection(parser: &SqlParser, stmt: &SqlStmt) !void {
     stmt.create_collection.collection_name = try sql_parser_expect_identifier(parser);
 }
 
-export fn sql_parse(input: &[byte]) !SqlStmt {
+export fn sql_parse(input: &[const byte]) !SqlStmt {
     var parser: SqlParser = SqlParser{
         tokens: try sql_lex(input),
         pos: 0u16,

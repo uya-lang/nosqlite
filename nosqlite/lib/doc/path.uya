@@ -25,7 +25,7 @@ export struct PathProgram {
     steps: [PathStep: 16],
 }
 
-export fn path_program_compile(path: &[byte]) !PathProgram {
+export fn path_program_compile(path: &[const byte]) !PathProgram {
     if path.ptr == null || path.len == 0 || path.ptr[0] != 36 {
         return error.PathInvalidSyntax;
     }

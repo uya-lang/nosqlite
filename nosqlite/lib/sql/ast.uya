@@ -134,7 +134,7 @@ export struct SqlStmt {
     select_stmt: SqlSelectStmt,
 }
 
-fn sql_append_bytes(out: &[byte], cursor: &usize, data: &[byte]) !void {
+fn sql_append_bytes(out: &[byte], cursor: &usize, data: &[const byte]) !void {
     if out.ptr == null || cursor == null || cursor[0] + data.len > out.len {
         return error.SqlAstBufferTooSmall;
     }
@@ -283,7 +283,7 @@ fn sql_pretty_print_expr(stmt: &SqlStmt, expr_index: i16, out: &[byte], cursor: 
     return error.SqlAstInvalidNode;
 }
 
-export fn sql_identifier_from_slice(text: &[byte]) !SqlIdentifier {
+export fn sql_identifier_from_slice(text: &[const byte]) !SqlIdentifier {
     if text.ptr == null || text.len == 0 || text.len > SQL_MAX_IDENTIFIER_LEN {
         return error.SqlAstIdentifierTooLong;
     }
@@ -295,7 +295,7 @@ export fn sql_identifier_from_slice(text: &[byte]) !SqlIdentifier {
     return out;
 }
 
-export fn sql_path_from_slice(text: &[byte]) !SqlPathExpr {
+export fn sql_path_from_slice(text: &[const byte]) !SqlPathExpr {
     if text.ptr == null || text.len == 0 || text.len > SQL_MAX_PATH_LEN {
         return error.SqlAstPathTooLong;
     }
@@ -307,7 +307,7 @@ export fn sql_path_from_slice(text: &[byte]) !SqlPathExpr {
     return out;
 }
 
-export fn sql_literal_from_text(kind: SqlLiteralKind, text: &[byte]) !SqlLiteral {
+export fn sql_literal_from_text(kind: SqlLiteralKind, text: &[const byte]) !SqlLiteral {
     if text.ptr == null || text.len > SQL_MAX_LITERAL_LEN {
         return error.SqlAstLiteralTooLong;
     }
@@ -344,14 +344,14 @@ export fn sql_literal_null() SqlLiteral {
     };
 }
 
-export fn sql_identifier_slice(id: &SqlIdentifier) &[byte] {
+export fn sql_identifier_slice(id: &SqlIdentifier) &[const byte] {
     if id == null {
         return &""[0: 0];
     }
     return id.bytes[0: id.len as usize];
 }
 
-export fn sql_path_slice(path: &SqlPathExpr) &[byte] {
+export fn sql_path_slice(path: &SqlPathExpr) &[const byte] {
     if path == null {
         return &""[0: 0];
     }

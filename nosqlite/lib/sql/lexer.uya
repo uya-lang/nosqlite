@@ -42,7 +42,7 @@ fn sql_ascii_upper(b: byte) byte {
     return b;
 }
 
-fn sql_keyword_eq(text: &[byte], keyword: &[byte]) bool {
+fn sql_keyword_eq(text: &[const byte], keyword: &[const byte]) bool {
     if text.len != keyword.len {
         return false;
     }
@@ -56,59 +56,59 @@ fn sql_keyword_eq(text: &[byte], keyword: &[byte]) bool {
     return true;
 }
 
-fn sql_keyword_kind(text: &[byte]) SqlTokenKind {
-    if sql_keyword_eq(text, &"SELECT"[0: 6]) {
+fn sql_keyword_kind(text: &[const byte]) SqlTokenKind {
+    if sql_keyword_eq(text, "SELECT") {
         return SqlTokenKind.KW_SELECT;
     }
-    if sql_keyword_eq(text, &"FROM"[0: 4]) {
+    if sql_keyword_eq(text, "FROM") {
         return SqlTokenKind.KW_FROM;
     }
-    if sql_keyword_eq(text, &"WHERE"[0: 5]) {
+    if sql_keyword_eq(text, "WHERE") {
         return SqlTokenKind.KW_WHERE;
     }
-    if sql_keyword_eq(text, &"LIMIT"[0: 5]) {
+    if sql_keyword_eq(text, "LIMIT") {
         return SqlTokenKind.KW_LIMIT;
     }
-    if sql_keyword_eq(text, &"INSERT"[0: 6]) {
+    if sql_keyword_eq(text, "INSERT") {
         return SqlTokenKind.KW_INSERT;
     }
-    if sql_keyword_eq(text, &"INTO"[0: 4]) {
+    if sql_keyword_eq(text, "INTO") {
         return SqlTokenKind.KW_INTO;
     }
-    if sql_keyword_eq(text, &"JSON"[0: 4]) {
+    if sql_keyword_eq(text, "JSON") {
         return SqlTokenKind.KW_JSON;
     }
-    if sql_keyword_eq(text, &"CREATE"[0: 6]) {
+    if sql_keyword_eq(text, "CREATE") {
         return SqlTokenKind.KW_CREATE;
     }
-    if sql_keyword_eq(text, &"COLLECTION"[0: 10]) {
+    if sql_keyword_eq(text, "COLLECTION") {
         return SqlTokenKind.KW_COLLECTION;
     }
-    if sql_keyword_eq(text, &"AND"[0: 3]) {
+    if sql_keyword_eq(text, "AND") {
         return SqlTokenKind.KW_AND;
     }
-    if sql_keyword_eq(text, &"OR"[0: 2]) {
+    if sql_keyword_eq(text, "OR") {
         return SqlTokenKind.KW_OR;
     }
-    if sql_keyword_eq(text, &"NOT"[0: 3]) {
+    if sql_keyword_eq(text, "NOT") {
         return SqlTokenKind.KW_NOT;
     }
-    if sql_keyword_eq(text, &"IS"[0: 2]) {
+    if sql_keyword_eq(text, "IS") {
         return SqlTokenKind.KW_IS;
     }
-    if sql_keyword_eq(text, &"NULL"[0: 4]) {
+    if sql_keyword_eq(text, "NULL") {
         return SqlTokenKind.KW_NULL;
     }
-    if sql_keyword_eq(text, &"TRUE"[0: 4]) {
+    if sql_keyword_eq(text, "TRUE") {
         return SqlTokenKind.KW_TRUE;
     }
-    if sql_keyword_eq(text, &"FALSE"[0: 5]) {
+    if sql_keyword_eq(text, "FALSE") {
         return SqlTokenKind.KW_FALSE;
     }
     return SqlTokenKind.IDENT;
 }
 
-fn sql_push_token(buf: &SqlTokenBuffer, kind: SqlTokenKind, offset: usize, len: usize, text: &[byte]) !void {
+fn sql_push_token(buf: &SqlTokenBuffer, kind: SqlTokenKind, offset: usize, len: usize, text: &[const byte]) !void {
     if buf == null || buf.token_count as usize >= SQL_MAX_TOKENS {
         return error.SqlLexerTooManyTokens;
     }
@@ -126,7 +126,7 @@ fn sql_push_token(buf: &SqlTokenBuffer, kind: SqlTokenKind, offset: usize, len: 
     buf.token_count = buf.token_count + 1u16;
 }
 
-export fn sql_lex(input: &[byte]) !SqlTokenBuffer {
+export fn sql_lex(input: &[const byte]) !SqlTokenBuffer {
     if input.ptr == null {
         return error.SqlLexerInvalidToken;
     }
@@ -145,7 +145,7 @@ export fn sql_lex(input: &[byte]) !SqlTokenBuffer {
             while pos < input.len && sql_is_ident_continue(input.ptr[pos]) {
                 pos = pos + 1;
             }
-            const text: &[byte] = input[start: pos - start];
+            const text: &[const byte] = input[start: pos - start];
             try sql_push_token(&out, sql_keyword_kind(text), start, pos - start, text);
             continue;
         }
@@ -197,7 +197,7 @@ export fn sql_lex(input: &[byte]) !SqlTokenBuffer {
                         pos = pos + 2;
                         continue;
                     }
-                    const text: &[byte] = input[text_start: pos - text_start];
+                    const text: &[const byte] = input[text_start: pos - text_start];
                     pos = pos + 1;
                     try sql_push_token(&out, SqlTokenKind.STRING, start, pos - start, text);
                     closed = true;
@@ -297,7 +297,7 @@ export fn sql_lex(input: &[byte]) !SqlTokenBuffer {
 
         return error.SqlLexerInvalidToken;
     }
-    try sql_push_token(&out, SqlTokenKind.EOF, input.len, 0usize, &""[0: 0]);
+    try sql_push_token(&out, SqlTokenKind.EOF, input.len, 0usize, "");
     return out;
 }
 

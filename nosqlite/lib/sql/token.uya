@@ -45,10 +45,10 @@ export struct SqlToken {
     kind: SqlTokenKind,
     offset: u16,
     len: u16,
-    text: &[byte],
+    text: &[const byte],
 }
 
-export fn sql_token_kind_name(kind: SqlTokenKind) &[byte] {
+export fn sql_token_kind_name(kind: SqlTokenKind) &[const byte] {
     if kind == SqlTokenKind.EOF {
         return &"EOF"[0: 3];
     }
