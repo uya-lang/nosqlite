@@ -9,6 +9,7 @@
 - [SQL 语法说明](./nosqlite-sql-syntax.md)
 - [Benchmark 输出格式](./nosqlite-benchmark-format.md)
 - [示例](./nosqlite-examples.md)
+- [Bug Report: split-C `wal_header.c` 重复生成与栈限制](./bugreport-uya-split-c-wal-header-duplicate-and-stack-limit.md)
 
 这组三份文档的关系是：
 
