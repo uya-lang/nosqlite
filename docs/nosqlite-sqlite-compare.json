@@ -1,0 +1,225 @@
+{
+  "docs": 3,
+  "avg_doc_bytes": 1024,
+  "iterations": 10,
+  "python_version": "3.12.11",
+  "sqlite_version": "3.46.1",
+  "sqlite_json1": true,
+  "results": [
+    {
+      "engine": "nosqlite",
+      "runner_case": "warm_primary_lookup",
+      "benchmark_mode": "warm-read",
+      "case_name": "primary_lookup",
+      "metrics": {
+        "effective_iterations": 10,
+        "samples": 10,
+        "p50_us": 19883,
+        "p95_us": 20667,
+        "p99_us": 20667,
+        "docs_per_s": 50.11225144323284,
+        "mib_per_s": 0.04893774555003207,
+        "peak_memory_kib": 29940,
+        "ratio_pct_p50": 0,
+        "ratio_pct_p95": 0,
+        "ratio_pct_p99": 0,
+        "notes": "scaled prototype dataset: docs=3 < 100000",
+        "floor_status": "pass",
+        "target_status": "miss",
+        "stretch_status": "miss"
+      }
+    },
+    {
+      "engine": "nosqlite",
+      "runner_case": "warm_seq_scan",
+      "benchmark_mode": "warm-read",
+      "case_name": "seq_scan_filter",
+      "metrics": {
+        "effective_iterations": 10,
+        "samples": 10,
+        "p50_us": 19122,
+        "p95_us": 20131,
+        "p99_us": 20131,
+        "docs_per_s": 157.1289400081707,
+        "mib_per_s": 0.1534462304767292,
+        "peak_memory_kib": 29900,
+        "ratio_pct_p50": 0,
+        "ratio_pct_p95": 0,
+        "ratio_pct_p99": 0,
+        "notes": "scaled prototype dataset: docs=3 < 100000",
+        "floor_status": "pass",
+        "target_status": "miss",
+        "stretch_status": "miss"
+      }
+    },
+    {
+      "engine": "nosqlite",
+      "runner_case": "durable_insert",
+      "benchmark_mode": "durable-write",
+      "case_name": "durable_insert",
+      "metrics": {
+        "effective_iterations": 3,
+        "samples": 3,
+        "p50_us": 18736,
+        "p95_us": 22488,
+        "p99_us": 22488,
+        "docs_per_s": 52.2611664692356,
+        "mib_per_s": 0.05103629538011289,
+        "peak_memory_kib": 28152,
+        "ratio_pct_p50": 0,
+        "ratio_pct_p95": 0,
+        "ratio_pct_p99": 0,
+        "notes": "scaled prototype dataset: docs=3 < 100000",
+        "floor_status": "pass",
+        "target_status": "pass",
+        "stretch_status": "miss"
+      }
+    },
+    {
+      "engine": "nosqlite",
+      "runner_case": "recovery_open",
+      "benchmark_mode": "recovery",
+      "case_name": "recovery_open",
+      "metrics": {
+        "effective_iterations": 10,
+        "samples": 10,
+        "p50_us": 92960,
+        "p95_us": 97602,
+        "p99_us": 97602,
+        "docs_per_s": 32.02356934703942,
+        "mib_per_s": 0.03127301694046818,
+        "peak_memory_kib": 31564,
+        "ratio_pct_p50": 0,
+        "ratio_pct_p95": 0,
+        "ratio_pct_p99": 0,
+        "notes": "scaled prototype dataset: docs=3 < 100000",
+        "floor_status": "pass",
+        "target_status": "pass",
+        "stretch_status": "miss"
+      }
+    },
+    {
+      "engine": "nosqlite",
+      "runner_case": "long_query_concurrent_commit",
+      "benchmark_mode": "durable-write",
+      "case_name": "long_query_concurrent_commit",
+      "metrics": {
+        "effective_iterations": 10,
+        "samples": 10,
+        "p50_us": 19263,
+        "p95_us": 19513,
+        "p99_us": 19513,
+        "docs_per_s": 51.936450559095896,
+        "mib_per_s": 0.050719189999117086,
+        "peak_memory_kib": 29388,
+        "ratio_pct_p50": 99,
+        "ratio_pct_p95": 101,
+        "ratio_pct_p99": 101,
+        "notes": "scaled prototype dataset: docs=3 < 100000",
+        "floor_status": "pass",
+        "target_status": "miss",
+        "stretch_status": "miss"
+      }
+    },
+    {
+      "engine": "sqlite",
+      "runner_case": "warm_primary_lookup",
+      "benchmark_mode": "warm-read",
+      "case_name": "primary_lookup",
+      "metrics": {
+        "effective_iterations": 10,
+        "samples": 10,
+        "p50_us": 3,
+        "p95_us": 16,
+        "p99_us": 16,
+        "docs_per_s": 222222.22222222222,
+        "mib_per_s": 217.01388888888889,
+        "peak_memory_kib": 19700,
+        "ratio_pct_p50": 0,
+        "ratio_pct_p95": 0,
+        "ratio_pct_p99": 0,
+        "notes": "SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL"
+      }
+    },
+    {
+      "engine": "sqlite",
+      "runner_case": "warm_seq_scan",
+      "benchmark_mode": "warm-read",
+      "case_name": "seq_scan_filter",
+      "metrics": {
+        "effective_iterations": 10,
+        "samples": 10,
+        "p50_us": 4,
+        "p95_us": 22,
+        "p99_us": 22,
+        "docs_per_s": 491803.2786885246,
+        "mib_per_s": 480.2766393442623,
+        "peak_memory_kib": 19368,
+        "ratio_pct_p50": 0,
+        "ratio_pct_p95": 0,
+        "ratio_pct_p99": 0,
+        "notes": "SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL"
+      }
+    },
+    {
+      "engine": "sqlite",
+      "runner_case": "durable_insert",
+      "benchmark_mode": "durable-write",
+      "case_name": "durable_insert",
+      "metrics": {
+        "effective_iterations": 3,
+        "samples": 3,
+        "p50_us": 56,
+        "p95_us": 91,
+        "p99_us": 91,
+        "docs_per_s": 15228.426395939086,
+        "mib_per_s": 14.871510152284264,
+        "peak_memory_kib": 19752,
+        "ratio_pct_p50": 0,
+        "ratio_pct_p95": 0,
+        "ratio_pct_p99": 0,
+        "notes": "SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL"
+      }
+    },
+    {
+      "engine": "sqlite",
+      "runner_case": "recovery_open",
+      "benchmark_mode": "recovery",
+      "case_name": "recovery_open",
+      "metrics": {
+        "effective_iterations": 10,
+        "samples": 10,
+        "p50_us": 79,
+        "p95_us": 117,
+        "p99_us": 117,
+        "docs_per_s": 34762.456546929316,
+        "mib_per_s": 33.94771147161066,
+        "peak_memory_kib": 19648,
+        "ratio_pct_p50": 0,
+        "ratio_pct_p95": 0,
+        "ratio_pct_p99": 0,
+        "notes": "SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL; open includes schema/count read"
+      }
+    },
+    {
+      "engine": "sqlite",
+      "runner_case": "long_query_concurrent_commit",
+      "benchmark_mode": "durable-write",
+      "case_name": "long_query_concurrent_commit",
+      "metrics": {
+        "effective_iterations": 10,
+        "samples": 10,
+        "p50_us": 65,
+        "p95_us": 94,
+        "p99_us": 94,
+        "docs_per_s": 14556.040756914119,
+        "mib_per_s": 14.214883551673944,
+        "peak_memory_kib": 19732,
+        "ratio_pct_p50": 96,
+        "ratio_pct_p95": 116,
+        "ratio_pct_p99": 116,
+        "notes": "SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL; writer measured while a read transaction is pinned"
+      }
+    }
+  ]
+}

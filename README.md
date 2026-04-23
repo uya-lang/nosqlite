@@ -69,10 +69,18 @@ bash nosqlite/tests/verify_definition_of_done.sh
 python3 nosqlite/benchmark_phase11.py
 ```
 
+运行 SQLite 横向对比 benchmark：
+
+```bash
+python3 nosqlite/benchmark_sqlite_compare.py
+```
+
 benchmark 输出位置：
 
 - `docs/nosqlite-benchmark-v0.md`
 - `docs/nosqlite-benchmark-v0.json`
+- `docs/nosqlite-sqlite-compare.md`
+- `docs/nosqlite-sqlite-compare.json`
 
 ## API 预览
 
@@ -162,6 +170,7 @@ DoD 映射见 [docs/nosqlite-definition-of-done.md](docs/nosqlite-definition-of-
 - [里程碑发布说明](docs/nosqlite-release-v1.5.0.md)
 - [Definition of Done](docs/nosqlite-definition-of-done.md)
 - [压力测试报告](docs/nosqlite-stress-report.md)
+- [SQLite 对比 Benchmark](docs/nosqlite-sqlite-compare.md)
 - [示例](docs/nosqlite-examples.md)
 - [SQL 语法](docs/nosqlite-sql-syntax.md)
 - [Typed SQL](docs/nosqlite-typed-sql.md)
