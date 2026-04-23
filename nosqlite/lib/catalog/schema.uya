@@ -563,14 +563,15 @@ export fn catalog_page_append_collection(page_buf: &[byte], name: &[byte]) !Coll
     const new_index: usize = (view.root.collection_count as! usize) catch {
         return error.CatalogCorrupt;
     };
+    const next_collection_id: u32 = max_collection_id + 1u32;
     const created: CollectionMeta = CollectionMeta{
-        collection_id: max_collection_id + 1u32,
+        collection_id: next_collection_id,
         name_len: (name.len as! u16) catch {
             return error.CatalogNameTooLong;
         },
         flags: 0u16,
         next_doc_id: 1u64,
-        primary_root_page: 0u32,
+        primary_root_page: 2u32 + next_collection_id,
         secondary_index_count: 0u16,
         rsv: 0u16,
         name_off: (name_cursor as! u32) catch {

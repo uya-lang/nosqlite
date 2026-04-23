@@ -213,20 +213,20 @@
 
 ## Phase 10 - 写路径 v1
 
-- [ ] 先写失败测试：插入、主键可见性、未提交不可见、重启后可见
-- [ ] 定义 `Txn`
-- [ ] 定义 `DocBlobBuilder`
-- [ ] 实现 `INSERT INTO ... JSON ...`
-- [ ] 将输入 JSON 解析并编码为 `DocBlob`
-- [ ] 将记录写入数据页
-- [ ] 将 `_id` 写入主索引
-- [ ] 将写路径接入 WAL
-- [ ] 按“WAL -> page cache publish -> data file -> meta page”顺序提交
-- [ ] 为 `Txn` 定义 `drop`：未提交时自动 abort
-- [ ] 为 `DocBlobBuilder` 定义 `drop`：释放 scratch / reset arena
-- [ ] 实现事务提交与回滚骨架
-- [ ] 编写插入后查询测试
-- [ ] 编写重启持久化测试
+- [x] 先写失败测试：插入、主键可见性、未提交不可见、重启后可见
+- [x] 定义 `Txn`
+- [x] 定义 `DocBlobBuilder`
+- [x] 实现 `INSERT INTO ... JSON ...`
+- [x] 将输入 JSON 解析并编码为 `DocBlob`
+- [x] 将记录写入数据页
+- [x] 将 `_id` 写入主索引
+- [x] 将写路径接入 WAL
+- [x] 按“WAL -> page cache publish -> data file -> meta page”顺序提交
+- [x] 为 `Txn` 定义 `drop`：未提交时自动 abort
+- [x] 为 `DocBlobBuilder` 定义 `drop`：释放 scratch / reset arena
+- [x] 实现事务提交与回滚骨架
+- [x] 编写插入后查询测试
+- [x] 编写重启持久化测试
 
 ## Phase 11 - v1 稳定化
 

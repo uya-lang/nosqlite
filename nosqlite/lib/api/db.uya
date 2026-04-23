@@ -14,15 +14,31 @@ use std.json.parser.parse;
 use lib.storage.pager.SnapshotPressurePolicy;
 use lib.storage.pager.SnapshotPressureStatus;
 use lib.storage.pager.CursorLease;
+use lib.storage.pager.PagerOpenInfo;
+use lib.storage.pager.WalCommit;
+use lib.storage.pager.WalBatch;
 use lib.storage.pager.catalog_cleanup_stem;
 use lib.storage.pager.catalog_create_db_at_stem;
 use lib.storage.pager.catalog_create_collection_at_stem;
-use lib.storage.pager.catalog_allocate_next_doc_id_at_stem;
+use lib.storage.pager.catalog_load_at_stem;
 use lib.storage.pager.cursor_lease_start;
 use lib.storage.pager.cursor_lease_validate;
+use lib.storage.pager.pager_open_at_stem;
+use lib.storage.pager.pager_read_page_at_stem;
+use lib.storage.pager.pager_commit_batch_at_stem;
 use lib.storage.pager.snapshot_pressure_cursor_can_open;
 use lib.storage.pager.snapshot_pressure_require_write_ok;
+use lib.storage.pager.wal_batch_init;
+use lib.storage.pager.wal_batch_append_begin;
+use lib.storage.pager.wal_batch_append_page;
+use lib.storage.pager.wal_batch_append_commit;
+use lib.storage.pager.CatalogSnapshot;
 use lib.catalog.schema.CollectionMeta;
+use lib.catalog.schema.CatalogView;
+use lib.catalog.schema.CatalogCollectionView;
+use lib.catalog.schema.catalog_view_from_page;
+use lib.catalog.schema.catalog_collection_at;
+use lib.catalog.schema.catalog_page_allocate_next_doc_id;
 use lib.core.NOSQLITE_PAGE_SIZE_DEFAULT;
 use lib.index.key.RecordPointer;
 use lib.index.key.record_pointer_make;
@@ -31,6 +47,10 @@ use lib.index.btree.primary_btree_init;
 use lib.index.btree.primary_btree_insert;
 use lib.index.btree.primary_btree_lookup;
 use lib.sql.ast.SqlStmt;
+use lib.sql.ast.SqlStmtKind;
+use lib.sql.ast.SqlIdentifier;
+use lib.sql.ast.SqlLiteral;
+use lib.sql.ast.SqlInsertStmt;
 use lib.sql.ast.SqlExprKind;
 use lib.sql.ast.SqlBinaryOp;
 use lib.sql.ast.SqlUnaryOp;
@@ -64,6 +84,26 @@ use lib.api.result.QUERY_RESULT_MAX_ROWS;
 use lib.api.result.OWNED_ROW_MAX_BLOB;
 use lib.api.result.RESULT_BLOB_HEADER_SIZE;
 use lib.api.result.RESULT_CELL_HEADER_SIZE;
+use lib.storage.header.PageType;
+use lib.storage.page.page_header_from_buf;
+use lib.storage.page.page_body_offset;
+use lib.storage.page.page_buffer_size_matches;
+use lib.storage.checksum.page_checksum_finalize;
+use lib.storage.slotted_page.RECORD_CELL_DOC_ID_OFF;
+use lib.storage.slotted_page.RECORD_CELL_CREATED_AT_OFF;
+use lib.storage.slotted_page.RECORD_CELL_UPDATED_AT_OFF;
+use lib.storage.slotted_page.RECORD_CELL_DOC_LEN_OFF;
+use lib.storage.slotted_page.RECORD_CELL_HEADER_SIZE;
+use lib.storage.slotted_page.SlottedPageCellView;
+use lib.storage.slotted_page.slot_is_used;
+use lib.storage.slotted_page.slot_is_tombstone;
+use lib.storage.slotted_page.slotted_page_init;
+use lib.storage.slotted_page.slotted_page_slot_count;
+use lib.storage.slotted_page.slotted_page_cell_view;
+use lib.storage.slotted_page.slotted_page_insert_copy;
+use lib.storage.pager.writer_lock_guard_acquire;
+use lib.storage.pager.writer_lock_guard_release;
+use lib.storage.pager.WriterLockGuard;
 
 export error DbHandleInvalid;
 export error DbCollectionFull;
@@ -76,6 +116,10 @@ export error DbResultTooLarge;
 export error DbInvalidProjection;
 export error DbInvalidExpr;
 export error DbScalarExpected;
+export error DbTxnInactive;
+export error DbTxnCommitted;
+export error DbPageCorrupt;
+export error DbCollectionPageMissing;
 
 export const DB_MAX_COLLECTIONS: usize = 4;
 export const DB_MAX_ROWS_PER_COLLECTION: usize = 64;
@@ -83,6 +127,7 @@ export const DB_MAX_CURSOR_ROWS: usize = 64;
 const DB_MAX_COMMIT_VIEWS: usize = 8;
 const DB_PATH_BUF_SIZE: usize = 512;
 const DB_DOC_BLOB_MAX: usize = 4096;
+const DB_TXN_DOC_SCRATCH_MAX: usize = 8192;
 const DB_VIEW_BASE_RETAINED_BYTES: u64 = 64u64;
 const DB_COLLECTION_RETAINED_BYTES: u64 = 32u64;
 const DB_ROW_RETAINED_BYTES: u64 = 16u64;
@@ -100,6 +145,7 @@ struct DbCollection {
     collection_id: u32,
     name_len: u16,
     name: [byte: 64],
+    next_doc_id: u64,
     primary_root_page: u32,
     row_count: u16,
     rows: [DbStoredRow: DB_MAX_ROWS_PER_COLLECTION],
@@ -154,6 +200,30 @@ export struct CommitViewPin {
     },
 }
 
+export struct DocBlobBuilder {
+    active: bool,
+    doc_len: u16,
+    scratch: [byte: DB_TXN_DOC_SCRATCH_MAX],
+    doc_blob: [byte: DB_DOC_BLOB_MAX],
+
+    fn drop(self: DocBlobBuilder) void {
+        doc_blob_builder_drop(self);
+    },
+}
+
+export struct Txn {
+    db: &DbHandle,
+    writer_guard: WriterLockGuard,
+    view_slot: u16,
+    has_writes: bool,
+    active: bool,
+    committed: bool,
+
+    fn drop(self: Txn) void {
+        txn_drop(self);
+    },
+}
+
 export struct QueryCursor {
     db: &DbHandle,
     pin: CommitViewPin,
@@ -196,6 +266,13 @@ fn db_store_u16_le(out: &[byte], off: usize, value: u16) void {
     out.ptr[off + 1usize] = (((value >> 8) & 255u16) as! byte).value;
 }
 
+fn db_store_u32_le(out: &[byte], off: usize, value: u32) void {
+    out.ptr[off] = ((value & 255u32) as! byte).value;
+    out.ptr[off + 1usize] = (((value >> 8) & 255u32) as! byte).value;
+    out.ptr[off + 2usize] = (((value >> 16) & 255u32) as! byte).value;
+    out.ptr[off + 3usize] = (((value >> 24) & 255u32) as! byte).value;
+}
+
 fn db_store_u64_le(out: &[byte], off: usize, value: u64) void {
     out.ptr[off] = ((value & 255u64) as! byte).value;
     out.ptr[off + 1usize] = (((value >> 8) & 255u64) as! byte).value;
@@ -205,6 +282,29 @@ fn db_store_u64_le(out: &[byte], off: usize, value: u64) void {
     out.ptr[off + 5usize] = (((value >> 40) & 255u64) as! byte).value;
     out.ptr[off + 6usize] = (((value >> 48) & 255u64) as! byte).value;
     out.ptr[off + 7usize] = (((value >> 56) & 255u64) as! byte).value;
+}
+
+fn db_load_u16_le(data: &[byte], off: usize) u16 {
+    return (data.ptr[off] as u16) |
+        ((data.ptr[off + 1usize] as u16) << 8);
+}
+
+fn db_load_u32_le(data: &[byte], off: usize) u32 {
+    return (data.ptr[off] as u32) |
+        ((data.ptr[off + 1usize] as u32) << 8) |
+        ((data.ptr[off + 2usize] as u32) << 16) |
+        ((data.ptr[off + 3usize] as u32) << 24);
+}
+
+fn db_load_u64_le(data: &[byte], off: usize) u64 {
+    return (data.ptr[off] as u64) |
+        ((data.ptr[off + 1usize] as u64) << 8) |
+        ((data.ptr[off + 2usize] as u64) << 16) |
+        ((data.ptr[off + 3usize] as u64) << 24) |
+        ((data.ptr[off + 4usize] as u64) << 32) |
+        ((data.ptr[off + 5usize] as u64) << 40) |
+        ((data.ptr[off + 6usize] as u64) << 48) |
+        ((data.ptr[off + 7usize] as u64) << 56);
 }
 
 fn db_copy_name(name: &[const byte], out: &[byte], len_out: &u16) !void {
@@ -233,6 +333,229 @@ fn db_default_snapshot_policy() SnapshotPressurePolicy {
         max_retired_views: 4u32,
         cursor_lease_ms: 30000u64,
     };
+}
+
+fn doc_blob_builder_drop(builder: DocBlobBuilder) void {
+    _ = builder;
+}
+
+fn doc_blob_builder_init() DocBlobBuilder {
+    return DocBlobBuilder{
+        active: true,
+        doc_len: 0u16,
+        scratch: [],
+        doc_blob: [],
+    };
+}
+
+fn doc_blob_builder_build_json(builder: &DocBlobBuilder, json: &[const byte]) !void {
+    if builder == null || !builder.active || json.ptr == null {
+        return error.DbInvalidExpr;
+    }
+    var arena: Arena = Arena{ buffer: null, size: 0, used: 0 };
+    arena_init(&arena, &builder.scratch[0], DB_TXN_DOC_SCRATCH_MAX);
+    const value: JsonValue = try parse(&arena, json.ptr, json.len);
+    const encoded_len: usize = try doc_encode_json_value(&value, builder.doc_blob[0: DB_DOC_BLOB_MAX]);
+    builder.doc_len = (encoded_len as! u16) catch {
+        return error.DbRowTooLarge;
+    };
+}
+
+fn txn_drop(txn: Txn) void {
+    if txn.active && !txn.committed && txn.db != null {
+        const staged: !&CommitViewState = db_commit_view_state(txn.db, txn.view_slot);
+        if staged.error_id == 0u32 {
+            db_clear_commit_view_state(staged.value);
+            db_refresh_snapshot_status(txn.db);
+        }
+        writer_lock_guard_release(&txn.writer_guard);
+    }
+}
+
+fn db_collection_data_page_id(collection: &DbCollection) u32 {
+    if collection == null {
+        return 0u32;
+    }
+    if collection.primary_root_page != 0u32 {
+        return collection.primary_root_page;
+    }
+    return 2u32 + collection.collection_id;
+}
+
+fn db_record_cell_encode(row: &DbStoredRow, now_ms: u64, out: &[byte]) !usize {
+    if row == null || out.ptr == null || !row.present || row.doc_len as usize > DB_DOC_BLOB_MAX {
+        return error.DbRowTooLarge;
+    }
+    const total_len: usize = RECORD_CELL_HEADER_SIZE + row.doc_len as usize;
+    if total_len > out.len {
+        return error.DbRowTooLarge;
+    }
+    db_store_u64_le(out, RECORD_CELL_DOC_ID_OFF, row.doc_id);
+    db_store_u64_le(out, RECORD_CELL_CREATED_AT_OFF, now_ms);
+    db_store_u64_le(out, RECORD_CELL_UPDATED_AT_OFF, now_ms);
+    db_store_u32_le(out, RECORD_CELL_DOC_LEN_OFF, row.doc_len as u32);
+    if row.doc_len > 0u16 {
+        _ = mem_copy(&out.ptr[RECORD_CELL_HEADER_SIZE], &row.doc_blob[0], row.doc_len as usize);
+    }
+    return total_len;
+}
+
+fn db_record_cell_decode(cell: &[byte], row: &DbStoredRow) !void {
+    if cell.ptr == null || row == null || cell.len < RECORD_CELL_HEADER_SIZE {
+        return error.DbPageCorrupt;
+    }
+    const doc_len: usize = db_load_u32_le(cell, RECORD_CELL_DOC_LEN_OFF) as usize;
+    if RECORD_CELL_HEADER_SIZE + doc_len > cell.len || doc_len > DB_DOC_BLOB_MAX {
+        return error.DbPageCorrupt;
+    }
+    row.present = true;
+    row.doc_id = db_load_u64_le(cell, RECORD_CELL_DOC_ID_OFF);
+    row.doc_len = (doc_len as! u16) catch {
+        return error.DbPageCorrupt;
+    };
+    if doc_len > 0usize {
+        _ = mem_copy(&row.doc_blob[0], &cell.ptr[RECORD_CELL_HEADER_SIZE], doc_len);
+    }
+}
+
+fn db_collection_encode_page(collection: &DbCollection, page_size: u32, now_ms: u64, out: &[byte]) !void {
+    if collection == null || out.ptr == null || !page_buffer_size_matches(out, page_size) {
+        return error.DbCollectionPageMissing;
+    }
+    try slotted_page_init(out, PageType.DATA);
+    var row_idx: u16 = 0u16;
+    while row_idx < collection.row_count {
+        const row: &DbStoredRow = &collection.rows[row_idx as usize];
+        if row.present {
+            var cell_buf: [byte: RECORD_CELL_HEADER_SIZE + DB_DOC_BLOB_MAX] = [];
+            const cell_len: usize = try db_record_cell_encode(row, now_ms, cell_buf[0: RECORD_CELL_HEADER_SIZE + DB_DOC_BLOB_MAX]);
+            _ = try slotted_page_insert_copy(out, cell_buf[0: cell_len]);
+        }
+        row_idx = row_idx + 1u16;
+    }
+}
+
+fn db_collection_load_page(collection: &DbCollection, page_id: u32, page_buf: &[byte]) !void {
+    if collection == null || page_buf.ptr == null {
+        return error.DbCollectionPageMissing;
+    }
+    const header: &PageHeader = page_header_from_buf(page_buf);
+    if header == null || header.page_type != PageType.DATA {
+        return error.DbPageCorrupt;
+    }
+    collection.row_count = 0u16;
+    var slot_idx: u16 = 0u16;
+    const slot_count: u16 = slotted_page_slot_count(page_buf);
+    while slot_idx < slot_count {
+        const cell: SlottedPageCellView = slotted_page_cell_view(page_buf, slot_idx) catch {
+            return error.DbPageCorrupt;
+        };
+        if slot_is_used(cell.flags) && !slot_is_tombstone(cell.flags) {
+            if collection.row_count as usize >= DB_MAX_ROWS_PER_COLLECTION {
+                return error.DbRowFull;
+            }
+            const row: &DbStoredRow = &collection.rows[collection.row_count as usize];
+            try db_record_cell_decode(cell.ptr[0: cell.len], row);
+            row.record_ptr = record_pointer_make(page_id, slot_idx);
+            collection.row_count = collection.row_count + 1u16;
+        }
+        slot_idx = slot_idx + 1u16;
+    }
+}
+
+fn db_rebuild_primary_index(db: &DbHandle, collection_slot: u16) !void {
+    if db == null || collection_slot as usize >= DB_MAX_COLLECTIONS {
+        return error.DbCollectionNotFound;
+    }
+    const slot_idx: usize = (collection_slot as! usize) catch {
+        return error.DbCollectionNotFound;
+    };
+    if slot_idx >= DB_MAX_COLLECTIONS {
+        return error.DbCollectionNotFound;
+    }
+    db.primary_indexes[slot_idx] = try primary_btree_init(256u32);
+    const state: &CommitViewState = try db_current_view_state(db);
+    const collection: &DbCollection = &state.collections[slot_idx];
+    var row_idx: u16 = 0u16;
+    while row_idx < collection.row_count {
+        const row: &DbStoredRow = &collection.rows[row_idx as usize];
+        if row.present {
+            try primary_btree_insert(&db.primary_indexes[slot_idx], row.doc_id, &row.record_ptr);
+        }
+        row_idx = row_idx + 1u16;
+    }
+}
+
+fn db_reload_from_disk(db: &DbHandle) !void {
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    const info: PagerOpenInfo = try pager_open_at_stem(db_stem_ptr(db));
+    const snapshot: CatalogSnapshot = try catalog_load_at_stem(db_stem_ptr(db));
+    var i: usize = 0usize;
+    while i < DB_MAX_COMMIT_VIEWS {
+        db_clear_commit_view_state(&db.commit_views[i]);
+        i = i + 1usize;
+    }
+    var index_slot: usize = 0usize;
+    while index_slot < DB_MAX_COLLECTIONS {
+        db.primary_indexes[index_slot] = try primary_btree_init(256u32);
+        index_slot = index_slot + 1usize;
+    }
+    const current: &CommitViewState = &db.commit_views[0usize];
+    current.present = true;
+    current.retired = false;
+    current.reader_pins = 0u32;
+    current.view = CommitView{
+        generation: info.meta.commit_lsn + 1u64,
+        commit_lsn: info.meta.commit_lsn,
+        catalog_root: info.meta.catalog_root,
+        page_count: info.meta.page_count,
+        freelist_head: info.meta.freelist_head,
+        page_table_gen: info.meta.commit_lsn + 1u64,
+    };
+    const view: CatalogView = try catalog_view_from_page(snapshot.page[0: snapshot.page_size as usize]);
+    var collection_idx: u32 = 0u32;
+    while collection_idx < view.root.collection_count {
+        const entry: CatalogCollectionView = try catalog_collection_at(&view, collection_idx);
+        const slot: usize = (collection_idx as! usize) catch {
+            return error.DbCollectionFull;
+        };
+        if slot >= DB_MAX_COLLECTIONS {
+            return error.DbCollectionFull;
+        }
+        current.collections[slot] = DbCollection{
+            present: true,
+            collection_id: entry.meta.collection_id,
+            name_len: 0u16,
+            name: [],
+            next_doc_id: entry.meta.next_doc_id,
+            primary_root_page: entry.meta.primary_root_page,
+            row_count: 0u16,
+            rows: [],
+        };
+        try db_copy_name(entry.name, current.collections[slot].name[0: 64], &current.collections[slot].name_len);
+        const page_id: u32 = db_collection_data_page_id(&current.collections[slot]);
+        if page_id >= 2u32 && page_id < info.meta.page_count {
+            var raw_page: [byte: 8192] = [];
+            const page_buf: &[byte] = raw_page[0: info.meta.page_size as usize];
+            try pager_read_page_at_stem(db_stem_ptr(db), page_id, page_buf);
+            try db_collection_load_page(&current.collections[slot], page_id, page_buf);
+        }
+        collection_idx = collection_idx + 1u32;
+    }
+    current.collection_count = (view.root.collection_count as! u16) catch {
+        return error.DbCollectionFull;
+    };
+    db.current_view_slot = 0u16;
+    db.next_view_generation = current.view.generation + 1u64;
+    db.next_page_table_gen = current.view.page_table_gen + 1u64;
+    collection_idx = 0u32;
+    while collection_idx < view.root.collection_count {
+        try db_rebuild_primary_index(db, collection_idx as u16);
+        collection_idx = collection_idx + 1u32;
+    }
+    db_refresh_snapshot_status(db);
 }
 
 fn db_zero_commit_view() CommitView {
@@ -341,7 +664,6 @@ fn db_finalize_view_state(state: &CommitViewState) void {
     if state == null || !state.present {
         return;
     }
-    state.view.page_count = db_compute_view_page_count(state);
     state.retained_bytes = db_compute_view_retained_bytes(state);
 }
 
@@ -1074,6 +1396,140 @@ fn db_project_row(bound: &BoundSelect, rowref: &RowRef, out_row: &OwnedRow) !voi
     };
 }
 
+fn db_identifier_bytes(identifier: &SqlIdentifier) !&[byte] {
+    if identifier == null || identifier.len as usize > SQL_MAX_IDENTIFIER_LEN {
+        return error.DbInvalidExpr;
+    }
+    return identifier.bytes[0: identifier.len as usize];
+}
+
+fn db_literal_text_bytes(literal: &SqlLiteral) !&[byte] {
+    if literal == null || literal.text_len as usize > SQL_MAX_LITERAL_LEN {
+        return error.DbInvalidExpr;
+    }
+    return literal.text[0: literal.text_len as usize];
+}
+
+fn db_txn_stage_insert(txn: &Txn, collection_name: &[const byte], json_text: &[const byte]) !u64 {
+    if txn == null || txn.db == null {
+        return error.DbHandleInvalid;
+    }
+    if !txn.active {
+        return error.DbTxnInactive;
+    }
+    const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+    const slot: u16 = try db_find_collection_slot_by_name_in_view(txn.db, txn.view_slot, collection_name);
+    const collection_idx: usize = (slot as! usize) catch {
+        return error.DbCollectionNotFound;
+    };
+    if collection_idx >= DB_MAX_COLLECTIONS {
+        return error.DbCollectionNotFound;
+    }
+    if state.collections[collection_idx].row_count as usize >= DB_MAX_ROWS_PER_COLLECTION {
+        return error.DbRowFull;
+    }
+    if state.collections[collection_idx].next_doc_id == 0u64 ||
+        state.collections[collection_idx].next_doc_id == 18446744073709551615u64 {
+        return error.DbRowFull;
+    }
+    const doc_id: u64 = state.collections[collection_idx].next_doc_id;
+    var builder: DocBlobBuilder = doc_blob_builder_init();
+    try doc_blob_builder_build_json(&builder, json_text);
+    const row_slot: usize = state.collections[collection_idx].row_count as usize;
+    if row_slot >= DB_MAX_ROWS_PER_COLLECTION {
+        return error.DbRowFull;
+    }
+    const row: &DbStoredRow = &state.collections[collection_idx].rows[row_slot];
+    row.present = true;
+    row.doc_id = doc_id;
+    row.doc_len = builder.doc_len;
+    if builder.doc_len > 0u16 {
+        _ = mem_copy(&row.doc_blob[0], &builder.doc_blob[0], builder.doc_len as usize);
+    }
+    if state.collections[collection_idx].primary_root_page == 0u32 {
+        state.collections[collection_idx].primary_root_page = 2u32 + state.collections[collection_idx].collection_id;
+    }
+    state.collections[collection_idx].next_doc_id = state.collections[collection_idx].next_doc_id + 1u64;
+    row.record_ptr = record_pointer_make(db_collection_data_page_id(&state.collections[collection_idx]), row_slot as u16);
+    state.collections[collection_idx].row_count = state.collections[collection_idx].row_count + 1u16;
+    txn.has_writes = true;
+    return doc_id;
+}
+
+fn db_txn_stage_insert_stmt(txn: &Txn, stmt: &SqlInsertStmt) !u64 {
+    return try db_txn_stage_insert(txn, try db_identifier_bytes(&stmt.collection_name), try db_literal_text_bytes(&stmt.json_text));
+}
+
+fn db_txn_commit_persist(txn: &Txn) !WalCommit {
+    if txn == null || txn.db == null {
+        return error.DbHandleInvalid;
+    }
+    const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+    const current: &CommitViewState = try db_current_view_state(txn.db);
+    const info: PagerOpenInfo = try pager_open_at_stem(db_stem_ptr(txn.db));
+    const next_lsn: u64 = info.meta.commit_lsn + 1u64;
+    var max_page_count: u32 = info.meta.page_count;
+    var catalog_raw: [byte: 8192] = [];
+    const catalog_page: &[byte] = catalog_raw[0: info.meta.page_size as usize];
+    try pager_read_page_at_stem(db_stem_ptr(txn.db), info.meta.catalog_root, catalog_page);
+    var batch: WalBatch = wal_batch_init(next_lsn, next_lsn);
+    try wal_batch_append_begin(&batch);
+    var collection_idx: u16 = 0u16;
+    while collection_idx < state.collection_count {
+        const collection: &DbCollection = &state.collections[collection_idx as usize];
+        const current_collection: &DbCollection = &current.collections[collection_idx as usize];
+        if collection.present {
+            var current_next_doc_id: u64 = current_collection.next_doc_id;
+            while current_next_doc_id < collection.next_doc_id {
+                _ = try catalog_page_allocate_next_doc_id(catalog_page, collection.name[0: collection.name_len as usize]);
+                current_next_doc_id = current_next_doc_id + 1u64;
+            }
+            const page_id: u32 = db_collection_data_page_id(collection);
+            if page_id >= 2u32 {
+                if page_id + 1u32 > max_page_count {
+                    max_page_count = page_id + 1u32;
+                }
+                var row_idx: u16 = 0u16;
+                while row_idx < collection.row_count {
+                    const row: &DbStoredRow = &collection.rows[row_idx as usize];
+                    if row.present {
+                        row.record_ptr = record_pointer_make(page_id, row_idx);
+                    }
+                    row_idx = row_idx + 1u16;
+                }
+                var raw_page: [byte: 8192] = [];
+                const page_buf: &[byte] = raw_page[0: info.meta.page_size as usize];
+                try db_collection_encode_page(collection, info.meta.page_size, txn.db.now_ms, page_buf);
+                const header: &PageHeader = page_header_from_buf(page_buf);
+                if header == null {
+                    return error.DbCollectionPageMissing;
+                }
+                header.page_lsn = next_lsn;
+                _ = try page_checksum_finalize(page_buf);
+                try wal_batch_append_page(&batch, page_id, next_lsn, page_buf);
+            }
+        }
+        collection_idx = collection_idx + 1u16;
+    }
+    const catalog_header: &PageHeader = page_header_from_buf(catalog_page);
+    if catalog_header == null {
+        return error.DbCollectionPageMissing;
+    }
+    catalog_header.page_lsn = next_lsn;
+    _ = try page_checksum_finalize(catalog_page);
+    try wal_batch_append_page(&batch, info.meta.catalog_root, next_lsn, catalog_page);
+    const commit: WalCommit = WalCommit{
+        txn_id: next_lsn,
+        commit_lsn: next_lsn,
+        catalog_root: info.meta.catalog_root,
+        page_count: max_page_count,
+        freelist_head: info.meta.freelist_head,
+    };
+    try wal_batch_append_commit(&batch, &commit);
+    _ = try pager_commit_batch_at_stem(db_stem_ptr(txn.db), &batch, null);
+    return commit;
+}
+
 fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_slot: u16, node_index: i16, out_rows: &[u16], count_out: &u16) !void {
     const node: &PlanNode = try plan_node(plan, node_index);
     const state: &CommitViewState = try db_commit_view_state(db, view_slot);
@@ -1192,9 +1648,9 @@ export fn db_test_init_at_stem(db: &DbHandle, stem: &const byte) !void {
     initial.reader_pins = 0u32;
     initial.view = CommitView{
         generation: 1u64,
-        commit_lsn: 1u64,
+        commit_lsn: 0u64,
         catalog_root: 2u32,
-        page_count: 0u32,
+        page_count: 3u32,
         freelist_head: 0u32,
         page_table_gen: 1u64,
     };
@@ -1215,7 +1671,12 @@ export fn db_test_init_at_stem(db: &DbHandle, stem: &const byte) !void {
 export fn db_test_create_at_stem(db: &DbHandle, stem: &const byte) !void {
     try catalog_cleanup_stem(stem);
     try catalog_create_db_at_stem(stem, NOSQLITE_PAGE_SIZE_DEFAULT);
+    try db_test_open_at_stem(db, stem);
+}
+
+export fn db_test_open_at_stem(db: &DbHandle, stem: &const byte) !void {
     try db_test_init_at_stem(db, stem);
+    try db_reload_from_disk(db);
 }
 
 export fn db_test_track_drops(db: &DbHandle, cursor_counter: &i32, pin_counter: &i32) void {
@@ -1280,6 +1741,7 @@ export fn db_test_create_collection(db: &DbHandle, name: &[const byte]) !void {
         return error.DbCollectionFull;
     }
     const created: CollectionMeta = try catalog_create_collection_at_stem(db_stem_ptr(db), name);
+    const info: PagerOpenInfo = try pager_open_at_stem(db_stem_ptr(db));
     const view_slot: u16 = try db_stage_view_from_current(db);
     const state: &CommitViewState = try db_commit_view_state(db, view_slot);
     errdefer {
@@ -1295,6 +1757,7 @@ export fn db_test_create_collection(db: &DbHandle, name: &[const byte]) !void {
         collection_id: created.collection_id,
         name_len: 0u16,
         name: [],
+        next_doc_id: created.next_doc_id,
         primary_root_page: created.primary_root_page,
         row_count: 0u16,
         rows: [],
@@ -1302,6 +1765,10 @@ export fn db_test_create_collection(db: &DbHandle, name: &[const byte]) !void {
     try db_copy_name(name, state.collections[slot].name[0: 64], &state.collections[slot].name_len);
     db.primary_indexes[slot] = try primary_btree_init(256u32);
     state.collection_count = state.collection_count + 1u16;
+    state.view.commit_lsn = info.meta.commit_lsn;
+    state.view.page_count = info.meta.page_count;
+    state.view.catalog_root = info.meta.catalog_root;
+    state.view.freelist_head = info.meta.freelist_head;
     try db_publish_view_slot(db, view_slot);
 }
 
@@ -1309,45 +1776,113 @@ export fn db_test_insert_json(db: &DbHandle, collection_name: &[const byte], jso
     if db == null || json.ptr == null {
         return error.DbHandleInvalid;
     }
-    const slot: u16 = try db_find_collection_slot_by_name(db, collection_name);
-    const doc_id: u64 = try catalog_allocate_next_doc_id_at_stem(db_stem_ptr(db), collection_name);
-
-    var arena_buf: [byte: 8192] = [];
-    var arena: Arena = Arena{ buffer: null, size: 0, used: 0 };
-    arena_init(&arena, &arena_buf[0], 8192usize);
-    const value: JsonValue = try parse(&arena, json.ptr, json.len);
-
-    const view_slot: u16 = try db_stage_view_from_current(db);
-    const state: &CommitViewState = try db_commit_view_state(db, view_slot);
+    var txn: Txn = try txn_begin(db);
     errdefer {
-        db_clear_commit_view_state(state);
-        db_refresh_snapshot_status(db);
+        _ = txn_rollback(&txn) catch {};
     }
-    const collection_idx: usize = (slot as! usize) catch {
-        return error.DbCollectionNotFound;
-    };
-    if collection_idx >= DB_MAX_COLLECTIONS {
-        return error.DbCollectionNotFound;
-    }
-    if state.collections[collection_idx].row_count as usize >= DB_MAX_ROWS_PER_COLLECTION {
-        return error.DbRowFull;
-    }
-    const row_slot: usize = state.collections[collection_idx].row_count as usize;
-    if row_slot >= DB_MAX_ROWS_PER_COLLECTION {
-        return error.DbRowFull;
-    }
-    const row: &DbStoredRow = &state.collections[collection_idx].rows[row_slot];
-    const encoded_len: usize = try doc_encode_json_value(&value, row.doc_blob[0: DB_DOC_BLOB_MAX]);
-    row.present = true;
-    row.doc_id = doc_id;
-    row.doc_len = (encoded_len as! u16) catch {
-        return error.DbRowTooLarge;
-    };
-    row.record_ptr = record_pointer_make(1000u32 + doc_id as u32, row_slot as u16);
-    state.collections[collection_idx].row_count = state.collections[collection_idx].row_count + 1u16;
-    try primary_btree_insert(&db.primary_indexes[collection_idx], doc_id, &row.record_ptr);
-    try db_publish_view_slot(db, view_slot);
+    const doc_id: u64 = try db_txn_stage_insert(&txn, collection_name, json);
+    try txn_commit(&txn);
     return doc_id;
+}
+
+export fn txn_begin(db: &DbHandle) !Txn {
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    const view_slot: u16 = try db_stage_view_from_current(db);
+    return Txn{
+        db: db,
+        writer_guard: writer_lock_guard_acquire(db.next_view_generation, db.next_view_generation),
+        view_slot: view_slot,
+        has_writes: false,
+        active: true,
+        committed: false,
+    };
+}
+
+export fn txn_exec(txn: &Txn, sql: &[const byte]) !void {
+    if txn == null || txn.db == null {
+        return error.DbHandleInvalid;
+    }
+    if !txn.active {
+        return error.DbTxnInactive;
+    }
+    const stmt: SqlStmt = try sql_parse(sql);
+    if stmt.kind != SqlStmtKind.INSERT {
+        return error.DbUnsupportedStmt;
+    }
+    _ = try db_txn_stage_insert_stmt(txn, &stmt.insert_stmt);
+}
+
+export fn txn_commit(txn: &Txn) !void {
+    if txn == null || txn.db == null {
+        return error.DbHandleInvalid;
+    }
+    if !txn.active {
+        return error.DbTxnInactive;
+    }
+    if !txn.has_writes {
+        writer_lock_guard_release(&txn.writer_guard);
+        txn.committed = true;
+        txn.active = false;
+        return;
+    }
+    const committed: WalCommit = try db_txn_commit_persist(txn);
+    errdefer {
+        _ = db_reload_from_disk(txn.db) catch {};
+        writer_lock_guard_release(&txn.writer_guard);
+        txn.active = false;
+    }
+    const staged: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+    staged.view.commit_lsn = committed.commit_lsn;
+    staged.view.page_count = committed.page_count;
+    staged.view.catalog_root = committed.catalog_root;
+    staged.view.freelist_head = committed.freelist_head;
+    const collection_count: u16 = staged.collection_count;
+    try db_publish_view_slot(txn.db, txn.view_slot);
+    var i: u16 = 0u16;
+    while i < collection_count {
+        try db_rebuild_primary_index(txn.db, i);
+        i = i + 1u16;
+    }
+    writer_lock_guard_release(&txn.writer_guard);
+    txn.committed = true;
+    txn.active = false;
+}
+
+export fn txn_rollback(txn: &Txn) !void {
+    if txn == null || txn.db == null {
+        return error.DbHandleInvalid;
+    }
+    if !txn.active {
+        return error.DbTxnInactive;
+    }
+    const staged: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+    db_clear_commit_view_state(staged);
+    db_refresh_snapshot_status(txn.db);
+    writer_lock_guard_release(&txn.writer_guard);
+    txn.active = false;
+}
+
+export fn db_exec(db: &DbHandle, sql: &[const byte]) !void {
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    const stmt: SqlStmt = try sql_parse(sql);
+    if stmt.kind == SqlStmtKind.CREATE_COLLECTION {
+        try db_test_create_collection(db, try db_identifier_bytes(&stmt.create_collection.collection_name));
+        return;
+    }
+    if stmt.kind == SqlStmtKind.INSERT {
+        var txn: Txn = try txn_begin(db);
+        errdefer {
+            _ = txn_rollback(&txn) catch {};
+        }
+        _ = try db_txn_stage_insert_stmt(&txn, &stmt.insert_stmt);
+        try txn_commit(&txn);
+        return;
+    }
+    return error.DbUnsupportedStmt;
 }
 
 export fn db_query_cursor(db: &DbHandle, sql: &[const byte]) !QueryCursor {

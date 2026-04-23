@@ -48,7 +48,7 @@ fn run_persist_roundtrip() i32 {
     const created: CollectionMeta = catalog_create_collection_at_stem(TEST_STEM_CATALOG, &"users"[0: 5]) catch {
         return 24;
     };
-    if created.collection_id != 1u32 || created.next_doc_id != 1u64 {
+    if created.collection_id != 1u32 || created.next_doc_id != 1u64 || created.primary_root_page != 3u32 {
         return 25;
     }
 
@@ -76,7 +76,7 @@ fn run_persist_roundtrip() i32 {
     const users: CatalogCollectionView = catalog_snapshot_find_collection(&snapshot, &"users"[0: 5]) catch {
         return 32;
     };
-    if users.meta.next_doc_id != 3u64 || !byte_slices_equal(users.name, &"users"[0: 5]) {
+    if users.meta.next_doc_id != 3u64 || users.meta.primary_root_page != 3u32 || !byte_slices_equal(users.name, &"users"[0: 5]) {
         return 33;
     }
 

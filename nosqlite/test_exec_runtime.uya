@@ -7,10 +7,13 @@ use lib.storage.pager.SnapshotPressurePolicy;
 use lib.storage.pager.SnapshotPressureStatus;
 use lib.api.db.CommitView;
 use lib.api.db.DbHandle;
+use lib.api.db.Txn;
 use lib.api.db.QueryCursor;
+use lib.api.db.db_exec;
 use lib.api.db.db_test_create_at_stem;
 use lib.api.db.db_test_create_collection;
 use lib.api.db.db_test_insert_json;
+use lib.api.db.db_test_open_at_stem;
 use lib.api.db.db_test_reset_primary_index;
 use lib.api.db.db_test_set_snapshot_policy;
 use lib.api.db.db_test_set_now_ms;
@@ -26,16 +29,22 @@ use lib.api.db.cursor_next;
 use lib.api.db.cursor_row;
 use lib.api.db.query_cursor_is_open;
 use lib.api.db.query_cursor_commit_view;
+use lib.api.db.txn_begin;
+use lib.api.db.txn_exec;
+use lib.api.db.txn_commit;
+use lib.api.db.txn_rollback;
 use lib.api.result.QueryResult;
 use lib.api.result.OwnedRow;
 use lib.api.result.RowRef;
 use lib.api.result.query_result_row;
 use lib.api.result.owned_row_column_count;
 use lib.api.result.owned_row_cell_u64;
+use lib.api.result.owned_row_cell_i64;
 use lib.api.result.owned_row_cell_bool;
 use lib.api.result.owned_row_cell_text;
 
 const TEST_STEM_EXEC: *const byte = "/tmp/nosqlite_exec_phase8" as *const byte;
+const TEST_STEM_WRITE: *const byte = "/tmp/nosqlite_exec_phase10" as *const byte;
 
 var g_exec_result_deallocs: i32 = 0;
 
@@ -80,6 +89,11 @@ fn prepare_db(db: &DbHandle) !void {
     _ = try db_test_insert_json(db, "users", "{\"name\":\"cara\",\"age\":31,\"active\":true}");
 }
 
+fn prepare_empty_users_db(db: &DbHandle, stem: &const byte) !void {
+    try db_test_create_at_stem(db, stem);
+    try db_test_create_collection(db, "users");
+}
+
 fn run_cursor_seqscan_filter_limit() i32 {
     var db: DbHandle = DbHandle{};
     _ = prepare_db(&db) catch {
@@ -118,9 +132,11 @@ fn run_cursor_seqscan_filter_limit() i32 {
         return 11;
     }
 
-    if (cursor_next(&cursor) catch {
+    const third: !bool = cursor_next(&cursor);
+    if third.error_id != 0u32 {
         return 12;
-    }) {
+    }
+    if third.value {
         return 13;
     }
     return 0;
@@ -476,6 +492,196 @@ fn run_hard_snapshot_pressure_blocks_reads_and_writes() i32 {
     return 0;
 }
 
+fn run_insert_autocommit_and_query() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_empty_users_db(&db, TEST_STEM_WRITE) catch {
+        return 141;
+    };
+    _ = db_exec(&db, "INSERT INTO users JSON '{\"name\":\"ann\",\"age\":25,\"active\":true}';") catch {
+        return 142;
+    };
+    const result: QueryResult = db_query(&db, "SELECT _id, $.name, $.age FROM users WHERE _id = 1 LIMIT 1;") catch {
+        return 143;
+    };
+    if result.row_count != 1u32 || result.column_count != 3u16 {
+        return 144;
+    }
+    const row: &OwnedRow = query_result_row(&result, 0u32) catch {
+        return 145;
+    };
+    if (owned_row_cell_u64(row, 0u16) catch {
+        return 146;
+    }) != 1u64 {
+        return 147;
+    }
+    if !byte_slices_equal((owned_row_cell_text(row, 1u16) catch {
+        return 148;
+    }), "ann") {
+        return 149;
+    }
+    if (owned_row_cell_i64(row, 2u16) catch {
+        return 150;
+    }) != 25i64 {
+        return 151;
+    }
+    return 0;
+}
+
+fn run_txn_uncommitted_invisible_then_commit() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_empty_users_db(&db, TEST_STEM_WRITE) catch {
+        return 152;
+    };
+    var txn: Txn = txn_begin(&db) catch {
+        return 153;
+    };
+    _ = txn_exec(&txn, "INSERT INTO users JSON '{\"name\":\"beth\",\"age\":18,\"active\":false}';") catch {
+        return 154;
+    };
+    const before: QueryResult = db_query(&db, "SELECT _id FROM users LIMIT 10;") catch {
+        return 155;
+    };
+    if before.row_count != 0u32 {
+        return 156;
+    }
+    _ = txn_commit(&txn) catch {
+        return 157;
+    };
+    const after: QueryResult = db_query(&db, "SELECT _id, $.name FROM users LIMIT 10;") catch {
+        return 158;
+    };
+    if after.row_count != 1u32 {
+        return 159;
+    }
+    const row: &OwnedRow = query_result_row(&after, 0u32) catch {
+        return 160;
+    };
+    if (owned_row_cell_u64(row, 0u16) catch {
+        return 161;
+    }) != 1u64 {
+        return 162;
+    }
+    if !byte_slices_equal((owned_row_cell_text(row, 1u16) catch {
+        return 163;
+    }), "beth") {
+        return 164;
+    }
+    return 0;
+}
+
+fn run_txn_rollback_and_drop_abort() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_empty_users_db(&db, TEST_STEM_WRITE) catch {
+        return 165;
+    };
+    {
+        var txn: Txn = txn_begin(&db) catch {
+            return 166;
+        };
+        _ = txn_exec(&txn, "INSERT INTO users JSON '{\"name\":\"cara\",\"age\":31,\"active\":true}';") catch {
+            return 167;
+        };
+        _ = txn_rollback(&txn) catch {
+            return 168;
+        };
+    }
+    const after_rollback: QueryResult = db_query(&db, "SELECT _id FROM users LIMIT 10;") catch {
+        return 169;
+    };
+    if after_rollback.row_count != 0u32 {
+        return 170;
+    }
+
+    {
+        var txn2: Txn = txn_begin(&db) catch {
+            return 171;
+        };
+        _ = txn_exec(&txn2, "INSERT INTO users JSON '{\"name\":\"dina\",\"age\":29,\"active\":true}';") catch {
+            return 172;
+        };
+    }
+    const after_drop: QueryResult = db_query(&db, "SELECT _id FROM users LIMIT 10;") catch {
+        return 173;
+    };
+    if after_drop.row_count != 0u32 {
+        return 174;
+    }
+    _ = db_exec(&db, "INSERT INTO users JSON '{\"name\":\"eve\",\"age\":20,\"active\":true}';") catch {
+        return 175;
+    };
+    const after_reuse: QueryResult = db_query(&db, "SELECT _id, $.name FROM users LIMIT 10;") catch {
+        return 176;
+    };
+    if after_reuse.row_count != 1u32 {
+        return 177;
+    }
+    const row: &OwnedRow = query_result_row(&after_reuse, 0u32) catch {
+        return 178;
+    };
+    if (owned_row_cell_u64(row, 0u16) catch {
+        return 179;
+    }) != 1u64 {
+        return 180;
+    }
+    if !byte_slices_equal((owned_row_cell_text(row, 1u16) catch {
+        return 181;
+    }), "eve") {
+        return 182;
+    }
+    return 0;
+}
+
+fn run_insert_persists_after_reopen() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_empty_users_db(&db, TEST_STEM_WRITE) catch {
+        return 175;
+    };
+    _ = db_exec(&db, "INSERT INTO users JSON '{\"name\":\"erin\",\"age\":22,\"active\":true}';") catch {
+        return 176;
+    };
+    _ = db_exec(&db, "INSERT INTO users JSON '{\"name\":\"faye\",\"age\":24,\"active\":false}';") catch {
+        return 177;
+    };
+
+    var reopened: DbHandle = DbHandle{};
+    _ = db_test_open_at_stem(&reopened, TEST_STEM_WRITE) catch {
+        return 178;
+    };
+    const result: QueryResult = db_query(&reopened, "SELECT _id, $.name FROM users LIMIT 10;") catch {
+        return 179;
+    };
+    if result.row_count != 2u32 {
+        return 180;
+    }
+    const row0: &OwnedRow = query_result_row(&result, 0u32) catch {
+        return 181;
+    };
+    const row1: &OwnedRow = query_result_row(&result, 1u32) catch {
+        return 182;
+    };
+    if (owned_row_cell_u64(row0, 0u16) catch {
+        return 183;
+    }) != 1u64 {
+        return 184;
+    }
+    if !byte_slices_equal((owned_row_cell_text(row0, 1u16) catch {
+        return 185;
+    }), "erin") {
+        return 186;
+    }
+    if (owned_row_cell_u64(row1, 0u16) catch {
+        return 187;
+    }) != 2u64 {
+        return 188;
+    }
+    if !byte_slices_equal((owned_row_cell_text(row1, 1u16) catch {
+        return 189;
+    }), "faye") {
+        return 190;
+    }
+    return 0;
+}
+
 fn main() i32 {
     const a: i32 = run_cursor_seqscan_filter_limit();
     if a != 0 {
@@ -512,6 +718,22 @@ fn main() i32 {
     const h: i32 = run_hard_snapshot_pressure_blocks_reads_and_writes();
     if h != 0 {
         return h;
+    }
+    const i: i32 = run_insert_autocommit_and_query();
+    if i != 0 {
+        return i;
+    }
+    const j: i32 = run_txn_uncommitted_invisible_then_commit();
+    if j != 0 {
+        return j;
+    }
+    const k: i32 = run_txn_rollback_and_drop_abort();
+    if k != 0 {
+        return k;
+    }
+    const l: i32 = run_insert_persists_after_reopen();
+    if l != 0 {
+        return l;
     }
     return 0;
 }
