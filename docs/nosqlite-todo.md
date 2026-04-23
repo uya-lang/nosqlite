@@ -277,11 +277,11 @@
 
 ## Phase 12.5 - 外围异步能力
 
-- [ ] 评估 `checkpoint_async`
-- [ ] 评估 `vacuum_async`
-- [ ] 评估 `build_index_async`
-- [ ] 评估流式 query service wrapper
-- [ ] 明确 `@async_fn` 不进入 pager / WAL / B+Tree 核心路径
+- [x] 评估 `checkpoint_async`
+- [x] 评估 `vacuum_async`
+- [x] 评估 `build_index_async`
+- [x] 评估流式 query service wrapper
+- [x] 明确 `@async_fn` 不进入 pager / WAL / B+Tree 核心路径
 
 ## Phase 13 - 格式兼容与升级
 

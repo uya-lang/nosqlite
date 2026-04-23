@@ -31,6 +31,7 @@ use lib.storage.pager.catalog_load_at_stem;
 use lib.storage.pager.cursor_lease_start;
 use lib.storage.pager.cursor_lease_validate;
 use lib.storage.pager.pager_check_wal_at_stem;
+use lib.storage.pager.pager_checkpoint_at_stem;
 use lib.storage.pager.pager_open_at_stem;
 use lib.storage.pager.pager_read_page_at_stem;
 use lib.storage.pager.pager_commit_batch_at_stem;
@@ -147,6 +148,7 @@ export error DbTxnCommitted;
 export error DbPageCorrupt;
 export error DbCollectionPageMissing;
 export error DbIndexExists;
+export error DbVacuumUnsupported;
 
 export const DB_MAX_COLLECTIONS: usize = 4;
 export const DB_MAX_ROWS_PER_COLLECTION: usize = 64;
@@ -2265,14 +2267,24 @@ fn db_txn_stage_create_index_stmt(txn: &Txn, stmt: &SqlStmt) !void {
     if txn == null || txn.db == null {
         return error.DbHandleInvalid;
     }
+    try db_txn_stage_create_index(
+        txn,
+        try db_identifier_bytes(&stmt.create_index_stmt.collection_name),
+        try db_identifier_bytes(&stmt.create_index_stmt.index_name),
+        sql_path_slice(&stmt.create_index_stmt.target_path),
+    );
+}
+
+fn db_txn_stage_create_index(txn: &Txn, collection_name: &[const byte], index_name: &[const byte], path_bytes: &[const byte]) !void {
+    if txn == null || txn.db == null || collection_name.ptr == null || index_name.ptr == null || path_bytes.ptr == null {
+        return error.DbHandleInvalid;
+    }
     const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
-    const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(txn.db, txn.view_slot, try db_identifier_bytes(&stmt.create_index_stmt.collection_name));
+    const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(txn.db, txn.view_slot, collection_name);
     const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
     if collection.secondary_index_count as usize >= DB_MAX_SECONDARY_INDEXES_PER_COLLECTION {
         return error.DbCollectionFull;
     }
-    const index_name: &[byte] = try db_identifier_bytes(&stmt.create_index_stmt.index_name);
-    const path_bytes: &[const byte] = sql_path_slice(&stmt.create_index_stmt.target_path);
     const program: PathProgram = try path_program_compile(path_bytes);
     var max_index_id: u32 = 0u32;
     var i: u16 = 0u16;
@@ -2686,6 +2698,37 @@ export fn db_check(db: &DbHandle) !DbCheckReport {
         return error.DbHandleInvalid;
     }
     return try db_check_at_stem(db_stem_ptr(db));
+}
+
+export fn db_checkpoint(db: &DbHandle) !DbCheckReport {
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    var guard: WriterLockGuard = writer_lock_guard_acquire(db.next_view_generation, db.next_view_generation);
+    defer { writer_lock_guard_release(&guard); }
+    _ = try pager_checkpoint_at_stem(db_stem_ptr(db));
+    try db_reload_from_disk(db);
+    return try db_check(db);
+}
+
+export fn db_vacuum(db: &DbHandle) !DbCheckReport {
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    return error.DbVacuumUnsupported;
+}
+
+export fn db_build_index(db: &DbHandle, collection_name: &[const byte], index_name: &[const byte], path_bytes: &[const byte]) !DbCheckReport {
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    var txn: Txn = try txn_begin(db);
+    errdefer {
+        _ = txn_rollback(&txn) catch {};
+    }
+    try db_txn_stage_create_index(&txn, collection_name, index_name, path_bytes);
+    try txn_commit(&txn);
+    return try db_check(db);
 }
 
 export fn db_test_track_drops(db: &DbHandle, cursor_counter: &i32, pin_counter: &i32) void {

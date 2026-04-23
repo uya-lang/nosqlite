@@ -40,9 +40,11 @@
 - `nosqlite/test_sql_parser.uya` -> `tests/sql/`
 - `nosqlite/test_binder_planner.uya` -> `tests/plan/`
 - `nosqlite/test_exec_runtime.uya` -> `tests/exec/`
+- `nosqlite/test_phase12_async.uya` -> `tests/exec/`
 - `nosqlite/test_storage_page_basics.uya` -> `tests/storage/`
 - `nosqlite/test_storage_pager_runtime.uya` -> `tests/storage/`
 - `nosqlite/test_storage_slotted_page_runtime.uya` -> `tests/storage/`
 - `nosqlite/test_storage_wal_runtime.uya` -> `tests/storage/`
 - `nosqlite/test_catalog_basics.uya` -> `tests/storage/`
 - `nosqlite/test_index_btree.uya` -> `tests/storage/`
+- `nosqlite/tests/verify_phase12_5_async_boundary.sh` -> Phase 12.5 async boundary verification

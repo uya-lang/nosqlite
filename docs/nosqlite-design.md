@@ -727,6 +727,11 @@ v1 核心同步路径：
 5. 通过 socket / pipe 输出 `db_query_cursor` 的流式结果
 6. benchmark runner / admin task
 
+当前落地约束：
+
+- 实际 async shell 收敛在 [`lib/api/db_async.uya`](/home/winger/nosqlite/nosqlite/lib/api/db_async.uya)
+- 当前 query service wrapper 先基于拥有型 `QueryResult` 做按行推进，避免把 borrowed `RowRef` 跨 `@await` 暴露出去
+
 也就是说：
 
 - sync core first

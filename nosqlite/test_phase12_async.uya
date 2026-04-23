@@ -1,0 +1,174 @@
+use std.async;
+
+use lib.api.db.DbHandle;
+use lib.api.db.DbCheckReport;
+use lib.api.db.db_query;
+use lib.api.db.db_test_create_at_stem;
+use lib.api.db.db_test_create_collection;
+use lib.api.db.db_test_insert_json;
+use lib.api.db_async.DbQueryResultStream;
+use lib.api.db_async.db_build_index_async;
+use lib.api.db_async.db_checkpoint_async;
+use lib.api.db_async.db_query_stream_current_row;
+use lib.api.db_async.db_query_stream_next_async;
+use lib.api.db_async.db_query_stream_open;
+use lib.api.db_async.db_vacuum_async;
+use lib.api.result.QueryResult;
+use lib.api.result.OwnedRow;
+use lib.api.result.query_result_row;
+use lib.api.result.owned_row_cell_i64;
+use lib.api.result.owned_row_cell_text;
+use lib.api.result.owned_row_cell_u64;
+
+const TEST_STEM_PHASE12_ASYNC: *const byte = "/tmp/nosqlite_phase12_async" as *const byte;
+
+var g_phase12_async_db: DbHandle = DbHandle{};
+
+fn byte_slices_equal(a: &[byte], b: &[const byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn prepare_phase12_async_db(db: &DbHandle) !void {
+    try db_test_create_at_stem(db, TEST_STEM_PHASE12_ASYNC);
+    try db_test_create_collection(db, "users");
+    _ = try db_test_insert_json(db, "users", "{\"name\":\"ann\",\"age\":25,\"active\":true}");
+    _ = try db_test_insert_json(db, "users", "{\"name\":\"bob\",\"age\":18,\"active\":false}");
+    _ = try db_test_insert_json(db, "users", "{\"name\":\"cara\",\"age\":31,\"active\":true}");
+}
+
+fn run_phase12_async_wrappers() i32 {
+    _ = prepare_phase12_async_db(&g_phase12_async_db) catch {
+        return 1;
+    };
+
+    const build_report: !DbCheckReport = block_on<DbCheckReport>(
+        db_build_index_async(&g_phase12_async_db, "users", "users_age_idx", "$.age")
+    );
+    if build_report.error_id != 0u32 {
+        return 2;
+    }
+    if build_report.value.collection_count != 1u32 || build_report.value.row_count != 3u32 {
+        return 3;
+    }
+
+    const explain: QueryResult = db_query(&g_phase12_async_db, "EXPLAIN SELECT _id FROM users WHERE $.age = 25 LIMIT 10;") catch {
+        return 4;
+    };
+    if explain.row_count != 1u32 || explain.column_count != 1u16 {
+        return 5;
+    }
+    const explain_row: &OwnedRow = query_result_row(&explain, 0u32) catch {
+        return 6;
+    };
+    const explain_text: &[byte] = owned_row_cell_text(explain_row, 0u16) catch {
+        return 7;
+    };
+    if !byte_slices_equal(explain_text, "Limit 10\nIndexScan users users_age_idx $.age = 25\n") {
+        return 8;
+    }
+
+    const checkpoint_report: !DbCheckReport = block_on<DbCheckReport>(db_checkpoint_async(&g_phase12_async_db));
+    if checkpoint_report.error_id != 0u32 {
+        return 9;
+    }
+    if checkpoint_report.value.collection_count != 1u32 ||
+        checkpoint_report.value.row_count != 3u32 ||
+        checkpoint_report.value.wal_records != 0u32 {
+        return 10;
+    }
+
+    var stream: DbQueryResultStream = db_query_stream_open(
+        &g_phase12_async_db,
+        "SELECT _id, $.name, $.age FROM users ORDER BY _id ASC LIMIT 3;"
+    ) catch {
+        return 11;
+    };
+
+    const row1_ready: !bool = block_on<bool>(db_query_stream_next_async(&stream));
+    if row1_ready.error_id != 0u32 || !row1_ready.value {
+        return 12;
+    }
+    const row1: &OwnedRow = db_query_stream_current_row(&stream) catch {
+        return 13;
+    };
+    if (owned_row_cell_u64(row1, 0u16) catch {
+        return 14;
+    }) != 1u64 {
+        return 15;
+    }
+    if !byte_slices_equal((owned_row_cell_text(row1, 1u16) catch {
+        return 16;
+    }), "ann") {
+        return 17;
+    }
+    if (owned_row_cell_i64(row1, 2u16) catch {
+        return 18;
+    }) != 25i64 {
+        return 19;
+    }
+
+    const row2_ready: !bool = block_on<bool>(db_query_stream_next_async(&stream));
+    if row2_ready.error_id != 0u32 || !row2_ready.value {
+        return 20;
+    }
+    const row2: &OwnedRow = db_query_stream_current_row(&stream) catch {
+        return 21;
+    };
+    if (owned_row_cell_u64(row2, 0u16) catch {
+        return 22;
+    }) != 2u64 {
+        return 23;
+    }
+    if !byte_slices_equal((owned_row_cell_text(row2, 1u16) catch {
+        return 24;
+    }), "bob") {
+        return 25;
+    }
+
+    const row3_ready: !bool = block_on<bool>(db_query_stream_next_async(&stream));
+    if row3_ready.error_id != 0u32 || !row3_ready.value {
+        return 26;
+    }
+    const row3: &OwnedRow = db_query_stream_current_row(&stream) catch {
+        return 27;
+    };
+    if (owned_row_cell_u64(row3, 0u16) catch {
+        return 28;
+    }) != 3u64 {
+        return 29;
+    }
+    if !byte_slices_equal((owned_row_cell_text(row3, 1u16) catch {
+        return 30;
+    }), "cara") {
+        return 31;
+    }
+
+    const done: !bool = block_on<bool>(db_query_stream_next_async(&stream));
+    if done.error_id != 0u32 || done.value {
+        return 32;
+    }
+
+    const vacuum_report: !DbCheckReport = block_on<DbCheckReport>(db_vacuum_async(&g_phase12_async_db));
+    if vacuum_report.error_id == 0u32 {
+        return 33;
+    }
+    if vacuum_report.error_id != @error_id(error.DbVacuumUnsupported) {
+        return 34;
+    }
+
+    return 0;
+}
+
+fn main() i32 {
+    return run_phase12_async_wrappers();
+}

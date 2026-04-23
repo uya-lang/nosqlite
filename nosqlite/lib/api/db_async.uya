@@ -1,0 +1,64 @@
+// lib.api - async shell around synchronous db core
+// 模块路径：lib/api/db_async.uya → use lib.api.db_async;
+
+use std.async;
+
+use lib.api.db.DbHandle;
+use lib.api.db.DbCheckReport;
+use lib.api.db.db_build_index;
+use lib.api.db.db_checkpoint;
+use lib.api.db.db_query;
+use lib.api.db.db_vacuum;
+use lib.api.result.QueryResult;
+use lib.api.result.OwnedRow;
+use lib.api.result.query_result_row;
+
+export struct DbQueryResultStream {
+    result: QueryResult,
+    next_index: u32,
+    current_row: &OwnedRow,
+    has_current: bool,
+}
+
+export @async_fn fn db_checkpoint_async(db: &DbHandle) Future<!DbCheckReport> {
+    return try db_checkpoint(db);
+}
+
+export @async_fn fn db_vacuum_async(db: &DbHandle) Future<!DbCheckReport> {
+    return try db_vacuum(db);
+}
+
+export @async_fn fn db_build_index_async(db: &DbHandle, collection_name: &[const byte], index_name: &[const byte], path_bytes: &[const byte]) Future<!DbCheckReport> {
+    return try db_build_index(db, collection_name, index_name, path_bytes);
+}
+
+export fn db_query_stream_open(db: &DbHandle, sql: &[const byte]) !DbQueryResultStream {
+    return DbQueryResultStream{
+        result: try db_query(db, sql),
+        next_index: 0u32,
+        current_row: null,
+        has_current: false,
+    };
+}
+
+export @async_fn fn db_query_stream_next_async(stream: &DbQueryResultStream) Future<!bool> {
+    if stream == null {
+        return error.QueryResultCellNotFound;
+    }
+    if stream.next_index >= stream.result.row_count {
+        stream.current_row = null;
+        stream.has_current = false;
+        return false;
+    }
+    stream.current_row = try query_result_row(&stream.result, stream.next_index);
+    stream.next_index = stream.next_index + 1u32;
+    stream.has_current = true;
+    return true;
+}
+
+export fn db_query_stream_current_row(stream: &DbQueryResultStream) !&OwnedRow {
+    if stream == null || !stream.has_current || stream.current_row == null {
+        return error.QueryResultCellNotFound;
+    }
+    return stream.current_row;
+}
