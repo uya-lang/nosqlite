@@ -156,16 +156,16 @@
 
 ## Phase 7 - Binder / Planner
 
-- [ ] 先写失败测试：路径绑定、字面量归一、索引选择
-- [ ] 实现 collection 存在性校验
-- [ ] 实现系统列绑定
-- [ ] 实现 JSON path 绑定
-- [ ] 实现字面量类型归一
-- [ ] 实现 `_id = literal` 的索引选择
-- [ ] 实现默认 `SeqScan`
-- [ ] 实现 `Filter` 下推
-- [ ] 实现 `Limit` 规划
-- [ ] 实现最小 `EXPLAIN` 输出
+- [x] 先写失败测试：路径绑定、字面量归一、索引选择
+- [x] 实现 collection 存在性校验
+- [x] 实现系统列绑定
+- [x] 实现 JSON path 绑定
+- [x] 实现字面量类型归一
+- [x] 实现 `_id = literal` 的索引选择
+- [x] 实现默认 `SeqScan`
+- [x] 实现 `Filter` 下推
+- [x] 实现 `Limit` 规划
+- [x] 实现最小 `EXPLAIN` 输出
 
 ## Phase 8 - Executor v1
 

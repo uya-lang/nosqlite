@@ -1,0 +1,606 @@
+// lib.sql - binder
+// 模块路径：lib/sql/binder.uya → use lib.sql.binder;
+
+use std.mem.mem.mem_copy;
+use lib.sql.ast;
+use lib.doc.path;
+use lib.storage.pager;
+
+export error BindUnsupportedStmt;
+export error BindCollectionNotFound;
+export error BindTooManyExprNodes;
+export error BindLiteralTooLong;
+export error BindInvalidLiteral;
+export error BindInvalidExpr;
+export error BindPathCompileFailed;
+
+export enum BoundLiteralKind {
+    NULL,
+    BOOL,
+    INT64,
+    UINT64,
+    NUMBER_TEXT,
+    STRING,
+}
+
+export enum BoundExprKind {
+    SYSTEM_ID,
+    PATH,
+    LITERAL,
+    BINARY,
+    UNARY,
+    IS_NULL,
+}
+
+export struct BoundLiteral {
+    kind: BoundLiteralKind,
+    bool_value: bool,
+    i64_value: i64,
+    u64_value: u64,
+    text_len: u16,
+    text: [byte: SQL_MAX_LITERAL_LEN],
+}
+
+export struct BoundPath {
+    len: u16,
+    bytes: [byte: SQL_MAX_PATH_LEN],
+    program: PathProgram,
+}
+
+export struct BoundExprNode {
+    kind: BoundExprKind,
+    left: i16,
+    right: i16,
+    binary_op: SqlBinaryOp,
+    unary_op: SqlUnaryOp,
+    literal: BoundLiteral,
+    path: BoundPath,
+}
+
+export struct BoundSelect {
+    collection_id: u32,
+    primary_root_page: u32,
+    collection_name: SqlIdentifier,
+    projection_count: u16,
+    projection_exprs: [i16: SQL_MAX_SELECT_ITEMS],
+    has_where: bool,
+    where_expr: i16,
+    has_limit: bool,
+    limit_value: u32,
+    expr_count: u16,
+    expr_nodes: [BoundExprNode: SQL_MAX_EXPR_NODES],
+}
+
+fn bound_expr_precedence(node: &BoundExprNode) i32 {
+    if node == null {
+        return 0;
+    }
+    if node.kind == BoundExprKind.BINARY {
+        if node.binary_op == SqlBinaryOp.OR {
+            return 1;
+        }
+        if node.binary_op == SqlBinaryOp.AND {
+            return 2;
+        }
+        return 3;
+    }
+    if node.kind == BoundExprKind.IS_NULL {
+        return 3;
+    }
+    if node.kind == BoundExprKind.UNARY {
+        return 4;
+    }
+    return 5;
+}
+
+fn bind_copy_const_bytes(text: &[const byte], out: &[byte], len_out: &u16, max_len: usize) !void {
+    if text.ptr == null || out.ptr == null || len_out == null || text.len > max_len {
+        return error.BindLiteralTooLong;
+    }
+    len_out[0] = (text.len as! u16) catch {
+        return error.BindLiteralTooLong;
+    };
+    if text.len > 0 {
+        _ = mem_copy(out.ptr, text.ptr, text.len);
+    }
+}
+
+fn bind_is_digit(b: byte) bool {
+    return b >= 48 && b <= 57;
+}
+
+fn bind_contains_number_punct(text: &[const byte]) bool {
+    var i: usize = 0usize;
+    while i < text.len {
+        const b: byte = text.ptr[i];
+        if b == 46 || b == 101 || b == 69 {
+            return true;
+        }
+        i = i + 1usize;
+    }
+    return false;
+}
+
+fn bind_parse_u64_decimal(text: &[const byte], value_out: &u64) !void {
+    if text.ptr == null || text.len == 0 || value_out == null {
+        return error.BindInvalidLiteral;
+    }
+    var value: u64 = 0u64;
+    var i: usize = 0usize;
+    while i < text.len {
+        const b: byte = text.ptr[i];
+        if !bind_is_digit(b) {
+            return error.BindInvalidLiteral;
+        }
+        const digit: u64 = (b - (48 as byte)) as u64;
+        if value > (18446744073709551615u64 - digit) / 10u64 {
+            return error.BindInvalidLiteral;
+        }
+        value = value * 10u64 + digit;
+        i = i + 1usize;
+    }
+    value_out[0] = value;
+}
+
+fn bind_literal_copy_text(kind: BoundLiteralKind, text: &[const byte]) !BoundLiteral {
+    var out: BoundLiteral = BoundLiteral{
+        kind: kind,
+        bool_value: false,
+        i64_value: 0i64,
+        u64_value: 0u64,
+        text_len: 0u16,
+        text: [],
+    };
+    try bind_copy_const_bytes(text, out.text[0: SQL_MAX_LITERAL_LEN], &out.text_len, SQL_MAX_LITERAL_LEN);
+    return out;
+}
+
+fn bind_normalize_literal(literal: &SqlLiteral) !BoundLiteral {
+    if literal == null {
+        return error.BindInvalidLiteral;
+    }
+    if literal.kind == SqlLiteralKind.NULL {
+        return BoundLiteral{
+            kind: BoundLiteralKind.NULL,
+            bool_value: false,
+            i64_value: 0i64,
+            u64_value: 0u64,
+            text_len: 0u16,
+            text: [],
+        };
+    }
+    if literal.kind == SqlLiteralKind.BOOL {
+        return BoundLiteral{
+            kind: BoundLiteralKind.BOOL,
+            bool_value: literal.bool_value,
+            i64_value: 0i64,
+            u64_value: 0u64,
+            text_len: 0u16,
+            text: [],
+        };
+    }
+    if literal.kind == SqlLiteralKind.STRING {
+        return try bind_literal_copy_text(BoundLiteralKind.STRING, literal.text[0: literal.text_len as usize]);
+    }
+
+    const text: &[const byte] = literal.text[0: literal.text_len as usize];
+    if bind_contains_number_punct(text) {
+        return try bind_literal_copy_text(BoundLiteralKind.NUMBER_TEXT, text);
+    }
+
+    var value: u64 = 0u64;
+    try bind_parse_u64_decimal(text, &value);
+    return BoundLiteral{
+        kind: BoundLiteralKind.UINT64,
+        bool_value: false,
+        i64_value: 0i64,
+        u64_value: value,
+        text_len: 0u16,
+        text: [],
+    };
+}
+
+fn bind_literal_negate(literal: &BoundLiteral) !BoundLiteral {
+    if literal == null {
+        return error.BindInvalidLiteral;
+    }
+    if literal.kind == BoundLiteralKind.UINT64 {
+        if literal.u64_value <= 9223372036854775808u64 {
+            var value: i64 = 0i64;
+            if literal.u64_value == 9223372036854775808u64 {
+                value = -9223372036854775807i64 - 1i64;
+            } else {
+                value = 0i64 - literal.u64_value as i64;
+            }
+            return BoundLiteral{
+                kind: BoundLiteralKind.INT64,
+                bool_value: false,
+                i64_value: value,
+                u64_value: 0u64,
+                text_len: 0u16,
+                text: [],
+            };
+        }
+        return error.BindInvalidLiteral;
+    }
+    if literal.kind == BoundLiteralKind.INT64 {
+        return BoundLiteral{
+            kind: BoundLiteralKind.INT64,
+            bool_value: false,
+            i64_value: 0i64 - literal.i64_value,
+            u64_value: 0u64,
+            text_len: 0u16,
+            text: [],
+        };
+    }
+    if literal.kind == BoundLiteralKind.NUMBER_TEXT {
+        var out: BoundLiteral = BoundLiteral{
+            kind: BoundLiteralKind.NUMBER_TEXT,
+            bool_value: false,
+            i64_value: 0i64,
+            u64_value: 0u64,
+            text_len: 0u16,
+            text: [],
+        };
+        const src_len: usize = literal.text_len as usize;
+        if src_len + 1usize > SQL_MAX_LITERAL_LEN {
+            return error.BindLiteralTooLong;
+        }
+        out.text[0usize] = 45 as byte;
+        if src_len > 0usize {
+            _ = mem_copy(&out.text[1usize], &literal.text[0], src_len);
+        }
+        out.text_len = ((src_len + 1usize) as! u16) catch {
+            return error.BindLiteralTooLong;
+        };
+        return out;
+    }
+    return error.BindInvalidLiteral;
+}
+
+fn bind_copy_path_expr(path_expr: &SqlPathExpr, out: &BoundPath) !void {
+    if path_expr == null || out == null {
+        return error.BindPathCompileFailed;
+    }
+    out.len = path_expr.len;
+    const slice: &[const byte] = sql_path_slice(path_expr);
+    if slice.len > 0 {
+        _ = mem_copy(&out.bytes[0], slice.ptr, slice.len);
+    }
+    out.program = try path_program_compile(slice);
+}
+
+fn bind_add_expr(bound: &BoundSelect, node: &BoundExprNode) !i16 {
+    if bound == null || node == null || bound.expr_count as usize >= SQL_MAX_EXPR_NODES {
+        return error.BindTooManyExprNodes;
+    }
+    const slot: usize = bound.expr_count as usize;
+    bound.expr_nodes[slot] = node[0];
+    bound.expr_count = bound.expr_count + 1u16;
+    return (slot as! i16) catch {
+        return error.BindTooManyExprNodes;
+    };
+}
+
+fn bind_expr(stmt: &SqlStmt, ast_expr_index: i16, bound: &BoundSelect) !i16 {
+    const expr: &SqlExprNode = try sql_expr_node(stmt, ast_expr_index);
+    if expr.kind == SqlExprKind.SYSTEM_ID {
+        return try bind_add_expr(bound, &BoundExprNode{
+            kind: BoundExprKind.SYSTEM_ID,
+            left: -1,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: SqlUnaryOp.NOT,
+            literal: BoundLiteral{},
+            path: BoundPath{},
+        });
+    }
+    if expr.kind == SqlExprKind.PATH {
+        var path_bound: BoundPath = BoundPath{};
+        try bind_copy_path_expr(&expr.path, &path_bound);
+        return try bind_add_expr(bound, &BoundExprNode{
+            kind: BoundExprKind.PATH,
+            left: -1,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: SqlUnaryOp.NOT,
+            literal: BoundLiteral{},
+            path: path_bound,
+        });
+    }
+    if expr.kind == SqlExprKind.LITERAL {
+        return try bind_add_expr(bound, &BoundExprNode{
+            kind: BoundExprKind.LITERAL,
+            left: -1,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: SqlUnaryOp.NOT,
+            literal: try bind_normalize_literal(&expr.literal),
+            path: BoundPath{},
+        });
+    }
+    if expr.kind == SqlExprKind.UNARY {
+        const child: i16 = try bind_expr(stmt, expr.left, bound);
+        if expr.unary_op == SqlUnaryOp.NEGATE {
+            const child_expr: &BoundExprNode = try bound_expr_node(bound, child);
+            if child_expr.kind == BoundExprKind.LITERAL {
+                return try bind_add_expr(bound, &BoundExprNode{
+                    kind: BoundExprKind.LITERAL,
+                    left: -1,
+                    right: -1,
+                    binary_op: SqlBinaryOp.EQ,
+                    unary_op: SqlUnaryOp.NOT,
+                    literal: try bind_literal_negate(&child_expr.literal),
+                    path: BoundPath{},
+                });
+            }
+        }
+        return try bind_add_expr(bound, &BoundExprNode{
+            kind: BoundExprKind.UNARY,
+            left: child,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: expr.unary_op,
+            literal: BoundLiteral{},
+            path: BoundPath{},
+        });
+    }
+    if expr.kind == SqlExprKind.IS_NULL {
+        const child: i16 = try bind_expr(stmt, expr.left, bound);
+        return try bind_add_expr(bound, &BoundExprNode{
+            kind: BoundExprKind.IS_NULL,
+            left: child,
+            right: -1,
+            binary_op: SqlBinaryOp.EQ,
+            unary_op: SqlUnaryOp.NOT,
+            literal: BoundLiteral{},
+            path: BoundPath{},
+        });
+    }
+    if expr.kind == SqlExprKind.BINARY {
+        const left: i16 = try bind_expr(stmt, expr.left, bound);
+        const right: i16 = try bind_expr(stmt, expr.right, bound);
+        return try bind_add_expr(bound, &BoundExprNode{
+            kind: BoundExprKind.BINARY,
+            left: left,
+            right: right,
+            binary_op: expr.binary_op,
+            unary_op: SqlUnaryOp.NOT,
+            literal: BoundLiteral{},
+            path: BoundPath{},
+        });
+    }
+    return error.BindInvalidExpr;
+}
+
+fn bind_collection_name_bytes(name: &SqlIdentifier, out: &[byte]) !&[byte] {
+    const slice: &[const byte] = sql_identifier_slice(name);
+    if out.ptr == null || slice.len > out.len {
+        return error.BindCollectionNotFound;
+    }
+    if slice.len > 0 {
+        _ = mem_copy(out.ptr, slice.ptr, slice.len);
+    }
+    return out[0: slice.len];
+}
+
+export fn bound_expr_node(bound: &BoundSelect, expr_index: i16) !&BoundExprNode {
+    if bound == null || expr_index < 0 || expr_index >= bound.expr_count as i16 {
+        return error.BindInvalidExpr;
+    }
+    const idx: usize = (expr_index as! usize) catch {
+        return error.BindInvalidExpr;
+    };
+    if idx >= SQL_MAX_EXPR_NODES {
+        return error.BindInvalidExpr;
+    }
+    return &bound.expr_nodes[idx];
+}
+
+fn bind_append_bytes(out: &[byte], cursor: &usize, data: &[const byte]) !void {
+    if out.ptr == null || cursor == null || cursor[0] + data.len > out.len {
+        return error.BindLiteralTooLong;
+    }
+    if data.len > 0 {
+        _ = mem_copy(&out.ptr[cursor[0]], data.ptr, data.len);
+    }
+    cursor[0] = cursor[0] + data.len;
+}
+
+fn bind_append_byte(out: &[byte], cursor: &usize, b: byte) !void {
+    if out.ptr == null || cursor == null || cursor[0] >= out.len {
+        return error.BindLiteralTooLong;
+    }
+    out.ptr[cursor[0]] = b;
+    cursor[0] = cursor[0] + 1usize;
+}
+
+fn bind_append_u64_decimal(out: &[byte], cursor: &usize, value: u64) !void {
+    var digits: [byte: 32] = [];
+    var tmp: u64 = value;
+    var len: usize = 0usize;
+    if tmp == 0u64 {
+        digits[0] = 48 as byte;
+        len = 1usize;
+    } else {
+        while tmp > 0u64 {
+            if len >= @len(digits) {
+                return error.BindLiteralTooLong;
+            }
+            digits[len] = ((48u64 + (tmp % 10u64)) as! byte).value;
+            len = len + 1usize;
+            tmp = tmp / 10u64;
+        }
+    }
+    while len > 0usize {
+        len = len - 1usize;
+        const digit_idx: usize = len;
+        if digit_idx >= @len(digits) {
+            return error.BindLiteralTooLong;
+        }
+        try bind_append_byte(out, cursor, digits[digit_idx]);
+    }
+}
+
+fn bind_append_i64_decimal(out: &[byte], cursor: &usize, value: i64) !void {
+    if value < 0i64 {
+        try bind_append_byte(out, cursor, 45 as byte);
+        if value == (-9223372036854775807i64 - 1i64) {
+            try bind_append_bytes(out, cursor, &"9223372036854775808"[0: 19]);
+            return;
+        }
+        try bind_append_u64_decimal(out, cursor, (0i64 - value) as u64);
+        return;
+    }
+    try bind_append_u64_decimal(out, cursor, value as u64);
+}
+
+fn bound_expr_pretty_print_into(bound: &BoundSelect, expr_index: i16, out: &[byte], cursor: &usize) !void {
+    const expr: &BoundExprNode = try bound_expr_node(bound, expr_index);
+    if expr.kind == BoundExprKind.SYSTEM_ID {
+        try bind_append_bytes(out, cursor, &"_id"[0: 3]);
+        return;
+    }
+    if expr.kind == BoundExprKind.PATH {
+        try bind_append_bytes(out, cursor, expr.path.bytes[0: expr.path.len as usize]);
+        return;
+    }
+    if expr.kind == BoundExprKind.LITERAL {
+        if expr.literal.kind == BoundLiteralKind.NULL {
+            try bind_append_bytes(out, cursor, &"NULL"[0: 4]);
+            return;
+        }
+        if expr.literal.kind == BoundLiteralKind.BOOL {
+            if expr.literal.bool_value {
+                try bind_append_bytes(out, cursor, &"TRUE"[0: 4]);
+            } else {
+                try bind_append_bytes(out, cursor, &"FALSE"[0: 5]);
+            }
+            return;
+        }
+        if expr.literal.kind == BoundLiteralKind.STRING {
+            try bind_append_byte(out, cursor, 39 as byte);
+            try bind_append_bytes(out, cursor, expr.literal.text[0: expr.literal.text_len as usize]);
+            try bind_append_byte(out, cursor, 39 as byte);
+            return;
+        }
+        if expr.literal.kind == BoundLiteralKind.INT64 {
+            try bind_append_i64_decimal(out, cursor, expr.literal.i64_value);
+            return;
+        }
+        if expr.literal.kind == BoundLiteralKind.UINT64 {
+            try bind_append_u64_decimal(out, cursor, expr.literal.u64_value);
+            return;
+        }
+        try bind_append_bytes(out, cursor, expr.literal.text[0: expr.literal.text_len as usize]);
+        return;
+    }
+    if expr.kind == BoundExprKind.UNARY {
+        if expr.unary_op == SqlUnaryOp.NOT {
+            try bind_append_bytes(out, cursor, &"NOT "[0: 4]);
+        } else {
+            try bind_append_byte(out, cursor, 45 as byte);
+        }
+        const child: &BoundExprNode = try bound_expr_node(bound, expr.left);
+        const need_paren: bool = bound_expr_precedence(child) < bound_expr_precedence(expr);
+        if need_paren {
+            try bind_append_byte(out, cursor, 40 as byte);
+        }
+        try bound_expr_pretty_print_into(bound, expr.left, out, cursor);
+        if need_paren {
+            try bind_append_byte(out, cursor, 41 as byte);
+        }
+        return;
+    }
+    if expr.kind == BoundExprKind.IS_NULL {
+        try bound_expr_pretty_print_into(bound, expr.left, out, cursor);
+        try bind_append_bytes(out, cursor, &" IS NULL"[0: 8]);
+        return;
+    }
+    if expr.kind == BoundExprKind.BINARY {
+        const left: &BoundExprNode = try bound_expr_node(bound, expr.left);
+        const right: &BoundExprNode = try bound_expr_node(bound, expr.right);
+        const left_need_paren: bool = bound_expr_precedence(left) < bound_expr_precedence(expr);
+        const right_need_paren: bool = bound_expr_precedence(right) < bound_expr_precedence(expr);
+        if left_need_paren {
+            try bind_append_byte(out, cursor, 40 as byte);
+        }
+        try bound_expr_pretty_print_into(bound, expr.left, out, cursor);
+        if left_need_paren {
+            try bind_append_byte(out, cursor, 41 as byte);
+        }
+        if expr.binary_op == SqlBinaryOp.OR {
+            try bind_append_bytes(out, cursor, &" OR "[0: 4]);
+        } else if expr.binary_op == SqlBinaryOp.AND {
+            try bind_append_bytes(out, cursor, &" AND "[0: 5]);
+        } else if expr.binary_op == SqlBinaryOp.EQ {
+            try bind_append_bytes(out, cursor, &" = "[0: 3]);
+        } else if expr.binary_op == SqlBinaryOp.NE {
+            try bind_append_bytes(out, cursor, &" != "[0: 4]);
+        } else if expr.binary_op == SqlBinaryOp.LT {
+            try bind_append_bytes(out, cursor, &" < "[0: 3]);
+        } else if expr.binary_op == SqlBinaryOp.LE {
+            try bind_append_bytes(out, cursor, &" <= "[0: 4]);
+        } else if expr.binary_op == SqlBinaryOp.GT {
+            try bind_append_bytes(out, cursor, &" > "[0: 3]);
+        } else {
+            try bind_append_bytes(out, cursor, &" >= "[0: 4]);
+        }
+        if right_need_paren {
+            try bind_append_byte(out, cursor, 40 as byte);
+        }
+        try bound_expr_pretty_print_into(bound, expr.right, out, cursor);
+        if right_need_paren {
+            try bind_append_byte(out, cursor, 41 as byte);
+        }
+        return;
+    }
+    return error.BindInvalidExpr;
+}
+
+export fn bound_expr_pretty_print(bound: &BoundSelect, expr_index: i16, out: &[byte]) !usize {
+    var cursor: usize = 0usize;
+    try bound_expr_pretty_print_into(bound, expr_index, out, &cursor);
+    return cursor;
+}
+
+export fn bind_select_with_snapshot(snapshot: &CatalogSnapshot, stmt: &SqlStmt) !BoundSelect {
+    if snapshot == null || stmt == null || stmt.kind != SqlStmtKind.SELECT {
+        return error.BindUnsupportedStmt;
+    }
+
+    var name_buf: [byte: SQL_MAX_IDENTIFIER_LEN] = [];
+    const collection_name: &[byte] = try bind_collection_name_bytes(&stmt.select_stmt.collection_name, name_buf[0: SQL_MAX_IDENTIFIER_LEN]);
+    const collection: CatalogCollectionView = (catalog_snapshot_find_collection(snapshot, collection_name) catch {
+        return error.BindCollectionNotFound;
+    });
+
+    var bound: BoundSelect = BoundSelect{
+        collection_id: collection.meta.collection_id,
+        primary_root_page: collection.meta.primary_root_page,
+        collection_name: stmt.select_stmt.collection_name,
+        projection_count: stmt.select_stmt.item_count,
+        projection_exprs: [],
+        has_where: stmt.select_stmt.has_where,
+        where_expr: -1,
+        has_limit: stmt.select_stmt.has_limit,
+        limit_value: stmt.select_stmt.limit_value,
+        expr_count: 0u16,
+        expr_nodes: [],
+    };
+
+    var i: usize = 0usize;
+    while i < stmt.select_stmt.item_count as usize {
+        bound.projection_exprs[i] = try bind_expr(stmt, stmt.select_stmt.items[i].expr_index, &bound);
+        i = i + 1usize;
+    }
+    if stmt.select_stmt.has_where {
+        bound.where_expr = try bind_expr(stmt, stmt.select_stmt.where_expr, &bound);
+    }
+    return bound;
+}
+
+export fn bind_select_at_stem(stem: &const byte, stmt: &SqlStmt) !BoundSelect {
+    const snapshot: CatalogSnapshot = try catalog_load_at_stem(stem);
+    return try bind_select_with_snapshot(&snapshot, stmt);
+}

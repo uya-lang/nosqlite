@@ -1,0 +1,311 @@
+// lib.plan - query plan and planner
+// 模块路径：lib/plan/planner.uya → use lib.plan.planner;
+
+use std.mem.mem.mem_copy;
+use lib.sql.ast;
+use lib.sql.binder;
+
+export error PlanTooManyNodes;
+export error PlanInvalidNode;
+export error PlanExplainBufferTooSmall;
+
+export const PLAN_MAX_NODES: usize = 16;
+
+export enum PlanNodeKind {
+    SEQ_SCAN,
+    PRIMARY_LOOKUP,
+    FILTER,
+    LIMIT,
+}
+
+export struct PlanNode {
+    kind: PlanNodeKind,
+    child: i16,
+    filter_expr: i16,
+    limit_value: u32,
+    lookup_doc_id: u64,
+}
+
+export struct QueryPlan {
+    bound: BoundSelect,
+    node_count: u16,
+    root_node: i16,
+    nodes: [PlanNode: PLAN_MAX_NODES],
+}
+
+struct PrimaryLookupMatch {
+    found: bool,
+    key: u64,
+}
+
+fn plan_no_lookup() PrimaryLookupMatch {
+    return PrimaryLookupMatch{
+        found: false,
+        key: 0u64,
+    };
+}
+
+fn plan_add_node(plan: &QueryPlan, node: &PlanNode) !i16 {
+    if plan == null || node == null || plan.node_count as usize >= PLAN_MAX_NODES {
+        return error.PlanTooManyNodes;
+    }
+    const slot: usize = plan.node_count as usize;
+    plan.nodes[slot] = node[0];
+    plan.node_count = plan.node_count + 1u16;
+    return (slot as! i16) catch {
+        return error.PlanTooManyNodes;
+    };
+}
+
+export fn plan_node(plan: &QueryPlan, node_index: i16) !&PlanNode {
+    if plan == null || node_index < 0 || node_index >= plan.node_count as i16 {
+        return error.PlanInvalidNode;
+    }
+    const idx: usize = (node_index as! usize) catch {
+        return error.PlanInvalidNode;
+    };
+    if idx >= PLAN_MAX_NODES {
+        return error.PlanInvalidNode;
+    }
+    return &plan.nodes[idx];
+}
+
+fn plan_expr_direct_primary_lookup(bound: &BoundSelect, expr_index: i16) !PrimaryLookupMatch {
+    const expr: &BoundExprNode = try bound_expr_node(bound, expr_index);
+    if expr.kind != BoundExprKind.BINARY || expr.binary_op != SqlBinaryOp.EQ {
+        return plan_no_lookup();
+    }
+    const left: &BoundExprNode = try bound_expr_node(bound, expr.left);
+    const right: &BoundExprNode = try bound_expr_node(bound, expr.right);
+    if left.kind == BoundExprKind.SYSTEM_ID && right.kind == BoundExprKind.LITERAL {
+        if right.literal.kind == BoundLiteralKind.UINT64 {
+            return PrimaryLookupMatch{
+                found: true,
+                key: right.literal.u64_value,
+            };
+        }
+        if right.literal.kind == BoundLiteralKind.INT64 && right.literal.i64_value >= 0i64 {
+            return PrimaryLookupMatch{
+                found: true,
+                key: right.literal.i64_value as u64,
+            };
+        }
+    }
+    if right.kind == BoundExprKind.SYSTEM_ID && left.kind == BoundExprKind.LITERAL {
+        if left.literal.kind == BoundLiteralKind.UINT64 {
+            return PrimaryLookupMatch{
+                found: true,
+                key: left.literal.u64_value,
+            };
+        }
+        if left.literal.kind == BoundLiteralKind.INT64 && left.literal.i64_value >= 0i64 {
+            return PrimaryLookupMatch{
+                found: true,
+                key: left.literal.i64_value as u64,
+            };
+        }
+    }
+    return plan_no_lookup();
+}
+
+fn plan_find_primary_lookup(bound: &BoundSelect, expr_index: i16) !PrimaryLookupMatch {
+    const expr: &BoundExprNode = try bound_expr_node(bound, expr_index);
+    if expr.kind == BoundExprKind.BINARY && expr.binary_op == SqlBinaryOp.AND {
+        const left_match: PrimaryLookupMatch = try plan_find_primary_lookup(bound, expr.left);
+        const right_match: PrimaryLookupMatch = try plan_find_primary_lookup(bound, expr.right);
+        if left_match.found && right_match.found {
+            if left_match.key == right_match.key {
+                return left_match;
+            }
+            return plan_no_lookup();
+        }
+        if left_match.found {
+            return left_match;
+        }
+        if right_match.found {
+            return right_match;
+        }
+        return plan_no_lookup();
+    }
+    return try plan_expr_direct_primary_lookup(bound, expr_index);
+}
+
+fn plan_append_bytes(out: &[byte], cursor: &usize, data: &[const byte]) !void {
+    if out.ptr == null || cursor == null || cursor[0] + data.len > out.len {
+        return error.PlanExplainBufferTooSmall;
+    }
+    if data.len > 0 {
+        _ = mem_copy(&out.ptr[cursor[0]], data.ptr, data.len);
+    }
+    cursor[0] = cursor[0] + data.len;
+}
+
+fn plan_append_byte(out: &[byte], cursor: &usize, b: byte) !void {
+    if out.ptr == null || cursor == null || cursor[0] >= out.len {
+        return error.PlanExplainBufferTooSmall;
+    }
+    out.ptr[cursor[0]] = b;
+    cursor[0] = cursor[0] + 1usize;
+}
+
+fn plan_append_u32_decimal(out: &[byte], cursor: &usize, value: u32) !void {
+    var digits: [byte: 16] = [];
+    var tmp: u32 = value;
+    var len: usize = 0usize;
+    if tmp == 0u32 {
+        digits[0] = 48 as byte;
+        len = 1usize;
+    } else {
+        while tmp > 0u32 {
+            if len >= @len(digits) {
+                return error.PlanExplainBufferTooSmall;
+            }
+            digits[len] = ((48u32 + (tmp % 10u32)) as! byte).value;
+            len = len + 1usize;
+            tmp = tmp / 10u32;
+        }
+    }
+    while len > 0usize {
+        len = len - 1usize;
+        const digit_idx: usize = len;
+        if digit_idx >= @len(digits) {
+            return error.PlanExplainBufferTooSmall;
+        }
+        try plan_append_byte(out, cursor, digits[digit_idx]);
+    }
+}
+
+fn plan_append_u64_decimal(out: &[byte], cursor: &usize, value: u64) !void {
+    var digits: [byte: 32] = [];
+    var tmp: u64 = value;
+    var len: usize = 0usize;
+    if tmp == 0u64 {
+        digits[0] = 48 as byte;
+        len = 1usize;
+    } else {
+        while tmp > 0u64 {
+            if len >= @len(digits) {
+                return error.PlanExplainBufferTooSmall;
+            }
+            digits[len] = ((48u64 + (tmp % 10u64)) as! byte).value;
+            len = len + 1usize;
+            tmp = tmp / 10u64;
+        }
+    }
+    while len > 0usize {
+        len = len - 1usize;
+        const digit_idx: usize = len;
+        if digit_idx >= @len(digits) {
+            return error.PlanExplainBufferTooSmall;
+        }
+        try plan_append_byte(out, cursor, digits[digit_idx]);
+    }
+}
+
+fn plan_explain_node(plan: &QueryPlan, node_index: i16, out: &[byte], cursor: &usize) !void {
+    const node: &PlanNode = try plan_node(plan, node_index);
+    if node.kind == PlanNodeKind.LIMIT {
+        try plan_append_bytes(out, cursor, &"Limit "[0: 6]);
+        try plan_append_u32_decimal(out, cursor, node.limit_value);
+        try plan_append_byte(out, cursor, 10 as byte);
+        try plan_explain_node(plan, node.child, out, cursor);
+        return;
+    }
+    if node.kind == PlanNodeKind.FILTER {
+        try plan_append_bytes(out, cursor, &"Filter "[0: 7]);
+        const tmp_len: usize = try bound_expr_pretty_print(&plan.bound, node.filter_expr, out[cursor[0]: out.len - cursor[0]]);
+        cursor[0] = cursor[0] + tmp_len;
+        try plan_append_byte(out, cursor, 10 as byte);
+        try plan_explain_node(plan, node.child, out, cursor);
+        return;
+    }
+    if node.kind == PlanNodeKind.PRIMARY_LOOKUP {
+        try plan_append_bytes(out, cursor, &"PrimaryLookup "[0: 14]);
+        try plan_append_bytes(out, cursor, sql_identifier_slice(&plan.bound.collection_name));
+        try plan_append_bytes(out, cursor, &" _id="[0: 5]);
+        try plan_append_u64_decimal(out, cursor, node.lookup_doc_id);
+        try plan_append_byte(out, cursor, 10 as byte);
+        return;
+    }
+    try plan_append_bytes(out, cursor, &"SeqScan "[0: 8]);
+    try plan_append_bytes(out, cursor, sql_identifier_slice(&plan.bound.collection_name));
+    try plan_append_byte(out, cursor, 10 as byte);
+}
+
+export fn plan_select(bound: &BoundSelect) !QueryPlan {
+    if bound == null {
+        return error.PlanInvalidNode;
+    }
+    var plan: QueryPlan = QueryPlan{
+        bound: bound[0],
+        node_count: 0u16,
+        root_node: -1,
+        nodes: [],
+    };
+
+    var base_node: i16 = -1;
+    var add_filter: bool = false;
+    if bound.has_where {
+        const direct_match: PrimaryLookupMatch = try plan_expr_direct_primary_lookup(bound, bound.where_expr);
+        if direct_match.found {
+            base_node = try plan_add_node(&plan, &PlanNode{
+                kind: PlanNodeKind.PRIMARY_LOOKUP,
+                child: -1,
+                filter_expr: -1,
+                limit_value: 0u32,
+                lookup_doc_id: direct_match.key,
+            });
+        } else {
+            const nested_match: PrimaryLookupMatch = try plan_find_primary_lookup(bound, bound.where_expr);
+            if nested_match.found {
+                base_node = try plan_add_node(&plan, &PlanNode{
+                    kind: PlanNodeKind.PRIMARY_LOOKUP,
+                    child: -1,
+                    filter_expr: -1,
+                    limit_value: 0u32,
+                    lookup_doc_id: nested_match.key,
+                });
+                add_filter = true;
+            }
+        }
+    }
+    if base_node < 0 {
+        base_node = try plan_add_node(&plan, &PlanNode{
+            kind: PlanNodeKind.SEQ_SCAN,
+            child: -1,
+            filter_expr: -1,
+            limit_value: 0u32,
+            lookup_doc_id: 0u64,
+        });
+        add_filter = bound.has_where;
+    }
+    if add_filter {
+        base_node = try plan_add_node(&plan, &PlanNode{
+            kind: PlanNodeKind.FILTER,
+            child: base_node,
+            filter_expr: bound.where_expr,
+            limit_value: 0u32,
+            lookup_doc_id: 0u64,
+        });
+    }
+    if bound.has_limit {
+        base_node = try plan_add_node(&plan, &PlanNode{
+            kind: PlanNodeKind.LIMIT,
+            child: base_node,
+            filter_expr: -1,
+            limit_value: bound.limit_value,
+            lookup_doc_id: 0u64,
+        });
+    }
+    plan.root_node = base_node;
+    return plan;
+}
+
+export fn plan_explain(plan: &QueryPlan, out: &[byte]) !usize {
+    if plan == null || out.ptr == null || plan.root_node < 0 {
+        return error.PlanExplainBufferTooSmall;
+    }
+    var cursor: usize = 0usize;
+    try plan_explain_node(plan, plan.root_node, out, &cursor);
+    return cursor;
+}

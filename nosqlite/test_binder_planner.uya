@@ -1,0 +1,235 @@
+use lib.storage.wal_header;
+use lib.core.types;
+use lib.storage.pager.catalog_cleanup_stem;
+use lib.storage.pager.catalog_create_db_at_stem;
+use lib.storage.pager.catalog_create_collection_at_stem;
+use lib.sql.ast.SqlStmt;
+use lib.sql.ast.SqlLiteralKind;
+use lib.sql.ast.SqlBinaryOp;
+use lib.sql.parser.sql_parse;
+use lib.sql.binder.BoundSelect;
+use lib.sql.binder.BoundExprNode;
+use lib.sql.binder.BoundExprKind;
+use lib.sql.binder.BoundLiteralKind;
+use lib.sql.binder.bind_select_at_stem;
+use lib.sql.binder.bound_expr_node;
+use lib.plan.planner.QueryPlan;
+use lib.plan.planner.PlanNode;
+use lib.plan.planner.PlanNodeKind;
+use lib.plan.planner.plan_select;
+use lib.plan.planner.plan_node;
+use lib.plan.planner.plan_explain;
+
+const TEST_STEM_BINDER: *const byte = "/tmp/nosqlite_binder_planner" as *const byte;
+
+fn byte_slices_equal(a: &[byte], b: &[const byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn run_binding_and_primary_lookup() i32 {
+    _ = catalog_cleanup_stem(TEST_STEM_BINDER) catch {};
+    defer {
+        _ = catalog_cleanup_stem(TEST_STEM_BINDER) catch {};
+    }
+    _ = catalog_create_db_at_stem(TEST_STEM_BINDER, NOSQLITE_PAGE_SIZE_DEFAULT) catch {
+        return 1;
+    };
+    _ = catalog_create_collection_at_stem(TEST_STEM_BINDER, &"users"[0: 5]) catch {
+        return 2;
+    };
+
+    const stmt: SqlStmt = sql_parse("SELECT _id, $.name FROM users WHERE _id = 42 LIMIT 1;") catch {
+        return 3;
+    };
+    const bound: BoundSelect = bind_select_at_stem(TEST_STEM_BINDER, &stmt) catch {
+        return 4;
+    };
+    if bound.collection_id != 1u32 {
+        return 5;
+    }
+    if !bound.has_limit || bound.limit_value != 1u32 {
+        return 6;
+    }
+    if bound.projection_count != 2u16 {
+        return 7;
+    }
+    const path_expr: &BoundExprNode = bound_expr_node(&bound, bound.projection_exprs[1]) catch {
+        return 8;
+    };
+    if path_expr.kind != BoundExprKind.PATH || path_expr.path.program.step_count != 1u16 {
+        return 9;
+    }
+
+    const where_expr: &BoundExprNode = bound_expr_node(&bound, bound.where_expr) catch {
+        return 10;
+    };
+    if where_expr.kind != BoundExprKind.BINARY || where_expr.binary_op != SqlBinaryOp.EQ {
+        return 11;
+    }
+    const rhs: &BoundExprNode = bound_expr_node(&bound, where_expr.right) catch {
+        return 12;
+    };
+    if rhs.kind != BoundExprKind.LITERAL || rhs.literal.kind != BoundLiteralKind.UINT64 || rhs.literal.u64_value != 42u64 {
+        return 13;
+    }
+
+    const plan: QueryPlan = plan_select(&bound) catch {
+        return 14;
+    };
+    if plan.root_node < 0 {
+        return 15;
+    }
+    const root: &PlanNode = plan_node(&plan, plan.root_node) catch {
+        return 16;
+    };
+    if root.kind != PlanNodeKind.LIMIT || root.limit_value != 1u32 {
+        return 17;
+    }
+    const lookup: &PlanNode = plan_node(&plan, root.child) catch {
+        return 18;
+    };
+    if lookup.kind != PlanNodeKind.PRIMARY_LOOKUP || lookup.lookup_doc_id != 42u64 {
+        return 19;
+    }
+
+    var explain_buf: [byte: 256] = [];
+    const explain_len: usize = plan_explain(&plan, explain_buf[0: 256]) catch {
+        return 20;
+    };
+    const expected: &[const byte] = "Limit 1\nPrimaryLookup users _id=42\n";
+    if !byte_slices_equal(explain_buf[0: explain_len], expected) {
+        return 21;
+    }
+    return 0;
+}
+
+fn run_seqscan_filter_and_literal_normalize() i32 {
+    _ = catalog_cleanup_stem(TEST_STEM_BINDER) catch {};
+    defer {
+        _ = catalog_cleanup_stem(TEST_STEM_BINDER) catch {};
+    }
+    _ = catalog_create_db_at_stem(TEST_STEM_BINDER, NOSQLITE_PAGE_SIZE_DEFAULT) catch {
+        return 31;
+    };
+    _ = catalog_create_collection_at_stem(TEST_STEM_BINDER, &"users"[0: 5]) catch {
+        return 32;
+    };
+
+    const stmt: SqlStmt = sql_parse("SELECT $.name FROM users WHERE NOT $.age < -1 AND $.active = TRUE LIMIT 5;") catch {
+        return 33;
+    };
+    const bound: BoundSelect = bind_select_at_stem(TEST_STEM_BINDER, &stmt) catch {
+        return 34;
+    };
+    if !bound.has_where || !bound.has_limit || bound.limit_value != 5u32 {
+        return 35;
+    }
+
+    const root_expr: &BoundExprNode = bound_expr_node(&bound, bound.where_expr) catch {
+        return 36;
+    };
+    if root_expr.kind != BoundExprKind.BINARY || root_expr.binary_op != SqlBinaryOp.AND {
+        return 37;
+    }
+    const not_expr: &BoundExprNode = bound_expr_node(&bound, root_expr.left) catch {
+        return 38;
+    };
+    if not_expr.kind != BoundExprKind.UNARY {
+        return 39;
+    }
+    const lt_expr: &BoundExprNode = bound_expr_node(&bound, not_expr.left) catch {
+        return 40;
+    };
+    const neg_lit: &BoundExprNode = bound_expr_node(&bound, lt_expr.right) catch {
+        return 41;
+    };
+    if neg_lit.kind != BoundExprKind.LITERAL || neg_lit.literal.kind != BoundLiteralKind.INT64 || neg_lit.literal.i64_value != -1i64 {
+        return 42;
+    }
+
+    const active_cmp: &BoundExprNode = bound_expr_node(&bound, root_expr.right) catch {
+        return 43;
+    };
+    const active_rhs: &BoundExprNode = bound_expr_node(&bound, active_cmp.right) catch {
+        return 44;
+    };
+    if active_rhs.literal.kind != BoundLiteralKind.BOOL || !active_rhs.literal.bool_value {
+        return 45;
+    }
+
+    const plan: QueryPlan = plan_select(&bound) catch {
+        return 46;
+    };
+    const limit_node: &PlanNode = plan_node(&plan, plan.root_node) catch {
+        return 47;
+    };
+    if limit_node.kind != PlanNodeKind.LIMIT {
+        return 48;
+    }
+    const filter_node: &PlanNode = plan_node(&plan, limit_node.child) catch {
+        return 49;
+    };
+    if filter_node.kind != PlanNodeKind.FILTER {
+        return 50;
+    }
+    const scan_node: &PlanNode = plan_node(&plan, filter_node.child) catch {
+        return 51;
+    };
+    if scan_node.kind != PlanNodeKind.SEQ_SCAN {
+        return 52;
+    }
+
+    var explain_buf: [byte: 256] = [];
+    const explain_len: usize = plan_explain(&plan, explain_buf[0: 256]) catch {
+        return 53;
+    };
+    const expected: &[const byte] = "Limit 5\nFilter NOT ($.age < -1) AND $.active = TRUE\nSeqScan users\n";
+    if !byte_slices_equal(explain_buf[0: explain_len], expected) {
+        return 54;
+    }
+    return 0;
+}
+
+fn run_collection_not_found() i32 {
+    _ = catalog_cleanup_stem(TEST_STEM_BINDER) catch {};
+    defer {
+        _ = catalog_cleanup_stem(TEST_STEM_BINDER) catch {};
+    }
+    _ = catalog_create_db_at_stem(TEST_STEM_BINDER, NOSQLITE_PAGE_SIZE_DEFAULT) catch {
+        return 61;
+    };
+    const stmt: SqlStmt = sql_parse("SELECT _id FROM missing;") catch {
+        return 62;
+    };
+    const bound: !BoundSelect = bind_select_at_stem(TEST_STEM_BINDER, &stmt);
+    if bound.error_id == 0u32 {
+        return 63;
+    }
+    return 0;
+}
+
+fn main() i32 {
+    const a: i32 = run_binding_and_primary_lookup();
+    if a != 0 {
+        return a;
+    }
+    const b: i32 = run_seqscan_filter_and_literal_normalize();
+    if b != 0 {
+        return b;
+    }
+    const c: i32 = run_collection_not_found();
+    if c != 0 {
+        return c;
+    }
+    return 0;
+}
