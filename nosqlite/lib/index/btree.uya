@@ -1,0 +1,441 @@
+// lib.index - 主索引 B+Tree
+// 模块路径：lib/index/btree.uya → use lib.index.btree;
+
+use lib.storage.header.PageHeader;
+use lib.storage.header.PageType;
+use lib.storage.page.page_header_from_buf;
+use lib.index.key.RecordPointer;
+use lib.index.key.record_pointer_make;
+use lib.index.btree_page.BTreeInvalidPage;
+use lib.index.btree_page.BTreeNoSpace;
+use lib.index.btree_page.BTreeKeyNotFound;
+use lib.index.btree_page.BTreeDuplicateKey;
+use lib.index.btree_page.BTreeLeafEntry;
+use lib.index.btree_page.btree_leaf_init;
+use lib.index.btree_page.btree_internal_init;
+use lib.index.btree_page.btree_leaf_capacity;
+use lib.index.btree_page.btree_internal_capacity;
+use lib.index.btree_page.btree_leaf_key_count;
+use lib.index.btree_page.btree_leaf_next_leaf;
+use lib.index.btree_page.btree_leaf_key_at;
+use lib.index.btree_page.btree_leaf_record_pointer_at;
+use lib.index.btree_page.btree_leaf_entry_at;
+use lib.index.btree_page.btree_leaf_lower_bound;
+use lib.index.btree_page.btree_leaf_rewrite;
+use lib.index.btree_page.btree_internal_key_count;
+use lib.index.btree_page.btree_internal_first_child;
+use lib.index.btree_page.btree_internal_key_at;
+use lib.index.btree_page.btree_internal_child_at;
+use lib.index.btree_page.btree_internal_child_index;
+use lib.index.btree_page.btree_internal_rewrite;
+
+export const PRIMARY_BTREE_MAX_PAGES: usize = 256;
+const PRIMARY_BTREE_MAX_LEAF_ENTRIES: usize = 513;
+const PRIMARY_BTREE_MAX_INTERNAL_KEYS: usize = 513;
+const PRIMARY_BTREE_MAX_CHILDREN: usize = 514;
+
+export struct PrimaryBTreePage {
+    used: bool,
+    page_id: u32,
+    bytes: [byte: 8192],
+}
+
+export struct PrimaryBTree {
+    page_size: u32,
+    root_page_id: u32,
+    page_count: u32,
+    pages: [PrimaryBTreePage: PRIMARY_BTREE_MAX_PAGES],
+}
+
+export struct BTreeCursor {
+    tree: &PrimaryBTree,
+    current_leaf_page: u32,
+    entry_index: u16,
+    initialized: bool,
+    valid: bool,
+}
+
+struct BTreeInsertResult {
+    split: bool,
+    separator_key: u64,
+    right_page_id: u32,
+}
+
+fn btree_no_split() BTreeInsertResult {
+    return BTreeInsertResult{
+        split: false,
+        separator_key: 0u64,
+        right_page_id: 0u32,
+    };
+}
+
+fn primary_btree_page_index(page_id: u32) !usize {
+    if page_id == 0u32 || page_id > PRIMARY_BTREE_MAX_PAGES as u32 {
+        return error.BTreeInvalidPage;
+    }
+    return ((page_id - 1u32) as! usize) catch {
+        return error.BTreeInvalidPage;
+    };
+}
+
+fn primary_btree_alloc_page(tree: &PrimaryBTree) !u32 {
+    if tree == null || tree.page_count >= PRIMARY_BTREE_MAX_PAGES as u32 {
+        return error.BTreeNoSpace;
+    }
+    const page_id: u32 = tree.page_count + 1u32;
+    const idx: usize = try primary_btree_page_index(page_id);
+    if idx >= PRIMARY_BTREE_MAX_PAGES {
+        return error.BTreeNoSpace;
+    }
+    tree.pages[idx].used = true;
+    tree.pages[idx].page_id = page_id;
+    tree.page_count = page_id;
+    return page_id;
+}
+
+export fn primary_btree_page(tree: &PrimaryBTree, page_id: u32) !&[byte] {
+    if tree == null {
+        return error.BTreeInvalidPage;
+    }
+    const idx: usize = try primary_btree_page_index(page_id);
+    if idx >= PRIMARY_BTREE_MAX_PAGES {
+        return error.BTreeInvalidPage;
+    }
+    if !tree.pages[idx].used {
+        return error.BTreeInvalidPage;
+    }
+    const page_len: usize = (tree.page_size as! usize) catch {
+        return error.BTreeInvalidPage;
+    };
+    return tree.pages[idx].bytes[0: page_len];
+}
+
+fn primary_btree_root_page(tree: &PrimaryBTree) !&[byte] {
+    return try primary_btree_page(tree, tree.root_page_id);
+}
+
+fn primary_btree_leaf_insert(tree: &PrimaryBTree, page_id: u32, key: u64, record_ptr: &RecordPointer) !BTreeInsertResult {
+    const page_buf: &[byte] = try primary_btree_page(tree, page_id);
+    const count: u16 = try btree_leaf_key_count(page_buf);
+    const capacity: u16 = try btree_leaf_capacity(tree.page_size);
+    const pos: u16 = try btree_leaf_lower_bound(page_buf, key);
+    if pos < count && (try btree_leaf_key_at(page_buf, pos)) == key {
+        return error.BTreeDuplicateKey;
+    }
+
+    var merged: [BTreeLeafEntry: PRIMARY_BTREE_MAX_LEAF_ENTRIES] = [];
+    var src: u16 = 0u16;
+    var dst: u16 = 0u16;
+    while src < count {
+        if dst == pos {
+            merged[dst as usize] = BTreeLeafEntry{
+                key: key,
+                record_ptr: record_ptr[0],
+            };
+            dst = dst + 1u16;
+        }
+        merged[dst as usize] = try btree_leaf_entry_at(page_buf, src);
+        src = src + 1u16;
+        dst = dst + 1u16;
+    }
+    if pos == count {
+        merged[dst as usize] = BTreeLeafEntry{
+            key: key,
+            record_ptr: record_ptr[0],
+        };
+        dst = dst + 1u16;
+    }
+
+    const total: u16 = count + 1u16;
+    const old_next: u32 = try btree_leaf_next_leaf(page_buf);
+    if total <= capacity {
+        try btree_leaf_rewrite(page_buf, old_next, merged[0: total as usize], total);
+        return btree_no_split();
+    }
+
+    const right_page_id: u32 = try primary_btree_alloc_page(tree);
+    const right_page: &[byte] = try primary_btree_page(tree, right_page_id);
+    try btree_leaf_init(right_page);
+
+    const left_count: u16 = total / 2u16;
+    const right_count: u16 = total - left_count;
+    try btree_leaf_rewrite(page_buf, right_page_id, merged[0: left_count as usize], left_count);
+    try btree_leaf_rewrite(right_page, old_next, merged[left_count as usize: right_count as usize], right_count);
+    return BTreeInsertResult{
+        split: true,
+        separator_key: merged[left_count as usize].key,
+        right_page_id: right_page_id,
+    };
+}
+
+fn primary_btree_internal_insert(tree: &PrimaryBTree, page_id: u32, insert_child_idx: u16, separator_key: u64, right_page_id: u32) !BTreeInsertResult {
+    const page_buf: &[byte] = try primary_btree_page(tree, page_id);
+    const key_count: u16 = try btree_internal_key_count(page_buf);
+    const capacity: u16 = try btree_internal_capacity(tree.page_size);
+    if key_count as usize + 1usize >= PRIMARY_BTREE_MAX_INTERNAL_KEYS {
+        return error.BTreeNoSpace;
+    }
+    if key_count as usize + 2usize >= PRIMARY_BTREE_MAX_CHILDREN {
+        return error.BTreeNoSpace;
+    }
+
+    var keys: [u64: PRIMARY_BTREE_MAX_INTERNAL_KEYS] = [];
+    var children: [u32: PRIMARY_BTREE_MAX_CHILDREN] = [];
+    children[0usize] = try btree_internal_first_child(page_buf);
+    var i: u16 = 0u16;
+    while i < key_count {
+        keys[i as usize] = try btree_internal_key_at(page_buf, i);
+        children[i as usize + 1usize] = try btree_internal_child_at(page_buf, i + 1u16);
+        i = i + 1u16;
+    }
+
+    var key_pos: usize = key_count as usize;
+    while key_pos > insert_child_idx as usize {
+        keys[key_pos] = keys[key_pos - 1usize];
+        key_pos = key_pos - 1usize;
+    }
+    keys[insert_child_idx as usize] = separator_key;
+
+    var child_pos: usize = key_count as usize + 1usize;
+    while child_pos > insert_child_idx as usize + 1usize {
+        children[child_pos] = children[child_pos - 1usize];
+        child_pos = child_pos - 1usize;
+    }
+    children[insert_child_idx as usize + 1usize] = right_page_id;
+
+    const total_keys: u16 = key_count + 1u16;
+    if total_keys <= capacity {
+        try btree_internal_rewrite(
+            page_buf,
+            children[0usize],
+            keys[0: total_keys as usize],
+            children[0: total_keys as usize + 1usize],
+            total_keys,
+        );
+        return btree_no_split();
+    }
+
+    const right_internal_page_id: u32 = try primary_btree_alloc_page(tree);
+    const right_page: &[byte] = try primary_btree_page(tree, right_internal_page_id);
+    try btree_internal_init(right_page, 0u32);
+
+    const median: u16 = total_keys / 2u16;
+    if median as usize >= PRIMARY_BTREE_MAX_INTERNAL_KEYS {
+        return error.BTreeNoSpace;
+    }
+    if median as usize + 1usize >= PRIMARY_BTREE_MAX_CHILDREN {
+        return error.BTreeNoSpace;
+    }
+    const promote_key: u64 = keys[median as usize];
+    const left_key_count: u16 = median;
+    const right_key_count: u16 = total_keys - median - 1u16;
+
+    try btree_internal_rewrite(
+        page_buf,
+        children[0usize],
+        keys[0: left_key_count as usize],
+        children[0: left_key_count as usize + 1usize],
+        left_key_count,
+    );
+    try btree_internal_rewrite(
+        right_page,
+        children[median as usize + 1usize],
+        keys[median as usize + 1usize: right_key_count as usize],
+        children[median as usize + 1usize: right_key_count as usize + 1usize],
+        right_key_count,
+    );
+
+    return BTreeInsertResult{
+        split: true,
+        separator_key: promote_key,
+        right_page_id: right_internal_page_id,
+    };
+}
+
+fn primary_btree_insert_recursive(tree: &PrimaryBTree, page_id: u32, key: u64, record_ptr: &RecordPointer) !BTreeInsertResult {
+    const page_buf: &[byte] = try primary_btree_page(tree, page_id);
+    const header: &PageHeader = page_header_from_buf(page_buf);
+    if header == null {
+        return error.BTreeInvalidPage;
+    }
+
+    if header.page_type == PageType.BTREE_LEAF {
+        return try primary_btree_leaf_insert(tree, page_id, key, record_ptr);
+    }
+    if header.page_type != PageType.BTREE_INTERNAL {
+        return error.BTreeInvalidPage;
+    }
+
+    const child_idx: u16 = try btree_internal_child_index(page_buf, key);
+    const child_page_id: u32 = try btree_internal_child_at(page_buf, child_idx);
+    const child_result: BTreeInsertResult = try primary_btree_insert_recursive(tree, child_page_id, key, record_ptr);
+    if !child_result.split {
+        return btree_no_split();
+    }
+    return try primary_btree_internal_insert(tree, page_id, child_idx, child_result.separator_key, child_result.right_page_id);
+}
+
+fn primary_btree_leftmost_leaf(tree: &PrimaryBTree) !u32 {
+    var page_id: u32 = tree.root_page_id;
+    while true {
+        const page_buf: &[byte] = try primary_btree_page(tree, page_id);
+        const header: &PageHeader = page_header_from_buf(page_buf);
+        if header == null {
+            return error.BTreeInvalidPage;
+        }
+        if header.page_type == PageType.BTREE_LEAF {
+            return page_id;
+        }
+        if header.page_type != PageType.BTREE_INTERNAL {
+            return error.BTreeInvalidPage;
+        }
+        page_id = try btree_internal_first_child(page_buf);
+    }
+    return error.BTreeInvalidPage;
+}
+
+export fn primary_btree_init(page_size: u32) !PrimaryBTree {
+    _ = try btree_leaf_capacity(page_size);
+    _ = try btree_internal_capacity(page_size);
+
+    var tree: PrimaryBTree = PrimaryBTree{
+        page_size: page_size,
+        root_page_id: 0u32,
+        page_count: 0u32,
+        pages: [],
+    };
+    const root_page_id: u32 = try primary_btree_alloc_page(&tree);
+    const root_page: &[byte] = try primary_btree_page(&tree, root_page_id);
+    try btree_leaf_init(root_page);
+    tree.root_page_id = root_page_id;
+    return tree;
+}
+
+export fn primary_btree_root_page_id(tree: &PrimaryBTree) u32 {
+    if tree == null {
+        return 0u32;
+    }
+    return tree.root_page_id;
+}
+
+export fn primary_btree_page_count(tree: &PrimaryBTree) u32 {
+    if tree == null {
+        return 0u32;
+    }
+    return tree.page_count;
+}
+
+export fn primary_btree_insert(tree: &PrimaryBTree, key: u64, record_ptr: &RecordPointer) !void {
+    if tree == null {
+        return error.BTreeInvalidPage;
+    }
+    const result: BTreeInsertResult = try primary_btree_insert_recursive(tree, tree.root_page_id, key, record_ptr);
+    if !result.split {
+        return;
+    }
+
+    const new_root_id: u32 = try primary_btree_alloc_page(tree);
+    const new_root_page: &[byte] = try primary_btree_page(tree, new_root_id);
+    try btree_internal_init(new_root_page, tree.root_page_id);
+
+    var root_keys: [u64: 1] = [];
+    var root_children: [u32: 2] = [];
+    root_keys[0usize] = result.separator_key;
+    root_children[0usize] = tree.root_page_id;
+    root_children[1usize] = result.right_page_id;
+    try btree_internal_rewrite(new_root_page, root_children[0usize], root_keys[0: 1], root_children[0: 2], 1u16);
+    tree.root_page_id = new_root_id;
+}
+
+export fn primary_btree_lookup(tree: &PrimaryBTree, key: u64) !RecordPointer {
+    if tree == null {
+        return error.BTreeInvalidPage;
+    }
+    var page_id: u32 = tree.root_page_id;
+    while true {
+        const page_buf: &[byte] = try primary_btree_page(tree, page_id);
+        const header: &PageHeader = page_header_from_buf(page_buf);
+        if header == null {
+            return error.BTreeInvalidPage;
+        }
+        if header.page_type == PageType.BTREE_LEAF {
+            const pos: u16 = try btree_leaf_lower_bound(page_buf, key);
+            const count: u16 = try btree_leaf_key_count(page_buf);
+            if pos < count && (try btree_leaf_key_at(page_buf, pos)) == key {
+                return try btree_leaf_record_pointer_at(page_buf, pos);
+            }
+            return error.BTreeKeyNotFound;
+        }
+        if header.page_type != PageType.BTREE_INTERNAL {
+            return error.BTreeInvalidPage;
+        }
+        const child_idx: u16 = try btree_internal_child_index(page_buf, key);
+        page_id = try btree_internal_child_at(page_buf, child_idx);
+    }
+    return error.BTreeKeyNotFound;
+}
+
+export fn primary_btree_open_cursor(tree: &PrimaryBTree) BTreeCursor {
+    return BTreeCursor{
+        tree: tree,
+        current_leaf_page: 0u32,
+        entry_index: 0u16,
+        initialized: false,
+        valid: false,
+    };
+}
+
+export fn btree_cursor_next(cursor: &BTreeCursor) !bool {
+    if cursor == null || cursor.tree == null {
+        return error.BTreeInvalidPage;
+    }
+    if !cursor.initialized {
+        cursor.initialized = true;
+        cursor.current_leaf_page = try primary_btree_leftmost_leaf(cursor.tree);
+        cursor.entry_index = 0u16;
+    } else if cursor.valid {
+        const current_page: &[byte] = try primary_btree_page(cursor.tree, cursor.current_leaf_page);
+        const current_count: u16 = try btree_leaf_key_count(current_page);
+        if cursor.entry_index + 1u16 < current_count {
+            cursor.entry_index = cursor.entry_index + 1u16;
+        } else {
+            cursor.current_leaf_page = try btree_leaf_next_leaf(current_page);
+            cursor.entry_index = 0u16;
+        }
+    }
+
+    while cursor.current_leaf_page != 0u32 {
+        const page_buf: &[byte] = try primary_btree_page(cursor.tree, cursor.current_leaf_page);
+        if (try btree_leaf_key_count(page_buf)) > 0u16 {
+            cursor.valid = true;
+            return true;
+        }
+        cursor.current_leaf_page = try btree_leaf_next_leaf(page_buf);
+    }
+    cursor.valid = false;
+    return false;
+}
+
+export fn btree_cursor_key(cursor: &BTreeCursor) u64 {
+    if cursor == null || !cursor.valid || cursor.tree == null {
+        return 0u64;
+    }
+    const page_buf: &[byte] = primary_btree_page(cursor.tree, cursor.current_leaf_page) catch {
+        return 0u64;
+    };
+    return (btree_leaf_key_at(page_buf, cursor.entry_index) catch {
+        return 0u64;
+    });
+}
+
+export fn btree_cursor_record_pointer(cursor: &BTreeCursor) RecordPointer {
+    if cursor == null || !cursor.valid || cursor.tree == null {
+        return record_pointer_make(0u32, 0u16);
+    }
+    const page_buf: &[byte] = primary_btree_page(cursor.tree, cursor.current_leaf_page) catch {
+        return record_pointer_make(0u32, 0u16);
+    };
+    return (btree_leaf_record_pointer_at(page_buf, cursor.entry_index) catch {
+        return record_pointer_make(0u32, 0u16);
+    });
+}

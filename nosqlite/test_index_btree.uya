@@ -1,0 +1,366 @@
+use libc.rand;
+use libc.srand;
+
+use lib.storage.wal_header;
+use lib.storage.header.PageHeader;
+use lib.storage.header.PageType;
+use lib.storage.page.page_header_from_buf;
+use lib.doc.compare.doc_compare_number_lexemes;
+use lib.index.key.RecordPointer;
+use lib.index.key.record_pointer_make;
+use lib.index.key.numeric_index_key_encode;
+use lib.index.btree_page.btree_leaf_prefix_size;
+use lib.index.btree_page.btree_leaf_entry_size;
+use lib.index.btree_page.btree_internal_prefix_size;
+use lib.index.btree_page.btree_internal_cell_size;
+use lib.index.btree_page.btree_leaf_capacity;
+use lib.index.btree_page.btree_internal_capacity;
+use lib.index.btree_page.btree_leaf_init;
+use lib.index.btree_page.btree_internal_init;
+use lib.index.btree_page.btree_leaf_key_count;
+use lib.index.btree_page.btree_internal_key_count;
+use lib.index.btree_page.btree_internal_first_child;
+use lib.index.btree_page.btree_leaf_next_leaf;
+use lib.index.btree.primary_btree_init;
+use lib.index.btree.primary_btree_insert;
+use lib.index.btree.primary_btree_lookup;
+use lib.index.btree.primary_btree_open_cursor;
+use lib.index.btree.primary_btree_root_page_id;
+use lib.index.btree.primary_btree_page_count;
+use lib.index.btree.primary_btree_page;
+use lib.index.btree.PrimaryBTree;
+use lib.index.btree.BTreeCursor;
+
+const TEST_BTREE_PAGE_SIZE: u32 = 256u32;
+const RANDOM_INSERT_COUNT: usize = 200usize;
+
+fn byte_slices_equal(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn byte_slices_compare(a: &[byte], b: &[byte]) i32 {
+    var i: usize = 0usize;
+    var min_len: usize = a.len;
+    if b.len < min_len {
+        min_len = b.len;
+    }
+    while i < min_len {
+        if a.ptr[i] < b.ptr[i] {
+            return 0 - 1;
+        }
+        if a.ptr[i] > b.ptr[i] {
+            return 1;
+        }
+        i = i + 1usize;
+    }
+    if a.len < b.len {
+        return 0 - 1;
+    }
+    if a.len > b.len {
+        return 1;
+    }
+    return 0;
+}
+
+fn sort_u64(values: &[u64], count: usize) void {
+    var i: usize = 0usize;
+    while i < count {
+        var j: usize = i + 1usize;
+        while j < count {
+            if values.ptr[j] < values.ptr[i] {
+                const tmp: u64 = values.ptr[i];
+                values.ptr[i] = values.ptr[j];
+                values.ptr[j] = tmp;
+            }
+            j = j + 1usize;
+        }
+        i = i + 1usize;
+    }
+}
+
+fn numeric_pair_ok(a: &[byte], b: &[byte]) bool {
+    var a_buf: [byte: 128] = [];
+    var b_buf: [byte: 128] = [];
+    const a_len: usize = numeric_index_key_encode(a, a_buf[0: 128]) catch {
+        return false;
+    };
+    const b_len: usize = numeric_index_key_encode(b, b_buf[0: 128]) catch {
+        return false;
+    };
+    const expected: i32 = doc_compare_number_lexemes(a, b) catch {
+        return false;
+    };
+    const actual: i32 = byte_slices_compare(a_buf[0: a_len], b_buf[0: b_len]);
+    if expected < 0 {
+        return actual < 0;
+    }
+    if expected > 0 {
+        return actual > 0;
+    }
+    return actual == 0;
+}
+
+fn run_page_layout() i32 {
+    if btree_leaf_prefix_size() != 8usize {
+        return 1;
+    }
+    if btree_internal_prefix_size() != 8usize {
+        return 2;
+    }
+    if btree_leaf_entry_size() != 16usize {
+        return 3;
+    }
+    if btree_internal_cell_size() != 16usize {
+        return 4;
+    }
+    if (btree_leaf_capacity(TEST_BTREE_PAGE_SIZE) catch {
+        return 5;
+    }) != 14u16 {
+        return 6;
+    }
+    if (btree_internal_capacity(TEST_BTREE_PAGE_SIZE) catch {
+        return 7;
+    }) != 14u16 {
+        return 8;
+    }
+
+    var leaf_raw: [byte: 256] = [];
+    const leaf_buf: &[byte] = leaf_raw[0: TEST_BTREE_PAGE_SIZE as usize];
+    _ = btree_leaf_init(leaf_buf) catch {
+        return 9;
+    };
+    const leaf_hdr: &PageHeader = page_header_from_buf(leaf_buf);
+    if leaf_hdr == null || leaf_hdr.page_type != PageType.BTREE_LEAF {
+        return 10;
+    }
+    if (btree_leaf_key_count(leaf_buf) catch {
+        return 11;
+    }) != 0u16 {
+        return 12;
+    }
+    if (btree_leaf_next_leaf(leaf_buf) catch {
+        return 13;
+    }) != 0u32 {
+        return 14;
+    }
+
+    var internal_raw: [byte: 256] = [];
+    const internal_buf: &[byte] = internal_raw[0: TEST_BTREE_PAGE_SIZE as usize];
+    _ = btree_internal_init(internal_buf, 7u32) catch {
+        return 15;
+    };
+    const internal_hdr: &PageHeader = page_header_from_buf(internal_buf);
+    if internal_hdr == null || internal_hdr.page_type != PageType.BTREE_INTERNAL {
+        return 16;
+    }
+    if (btree_internal_key_count(internal_buf) catch {
+        return 17;
+    }) != 0u16 {
+        return 18;
+    }
+    if (btree_internal_first_child(internal_buf) catch {
+        return 19;
+    }) != 7u32 {
+        return 20;
+    }
+    return 0;
+}
+
+fn run_numeric_key_encoding() i32 {
+    var zero_a: [byte: 128] = [];
+    var zero_b: [byte: 128] = [];
+    const zero_a_len: usize = numeric_index_key_encode(&"0"[0: 1], zero_a[0: 128]) catch {
+        return 31;
+    };
+    const zero_b_len: usize = numeric_index_key_encode(&"0.0"[0: 3], zero_b[0: 128]) catch {
+        return 32;
+    };
+    if !byte_slices_equal(zero_a[0: zero_a_len], zero_b[0: zero_b_len]) {
+        return 33;
+    }
+
+    if !numeric_pair_ok(&"-100"[0: 4], &"-2"[0: 2]) {
+        return 34;
+    }
+    if !numeric_pair_ok(&"-2"[0: 2], &"-1.5"[0: 4]) {
+        return 35;
+    }
+    if !numeric_pair_ok(&"-1.5"[0: 4], &"-1"[0: 2]) {
+        return 36;
+    }
+    if !numeric_pair_ok(&"-1"[0: 2], &"-0.125"[0: 6]) {
+        return 37;
+    }
+    if !numeric_pair_ok(&"-0.125"[0: 6], &"0"[0: 1]) {
+        return 38;
+    }
+    if !numeric_pair_ok(&"0"[0: 1], &"0.0"[0: 3]) {
+        return 39;
+    }
+    if !numeric_pair_ok(&"0.0"[0: 3], &"1e-3"[0: 4]) {
+        return 40;
+    }
+    if !numeric_pair_ok(&"1e-3"[0: 4], &"0.5"[0: 3]) {
+        return 41;
+    }
+    if !numeric_pair_ok(&"0.5"[0: 3], &"1"[0: 1]) {
+        return 42;
+    }
+    if !numeric_pair_ok(&"1"[0: 1], &"1.01"[0: 4]) {
+        return 43;
+    }
+    if !numeric_pair_ok(&"1.01"[0: 4], &"2"[0: 1]) {
+        return 44;
+    }
+    if !numeric_pair_ok(&"2"[0: 1], &"10"[0: 2]) {
+        return 45;
+    }
+    if !numeric_pair_ok(&"10"[0: 2], &"10.5"[0: 4]) {
+        return 46;
+    }
+    return 0;
+}
+
+fn run_lookup_split_cursor() i32 {
+    var tree: PrimaryBTree = primary_btree_init(TEST_BTREE_PAGE_SIZE) catch {
+        return 61;
+    };
+
+    var key: u64 = 1u64;
+    while key <= 48u64 {
+        const ptr: RecordPointer = record_pointer_make((100u32 + key as u32), (key as u16));
+        _ = primary_btree_insert(&tree, key, &ptr) catch {
+            return 62;
+        };
+        key = key + 1u64;
+    }
+
+    if primary_btree_page_count(&tree) <= 1u32 {
+        return 63;
+    }
+    const root_id: u32 = primary_btree_root_page_id(&tree);
+    const root_page: &[byte] = primary_btree_page(&tree, root_id) catch {
+        return 64;
+    };
+    const root_hdr: &PageHeader = page_header_from_buf(root_page);
+    if root_hdr == null || root_hdr.page_type != PageType.BTREE_INTERNAL {
+        return 65;
+    }
+
+    key = 1u64;
+    while key <= 48u64 {
+        const got: RecordPointer = primary_btree_lookup(&tree, key) catch {
+            return 66;
+        };
+        if got.page_id != (100u32 + key as u32) || got.slot_id != key as u16 {
+            return 67;
+        }
+        key = key + 1u64;
+    }
+
+    var cursor: BTreeCursor = primary_btree_open_cursor(&tree);
+    var seen: u64 = 0u64;
+    while (btree_cursor_next(&cursor) catch {
+        return 68;
+    }) {
+        seen = seen + 1u64;
+        if btree_cursor_key(&cursor) != seen {
+            return 69;
+        }
+        const got_ptr: RecordPointer = btree_cursor_record_pointer(&cursor);
+        if got_ptr.page_id != (100u32 + seen as u32) {
+            return 70;
+        }
+    }
+    if seen != 48u64 {
+        return 71;
+    }
+    return 0;
+}
+
+fn run_random_insert_scan() i32 {
+    var tree: PrimaryBTree = primary_btree_init(TEST_BTREE_PAGE_SIZE) catch {
+        return 81;
+    };
+    var inserted: [u64: RANDOM_INSERT_COUNT] = [];
+    var count: usize = 0usize;
+
+    srand(20260422u32);
+    while count < RANDOM_INSERT_COUNT {
+        const candidate: u64 = ((rand() % 5000) as u64) + 1u64;
+        var exists: bool = false;
+        var i: usize = 0usize;
+        while i < count {
+            if inserted[i] == candidate {
+                exists = true;
+                break;
+            }
+            i = i + 1usize;
+        }
+        if exists {
+            continue;
+        }
+        inserted[count] = candidate;
+        const ptr: RecordPointer = record_pointer_make(candidate as u32, (candidate % 97u64) as u16);
+        _ = primary_btree_insert(&tree, candidate, &ptr) catch {
+            return 82;
+        };
+        count = count + 1usize;
+    }
+
+    sort_u64(inserted[0: RANDOM_INSERT_COUNT], RANDOM_INSERT_COUNT);
+
+    var cursor: BTreeCursor = primary_btree_open_cursor(&tree);
+    var idx: usize = 0usize;
+    while (btree_cursor_next(&cursor) catch {
+        return 83;
+    }) {
+        if idx >= RANDOM_INSERT_COUNT {
+            return 84;
+        }
+        if btree_cursor_key(&cursor) != inserted[idx] {
+            return 85;
+        }
+        const got: RecordPointer = primary_btree_lookup(&tree, inserted[idx]) catch {
+            return 86;
+        };
+        if got.page_id != inserted[idx] as u32 {
+            return 87;
+        }
+        idx = idx + 1usize;
+    }
+    if idx != RANDOM_INSERT_COUNT {
+        return 88;
+    }
+    return 0;
+}
+
+fn main() i32 {
+    const layout_rc: i32 = run_page_layout();
+    if layout_rc != 0 {
+        return layout_rc;
+    }
+    const numeric_rc: i32 = run_numeric_key_encoding();
+    if numeric_rc != 0 {
+        return numeric_rc;
+    }
+    const lookup_rc: i32 = run_lookup_split_cursor();
+    if lookup_rc != 0 {
+        return lookup_rc;
+    }
+    const random_rc: i32 = run_random_insert_scan();
+    if random_rc != 0 {
+        return random_rc;
+    }
+    return 0;
+}

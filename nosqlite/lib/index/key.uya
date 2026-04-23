@@ -1,0 +1,222 @@
+// lib.index - 主索引键 / RecordPointer / numeric key encoding
+// 模块路径：lib/index/key.uya → use lib.index.key;
+
+use lib.doc.compare.DocParsedNumber;
+use lib.doc.compare.doc_parse_number_lexeme;
+
+export error IndexKeyInvalidBuffer;
+export error IndexKeyExponentOverflow;
+
+export const RECORD_POINTER_ENCODED_SIZE: usize = 8;
+export const NUMERIC_INDEX_KEY_MAX_SIZE: usize = 512;
+
+export struct RecordPointer {
+    page_id: u32,
+    slot_id: u16,
+}
+
+export fn record_pointer_make(page_id: u32, slot_id: u16) RecordPointer {
+    return RecordPointer{
+        page_id: page_id,
+        slot_id: slot_id,
+    };
+}
+
+export fn record_pointer_encoded_size() usize {
+    return RECORD_POINTER_ENCODED_SIZE;
+}
+
+fn index_store_u32_le(out: &[byte], off: usize, value: u32) void {
+    out.ptr[off] = ((value & 255u32) as! byte).value;
+    out.ptr[off + 1] = (((value >> 8) & 255u32) as! byte).value;
+    out.ptr[off + 2] = (((value >> 16) & 255u32) as! byte).value;
+    out.ptr[off + 3] = (((value >> 24) & 255u32) as! byte).value;
+}
+
+fn index_load_u32_le(data: &[byte], off: usize) u32 {
+    return (data.ptr[off] as u32) |
+        ((data.ptr[off + 1] as u32) << 8) |
+        ((data.ptr[off + 2] as u32) << 16) |
+        ((data.ptr[off + 3] as u32) << 24);
+}
+
+fn index_store_u32_be(out: &[byte], off: usize, value: u32) void {
+    out.ptr[off] = (((value >> 24) & 255u32) as! byte).value;
+    out.ptr[off + 1] = (((value >> 16) & 255u32) as! byte).value;
+    out.ptr[off + 2] = (((value >> 8) & 255u32) as! byte).value;
+    out.ptr[off + 3] = ((value & 255u32) as! byte).value;
+}
+
+fn numeric_integer_len(digit_len: usize, scale: i32) i32 {
+    if scale < 0 {
+        return digit_len as i32 + (0 - scale);
+    }
+    const raw: i32 = digit_len as i32 - scale;
+    if raw > 0 {
+        return raw;
+    }
+    return 1;
+}
+
+fn numeric_normalize(parsed: &DocParsedNumber, digits: &[byte], digit_len_out: &usize, scale_out: &i32) void {
+    var digit_len: usize = parsed.digit_len as usize;
+    var scale: i32 = parsed.scale;
+    var i: usize = 0usize;
+    while i < digit_len {
+        digits.ptr[i] = parsed.digits[i];
+        i = i + 1usize;
+    }
+    while digit_len > 1usize && digits.ptr[digit_len - 1usize] == 48 as byte {
+        digit_len = digit_len - 1usize;
+        scale = scale - 1i32;
+    }
+    digit_len_out[0] = digit_len;
+    scale_out[0] = scale;
+}
+
+fn numeric_canonical_digit_stream(parsed: &DocParsedNumber, stream: &[byte], stream_len_out: &usize, integer_len_out: &u32) !void {
+    var digits_raw: [byte: 256] = [];
+    var digit_len: usize = 0usize;
+    var scale: i32 = 0i32;
+    numeric_normalize(parsed, digits_raw[0: 256], &digit_len, &scale);
+
+    const integer_len_i32: i32 = numeric_integer_len(digit_len, scale);
+    if integer_len_i32 < 0 {
+        return error.IndexKeyExponentOverflow;
+    }
+    const integer_len_u32: u32 = (integer_len_i32 as! u32) catch {
+        return error.IndexKeyExponentOverflow;
+    };
+    integer_len_out[0] = integer_len_u32;
+
+    var stream_len: usize = 0usize;
+    if scale <= 0i32 {
+        var i: usize = 0usize;
+        while i < digit_len {
+            if stream_len >= stream.len {
+                return error.IndexKeyInvalidBuffer;
+            }
+            stream.ptr[stream_len] = digits_raw[i];
+            stream_len = stream_len + 1usize;
+            i = i + 1usize;
+        }
+        var pad: i32 = 0i32 - scale;
+        while pad > 0i32 {
+            if stream_len >= stream.len {
+                return error.IndexKeyInvalidBuffer;
+            }
+            stream.ptr[stream_len] = 48 as byte;
+            stream_len = stream_len + 1usize;
+            pad = pad - 1i32;
+        }
+        stream_len_out[0] = stream_len;
+        return;
+    }
+
+    const split: i32 = digit_len as i32 - scale;
+    if split > 0i32 {
+        var i: usize = 0usize;
+        while i < digit_len {
+            if stream_len >= stream.len {
+                return error.IndexKeyInvalidBuffer;
+            }
+            stream.ptr[stream_len] = digits_raw[i];
+            stream_len = stream_len + 1usize;
+            i = i + 1usize;
+        }
+        stream_len_out[0] = stream_len;
+        return;
+    }
+
+    if stream_len >= stream.len {
+        return error.IndexKeyInvalidBuffer;
+    }
+    stream.ptr[stream_len] = 48 as byte;
+    stream_len = stream_len + 1usize;
+
+    var zero_pad: i32 = 0i32 - split;
+    while zero_pad > 0i32 {
+        if stream_len >= stream.len {
+            return error.IndexKeyInvalidBuffer;
+        }
+        stream.ptr[stream_len] = 48 as byte;
+        stream_len = stream_len + 1usize;
+        zero_pad = zero_pad - 1i32;
+    }
+
+    var i: usize = 0usize;
+    while i < digit_len {
+        if stream_len >= stream.len {
+            return error.IndexKeyInvalidBuffer;
+        }
+        stream.ptr[stream_len] = digits_raw[i];
+        stream_len = stream_len + 1usize;
+        i = i + 1usize;
+    }
+    stream_len_out[0] = stream_len;
+}
+
+export fn record_pointer_encode(ptr: &RecordPointer, out: &[byte]) !void {
+    if ptr == null || out.ptr == null || out.len < RECORD_POINTER_ENCODED_SIZE {
+        return error.IndexKeyInvalidBuffer;
+    }
+    index_store_u32_le(out, 0usize, ptr.page_id);
+    out.ptr[4usize] = ((ptr.slot_id & 255u16) as! byte).value;
+    out.ptr[5usize] = (((ptr.slot_id >> 8) & 255u16) as! byte).value;
+    out.ptr[6usize] = 0 as byte;
+    out.ptr[7usize] = 0 as byte;
+}
+
+export fn record_pointer_decode(data: &[byte]) !RecordPointer {
+    if data.ptr == null || data.len < RECORD_POINTER_ENCODED_SIZE {
+        return error.IndexKeyInvalidBuffer;
+    }
+    return RecordPointer{
+        page_id: index_load_u32_le(data, 0usize),
+        slot_id: (data.ptr[4usize] as u16) | ((data.ptr[5usize] as u16) << 8),
+    };
+}
+
+export fn numeric_index_key_encode(lexeme: &[byte], out: &[byte]) !usize {
+    if out.ptr == null || out.len < 6usize {
+        return error.IndexKeyInvalidBuffer;
+    }
+    const parsed: DocParsedNumber = try doc_parse_number_lexeme(lexeme);
+    if parsed.is_zero {
+        out.ptr[0usize] = 128 as byte;
+        return 1usize;
+    }
+
+    var stream: [byte: NUMERIC_INDEX_KEY_MAX_SIZE] = [];
+    var stream_len: usize = 0usize;
+    var integer_len_u32: u32 = 0u32;
+    try numeric_canonical_digit_stream(&parsed, stream[0: NUMERIC_INDEX_KEY_MAX_SIZE], &stream_len, &integer_len_u32);
+    const total_len: usize = 1usize + 4usize + stream_len + 1usize;
+    if total_len > out.len || total_len > NUMERIC_INDEX_KEY_MAX_SIZE {
+        return error.IndexKeyInvalidBuffer;
+    }
+
+    if parsed.negative {
+        out.ptr[0usize] = 0 as byte;
+        index_store_u32_be(out, 1usize, 4294967295u32 - integer_len_u32);
+        var i: usize = 0usize;
+        while i < stream_len {
+            const digit: u8 = stream[i] - (48 as byte);
+            out.ptr[5usize + i] = (10u8 - digit) as byte;
+            i = i + 1usize;
+        }
+        out.ptr[5usize + stream_len] = 11 as byte;
+        return total_len;
+    }
+
+    out.ptr[0usize] = 255 as byte;
+    index_store_u32_be(out, 1usize, integer_len_u32);
+    var i: usize = 0usize;
+    while i < stream_len {
+        const digit: u8 = stream[i] - (48 as byte);
+        out.ptr[5usize + i] = (digit + 1u8) as byte;
+        i = i + 1usize;
+    }
+    out.ptr[5usize + stream_len] = 0 as byte;
+    return total_len;
+}

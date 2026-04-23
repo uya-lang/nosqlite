@@ -1,0 +1,367 @@
+// lib.index - B+Tree page layout helpers
+// 模块路径：lib/index/btree_page.uya → use lib.index.btree_page;
+
+use std.mem.mem.mem_set;
+
+use lib.storage.header;
+use lib.storage.page;
+use lib.storage.checksum;
+use lib.index.key.RecordPointer;
+use lib.index.key.record_pointer_make;
+
+export error BTreeInvalidPage;
+export error BTreeInvalidPageType;
+export error BTreePageTooSmall;
+export error BTreeNoSpace;
+export error BTreeKeyNotFound;
+export error BTreeDuplicateKey;
+
+export const BTREE_LEAF_PREFIX_SIZE: usize = 8;
+export const BTREE_INTERNAL_PREFIX_SIZE: usize = 8;
+export const BTREE_LEAF_ENTRY_SIZE: usize = 16;
+export const BTREE_INTERNAL_CELL_SIZE: usize = 16;
+
+export struct BTreeLeafEntry {
+    key: u64,
+    record_ptr: RecordPointer,
+}
+
+export struct BTreeInternalCell {
+    key: u64,
+    child_page: u32,
+}
+
+fn btree_store_u16_le(out: &[byte], off: usize, value: u16) void {
+    out.ptr[off] = ((value & 255u16) as! byte).value;
+    out.ptr[off + 1usize] = (((value >> 8u16) & 255u16) as! byte).value;
+}
+
+fn btree_store_u32_le(out: &[byte], off: usize, value: u32) void {
+    out.ptr[off] = ((value & 255u32) as! byte).value;
+    out.ptr[off + 1usize] = (((value >> 8u32) & 255u32) as! byte).value;
+    out.ptr[off + 2usize] = (((value >> 16u32) & 255u32) as! byte).value;
+    out.ptr[off + 3usize] = (((value >> 24u32) & 255u32) as! byte).value;
+}
+
+fn btree_store_u64_le(out: &[byte], off: usize, value: u64) void {
+    out.ptr[off] = ((value & 255u64) as! byte).value;
+    out.ptr[off + 1usize] = (((value >> 8u64) & 255u64) as! byte).value;
+    out.ptr[off + 2usize] = (((value >> 16u64) & 255u64) as! byte).value;
+    out.ptr[off + 3usize] = (((value >> 24u64) & 255u64) as! byte).value;
+    out.ptr[off + 4usize] = (((value >> 32u64) & 255u64) as! byte).value;
+    out.ptr[off + 5usize] = (((value >> 40u64) & 255u64) as! byte).value;
+    out.ptr[off + 6usize] = (((value >> 48u64) & 255u64) as! byte).value;
+    out.ptr[off + 7usize] = (((value >> 56u64) & 255u64) as! byte).value;
+}
+
+fn btree_load_u16_le(data: &[byte], off: usize) u16 {
+    return (data.ptr[off] as u16) |
+        ((data.ptr[off + 1usize] as u16) << 8);
+}
+
+fn btree_load_u32_le(data: &[byte], off: usize) u32 {
+    return (data.ptr[off] as u32) |
+        ((data.ptr[off + 1usize] as u32) << 8) |
+        ((data.ptr[off + 2usize] as u32) << 16) |
+        ((data.ptr[off + 3usize] as u32) << 24);
+}
+
+fn btree_load_u64_le(data: &[byte], off: usize) u64 {
+    return (data.ptr[off] as u64) |
+        ((data.ptr[off + 1usize] as u64) << 8) |
+        ((data.ptr[off + 2usize] as u64) << 16) |
+        ((data.ptr[off + 3usize] as u64) << 24) |
+        ((data.ptr[off + 4usize] as u64) << 32) |
+        ((data.ptr[off + 5usize] as u64) << 40) |
+        ((data.ptr[off + 6usize] as u64) << 48) |
+        ((data.ptr[off + 7usize] as u64) << 56);
+}
+
+fn btree_header(page_buf: &[byte]) &PageHeader {
+    return page_header_from_buf(page_buf);
+}
+
+fn btree_validate_page(page_buf: &[byte], expected_type: PageType) !&PageHeader {
+    const header: &PageHeader = btree_header(page_buf);
+    if header == null {
+        return error.BTreeInvalidPage;
+    }
+    const page_size: u32 = (page_buf.len as! u32) catch {
+        return error.BTreeInvalidPage;
+    };
+    if !page_bounds_valid(header, page_size) {
+        return error.BTreeInvalidPage;
+    }
+    if header.page_type != expected_type {
+        return error.BTreeInvalidPageType;
+    }
+    return header;
+}
+
+fn btree_validate_capacity(page_size: u32, prefix_size: usize, entry_size: usize) !u16 {
+    const body_off: usize = page_body_offset();
+    const page_len: usize = (page_size as! usize) catch {
+        return error.BTreePageTooSmall;
+    };
+    if page_len < body_off + prefix_size + entry_size * 2usize {
+        return error.BTreePageTooSmall;
+    }
+    return (((page_len - body_off - prefix_size) / entry_size) as! u16) catch {
+        return error.BTreePageTooSmall;
+    };
+}
+
+fn btree_update_lower(page_buf: &[byte], used_bytes: usize) !void {
+    const header: &PageHeader = btree_header(page_buf);
+    if header == null {
+        return error.BTreeInvalidPage;
+    }
+    header.lower = ((page_body_offset() + used_bytes) as! u16) catch {
+        return error.BTreeInvalidPage;
+    };
+    header.upper = (page_buf.len as! u16) catch {
+        return error.BTreeInvalidPage;
+    };
+    _ = try page_checksum_finalize(page_buf);
+}
+
+fn btree_leaf_entry_offset(page_buf: &[byte], idx: u16) usize {
+    return page_body_offset() + BTREE_LEAF_PREFIX_SIZE + (idx as usize) * BTREE_LEAF_ENTRY_SIZE;
+}
+
+fn btree_internal_cell_offset(page_buf: &[byte], idx: u16) usize {
+    return page_body_offset() + BTREE_INTERNAL_PREFIX_SIZE + (idx as usize) * BTREE_INTERNAL_CELL_SIZE;
+}
+
+fn btree_leaf_set_key_count(page_buf: &[byte], count: u16) void {
+    btree_store_u16_le(page_buf, page_body_offset(), count);
+}
+
+fn btree_leaf_set_next(page_buf: &[byte], next_leaf: u32) void {
+    btree_store_u32_le(page_buf, page_body_offset() + 4usize, next_leaf);
+}
+
+fn btree_internal_set_key_count(page_buf: &[byte], count: u16) void {
+    btree_store_u16_le(page_buf, page_body_offset(), count);
+}
+
+fn btree_internal_set_first_child(page_buf: &[byte], first_child: u32) void {
+    btree_store_u32_le(page_buf, page_body_offset() + 4usize, first_child);
+}
+
+fn btree_leaf_write_entry(page_buf: &[byte], idx: u16, entry: &BTreeLeafEntry) void {
+    const off: usize = btree_leaf_entry_offset(page_buf, idx);
+    btree_store_u64_le(page_buf, off, entry.key);
+    btree_store_u32_le(page_buf, off + 8usize, entry.record_ptr.page_id);
+    btree_store_u16_le(page_buf, off + 12usize, entry.record_ptr.slot_id);
+    btree_store_u16_le(page_buf, off + 14usize, 0u16);
+}
+
+fn btree_internal_write_cell(page_buf: &[byte], idx: u16, cell: &BTreeInternalCell) void {
+    const off: usize = btree_internal_cell_offset(page_buf, idx);
+    btree_store_u64_le(page_buf, off, cell.key);
+    btree_store_u32_le(page_buf, off + 8usize, cell.child_page);
+    btree_store_u32_le(page_buf, off + 12usize, 0u32);
+}
+
+export fn btree_leaf_prefix_size() usize {
+    return BTREE_LEAF_PREFIX_SIZE;
+}
+
+export fn btree_internal_prefix_size() usize {
+    return BTREE_INTERNAL_PREFIX_SIZE;
+}
+
+export fn btree_leaf_entry_size() usize {
+    return BTREE_LEAF_ENTRY_SIZE;
+}
+
+export fn btree_internal_cell_size() usize {
+    return BTREE_INTERNAL_CELL_SIZE;
+}
+
+export fn btree_leaf_capacity(page_size: u32) !u16 {
+    return try btree_validate_capacity(page_size, BTREE_LEAF_PREFIX_SIZE, BTREE_LEAF_ENTRY_SIZE);
+}
+
+export fn btree_internal_capacity(page_size: u32) !u16 {
+    return try btree_validate_capacity(page_size, BTREE_INTERNAL_PREFIX_SIZE, BTREE_INTERNAL_CELL_SIZE);
+}
+
+export fn btree_leaf_init(page_buf: &[byte]) !void {
+    if page_buf.ptr == null {
+        return error.BTreeInvalidPage;
+    }
+    _ = try btree_leaf_capacity(page_buf.len as u32);
+    _ = mem_set(page_buf.ptr, 0 as byte, page_buf.len);
+
+    const header: &PageHeader = btree_header(page_buf);
+    if header == null {
+        return error.BTreeInvalidPage;
+    }
+    header.page_type = PageType.BTREE_LEAF;
+    header.flags = 0u16;
+    header.page_lsn = 0u64;
+    btree_leaf_set_key_count(page_buf, 0u16);
+    btree_leaf_set_next(page_buf, 0u32);
+    try btree_update_lower(page_buf, BTREE_LEAF_PREFIX_SIZE);
+}
+
+export fn btree_internal_init(page_buf: &[byte], first_child: u32) !void {
+    if page_buf.ptr == null {
+        return error.BTreeInvalidPage;
+    }
+    _ = try btree_internal_capacity(page_buf.len as u32);
+    _ = mem_set(page_buf.ptr, 0 as byte, page_buf.len);
+
+    const header: &PageHeader = btree_header(page_buf);
+    if header == null {
+        return error.BTreeInvalidPage;
+    }
+    header.page_type = PageType.BTREE_INTERNAL;
+    header.flags = 0u16;
+    header.page_lsn = 0u64;
+    btree_internal_set_key_count(page_buf, 0u16);
+    btree_internal_set_first_child(page_buf, first_child);
+    try btree_update_lower(page_buf, BTREE_INTERNAL_PREFIX_SIZE);
+}
+
+export fn btree_leaf_key_count(page_buf: &[byte]) !u16 {
+    _ = try btree_validate_page(page_buf, PageType.BTREE_LEAF);
+    return btree_load_u16_le(page_buf, page_body_offset());
+}
+
+export fn btree_leaf_next_leaf(page_buf: &[byte]) !u32 {
+    _ = try btree_validate_page(page_buf, PageType.BTREE_LEAF);
+    return btree_load_u32_le(page_buf, page_body_offset() + 4usize);
+}
+
+export fn btree_internal_key_count(page_buf: &[byte]) !u16 {
+    _ = try btree_validate_page(page_buf, PageType.BTREE_INTERNAL);
+    return btree_load_u16_le(page_buf, page_body_offset());
+}
+
+export fn btree_internal_first_child(page_buf: &[byte]) !u32 {
+    _ = try btree_validate_page(page_buf, PageType.BTREE_INTERNAL);
+    return btree_load_u32_le(page_buf, page_body_offset() + 4usize);
+}
+
+export fn btree_leaf_entry_at(page_buf: &[byte], idx: u16) !BTreeLeafEntry {
+    const count: u16 = try btree_leaf_key_count(page_buf);
+    if idx >= count {
+        return error.BTreeKeyNotFound;
+    }
+    const off: usize = btree_leaf_entry_offset(page_buf, idx);
+    return BTreeLeafEntry{
+        key: btree_load_u64_le(page_buf, off),
+        record_ptr: record_pointer_make(
+            btree_load_u32_le(page_buf, off + 8usize),
+            btree_load_u16_le(page_buf, off + 12usize),
+        ),
+    };
+}
+
+export fn btree_leaf_key_at(page_buf: &[byte], idx: u16) !u64 {
+    return (try btree_leaf_entry_at(page_buf, idx)).key;
+}
+
+export fn btree_leaf_record_pointer_at(page_buf: &[byte], idx: u16) !RecordPointer {
+    return (try btree_leaf_entry_at(page_buf, idx)).record_ptr;
+}
+
+export fn btree_internal_cell_at(page_buf: &[byte], idx: u16) !BTreeInternalCell {
+    const count: u16 = try btree_internal_key_count(page_buf);
+    if idx >= count {
+        return error.BTreeKeyNotFound;
+    }
+    const off: usize = btree_internal_cell_offset(page_buf, idx);
+    return BTreeInternalCell{
+        key: btree_load_u64_le(page_buf, off),
+        child_page: btree_load_u32_le(page_buf, off + 8usize),
+    };
+}
+
+export fn btree_internal_key_at(page_buf: &[byte], idx: u16) !u64 {
+    return (try btree_internal_cell_at(page_buf, idx)).key;
+}
+
+export fn btree_internal_child_at(page_buf: &[byte], child_idx: u16) !u32 {
+    const key_count: u16 = try btree_internal_key_count(page_buf);
+    if child_idx == 0u16 {
+        return try btree_internal_first_child(page_buf);
+    }
+    if child_idx > key_count {
+        return error.BTreeKeyNotFound;
+    }
+    return (try btree_internal_cell_at(page_buf, child_idx - 1u16)).child_page;
+}
+
+export fn btree_leaf_lower_bound(page_buf: &[byte], key: u64) !u16 {
+    const count: u16 = try btree_leaf_key_count(page_buf);
+    var lo: u16 = 0u16;
+    var hi: u16 = count;
+    while lo < hi {
+        const mid: u16 = lo + ((hi - lo) / 2u16);
+        const mid_key: u64 = try btree_leaf_key_at(page_buf, mid);
+        if mid_key < key {
+            lo = mid + 1u16;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+export fn btree_internal_child_index(page_buf: &[byte], key: u64) !u16 {
+    const count: u16 = try btree_internal_key_count(page_buf);
+    var lo: u16 = 0u16;
+    var hi: u16 = count;
+    while lo < hi {
+        const mid: u16 = lo + ((hi - lo) / 2u16);
+        const mid_key: u64 = try btree_internal_key_at(page_buf, mid);
+        if key < mid_key {
+            hi = mid;
+        } else {
+            lo = mid + 1u16;
+        }
+    }
+    return lo;
+}
+
+export fn btree_leaf_rewrite(page_buf: &[byte], next_leaf: u32, entries: &[BTreeLeafEntry], count: u16) !void {
+    _ = try btree_validate_page(page_buf, PageType.BTREE_LEAF);
+    const capacity: u16 = try btree_leaf_capacity(page_buf.len as u32);
+    if count > capacity || count as usize > entries.len {
+        return error.BTreeNoSpace;
+    }
+    _ = mem_set(&page_buf.ptr[page_body_offset()], 0 as byte, page_buf.len - page_body_offset());
+    btree_leaf_set_key_count(page_buf, count);
+    btree_leaf_set_next(page_buf, next_leaf);
+    var i: u16 = 0u16;
+    while i < count {
+        btree_leaf_write_entry(page_buf, i, &entries.ptr[i as usize]);
+        i = i + 1u16;
+    }
+    try btree_update_lower(page_buf, BTREE_LEAF_PREFIX_SIZE + (count as usize) * BTREE_LEAF_ENTRY_SIZE);
+}
+
+export fn btree_internal_rewrite(page_buf: &[byte], first_child: u32, keys: &[u64], children: &[u32], key_count: u16) !void {
+    _ = try btree_validate_page(page_buf, PageType.BTREE_INTERNAL);
+    const capacity: u16 = try btree_internal_capacity(page_buf.len as u32);
+    if key_count > capacity || key_count as usize > keys.len || key_count as usize + 1usize > children.len {
+        return error.BTreeNoSpace;
+    }
+    _ = mem_set(&page_buf.ptr[page_body_offset()], 0 as byte, page_buf.len - page_body_offset());
+    btree_internal_set_key_count(page_buf, key_count);
+    btree_internal_set_first_child(page_buf, first_child);
+    var i: u16 = 0u16;
+    while i < key_count {
+        const cell: BTreeInternalCell = BTreeInternalCell{
+            key: keys.ptr[i as usize],
+            child_page: children.ptr[i as usize + 1usize],
+        };
+        btree_internal_write_cell(page_buf, i, &cell);
+        i = i + 1u16;
+    }
+    try btree_update_lower(page_buf, BTREE_INTERNAL_PREFIX_SIZE + (key_count as usize) * BTREE_INTERNAL_CELL_SIZE);
+}

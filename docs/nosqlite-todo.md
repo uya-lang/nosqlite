@@ -127,18 +127,18 @@
 
 ## Phase 5 - 主索引 B+Tree
 
-- [ ] 先写失败测试：查找、分裂、顺序游标、数值索引键排序
-- [ ] 定义 B+Tree 内部页格式
-- [ ] 定义 B+Tree 叶子页格式
-- [ ] 定义 canonical numeric index key encoding
-- [ ] 实现叶子查找
-- [ ] 实现叶子插入
-- [ ] 实现叶子分裂
-- [ ] 实现根分裂
-- [ ] 实现游标顺序遍历
-- [ ] 实现 `_id -> RecordPointer` 查找
-- [ ] 编写随机插入对照测试
-- [ ] 编写顺序扫描对照测试
+- [x] 先写失败测试：查找、分裂、顺序游标、数值索引键排序
+- [x] 定义 B+Tree 内部页格式
+- [x] 定义 B+Tree 叶子页格式
+- [x] 定义 canonical numeric index key encoding
+- [x] 实现叶子查找
+- [x] 实现叶子插入
+- [x] 实现叶子分裂
+- [x] 实现根分裂
+- [x] 实现游标顺序遍历
+- [x] 实现 `_id -> RecordPointer` 查找
+- [x] 编写随机插入对照测试
+- [x] 编写顺序扫描对照测试
 
 ## Phase 6 - SQL Lexer / Parser
 
