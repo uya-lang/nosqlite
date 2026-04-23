@@ -1,0 +1,305 @@
+use lib.storage.wal_header;
+use lib.core.types;
+use std.mem.allocator.IAllocator;
+use std.mem.allocator.MallocAllocator;
+use std.mem.allocator.get_allocator;
+use lib.storage.pager.SnapshotPressureStatus;
+use lib.api.db.DbHandle;
+use lib.api.db.QueryCursor;
+use lib.api.db.db_test_create_at_stem;
+use lib.api.db.db_test_create_collection;
+use lib.api.db.db_test_insert_json;
+use lib.api.db.db_test_set_now_ms;
+use lib.api.db.db_test_set_snapshot_status;
+use lib.api.db.db_test_track_drops;
+use lib.api.db.db_query_cursor;
+use lib.api.db.db_query;
+use lib.api.db.db_query_with_allocator;
+use lib.api.db.cursor_next;
+use lib.api.db.cursor_row;
+use lib.api.db.query_cursor_is_open;
+use lib.api.result.QueryResult;
+use lib.api.result.OwnedRow;
+use lib.api.result.RowRef;
+use lib.api.result.query_result_row;
+use lib.api.result.owned_row_column_count;
+use lib.api.result.owned_row_cell_u64;
+use lib.api.result.owned_row_cell_bool;
+use lib.api.result.owned_row_cell_text;
+
+const TEST_STEM_EXEC: *const byte = "/tmp/nosqlite_exec_phase8" as *const byte;
+
+var g_exec_result_deallocs: i32 = 0;
+
+struct CountingMallocWrapper : IAllocator {
+    inner: &MallocAllocator,
+
+    fn alloc(self: &Self, size: usize) !&byte {
+        return self.inner.alloc(size);
+    },
+
+    fn dealloc(self: &Self, ptr: &byte) void {
+        if ptr != null {
+            g_exec_result_deallocs = g_exec_result_deallocs + 1;
+        }
+        self.inner.dealloc(ptr);
+    },
+
+    fn realloc(self: &Self, ptr: &byte, new_size: usize) !&byte {
+        return self.inner.realloc(ptr, new_size);
+    },
+}
+
+fn byte_slices_equal(a: &[byte], b: &[const byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn prepare_db(db: &DbHandle) !void {
+    try db_test_create_at_stem(db, TEST_STEM_EXEC);
+    try db_test_create_collection(db, "users");
+    _ = try db_test_insert_json(db, "users", "{\"name\":\"ann\",\"age\":25,\"active\":true}");
+    _ = try db_test_insert_json(db, "users", "{\"name\":\"bob\",\"age\":17,\"active\":false}");
+    _ = try db_test_insert_json(db, "users", "{\"name\":\"cara\",\"age\":31,\"active\":true}");
+}
+
+fn run_cursor_seqscan_filter_limit() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_db(&db) catch {
+        return 1;
+    };
+    db_test_set_now_ms(&db, 1000u64);
+
+    var cursor: QueryCursor = db_query_cursor(&db, "SELECT _id FROM users WHERE $.age >= 18 LIMIT 2;") catch {
+        return 2;
+    };
+    if !query_cursor_is_open(&cursor) {
+        return 3;
+    }
+
+    if !(cursor_next(&cursor) catch {
+        return 4;
+    }) {
+        return 5;
+    }
+    const row1: RowRef = cursor_row(&cursor) catch {
+        return 6;
+    };
+    if row1.doc_id != 1u64 {
+        return 7;
+    }
+
+    if !(cursor_next(&cursor) catch {
+        return 8;
+    }) {
+        return 9;
+    }
+    const row2: RowRef = cursor_row(&cursor) catch {
+        return 10;
+    };
+    if row2.doc_id != 3u64 {
+        return 11;
+    }
+
+    if (cursor_next(&cursor) catch {
+        return 12;
+    }) {
+        return 13;
+    }
+    return 0;
+}
+
+fn run_primary_lookup_and_project() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_db(&db) catch {
+        return 21;
+    };
+    const result: QueryResult = db_query(&db, "SELECT _id, $.name FROM users WHERE _id = 2 LIMIT 1;") catch {
+        return 22;
+    };
+    if result.row_count != 1u32 || result.column_count != 2u16 {
+        return 23;
+    }
+    const row: &OwnedRow = query_result_row(&result, 0u32) catch {
+        return 24;
+    };
+    if (owned_row_column_count(row) catch {
+        return 25;
+    }) != 2u16 {
+        return 26;
+    }
+    if (owned_row_cell_u64(row, 0u16) catch {
+        return 27;
+    }) != 2u64 {
+        return 28;
+    }
+    const name: &[byte] = owned_row_cell_text(row, 1u16) catch {
+        return 29;
+    };
+    if !byte_slices_equal(name, "bob") {
+        return 30;
+    }
+    return 0;
+}
+
+fn run_project_filter_limit_and_empty() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_db(&db) catch {
+        return 41;
+    };
+    const result: QueryResult = db_query(&db, "SELECT $.name, $.active FROM users WHERE NOT $.age < 18 AND $.active = TRUE LIMIT 5;") catch {
+        return 42;
+    };
+    if result.row_count != 2u32 || result.column_count != 2u16 {
+        return 43;
+    }
+    const row0: &OwnedRow = query_result_row(&result, 0u32) catch {
+        return 44;
+    };
+    const row1: &OwnedRow = query_result_row(&result, 1u32) catch {
+        return 45;
+    };
+    if !byte_slices_equal((owned_row_cell_text(row0, 0u16) catch {
+        return 46;
+    }), "ann") {
+        return 47;
+    }
+    if !(owned_row_cell_bool(row0, 1u16) catch {
+        return 48;
+    }) {
+        return 49;
+    }
+    if !byte_slices_equal((owned_row_cell_text(row1, 0u16) catch {
+        return 50;
+    }), "cara") {
+        return 51;
+    }
+
+    const empty: QueryResult = db_query(&db, "SELECT _id FROM users WHERE $.age > 100 LIMIT 10;") catch {
+        return 52;
+    };
+    if empty.row_count != 0u32 {
+        return 53;
+    }
+    return 0;
+}
+
+fn run_error_path_cursor_expired_and_pressure() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_db(&db) catch {
+        return 61;
+    };
+
+    const bad: !QueryResult = db_query(&db, "SELECT $.missing FROM users LIMIT 1;");
+    if bad.error_id == 0u32 {
+        return 62;
+    }
+
+    const bad_is_null: !QueryResult = db_query(&db, "SELECT _id FROM users WHERE -$.name IS NULL LIMIT 1;");
+    if bad_is_null.error_id == 0u32 {
+        return 66;
+    }
+
+    db_test_set_now_ms(&db, 1000u64);
+    var cursor: QueryCursor = db_query_cursor(&db, "SELECT _id FROM users LIMIT 1;") catch {
+        return 63;
+    };
+    db_test_set_now_ms(&db, 40000u64);
+    const expired: !bool = cursor_next(&cursor);
+    if expired.error_id == 0u32 {
+        return 64;
+    }
+
+    db_test_set_snapshot_status(&db, SnapshotPressureStatus{
+        retired_bytes: 4096u64,
+        retired_views: 4u32,
+    });
+    const blocked: !QueryCursor = db_query_cursor(&db, "SELECT _id FROM users LIMIT 1;");
+    if blocked.error_id == 0u32 {
+        return 65;
+    }
+    return 0;
+}
+
+fn run_drop_tracking() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_db(&db) catch {
+        return 71;
+    };
+    var cursor_releases: i32 = 0;
+    var pin_releases: i32 = 0;
+    db_test_track_drops(&db, &cursor_releases, &pin_releases);
+
+    {
+        var cursor: QueryCursor = db_query_cursor(&db, "SELECT _id FROM users LIMIT 1;") catch {
+            return 72;
+        };
+        if !query_cursor_is_open(&cursor) {
+            return 73;
+        }
+    }
+
+    if cursor_releases < 1 || pin_releases < 1 {
+        return 74;
+    }
+    return 0;
+}
+
+fn run_query_result_drop_tracking() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_db(&db) catch {
+        return 81;
+    };
+    g_exec_result_deallocs = 0;
+    var wrapper: CountingMallocWrapper = CountingMallocWrapper{ inner: get_allocator() };
+    {
+        const allocator: IAllocator = wrapper;
+        const result: QueryResult = db_query_with_allocator(&db, "SELECT _id, $.name FROM users LIMIT 1;", allocator) catch {
+            return 82;
+        };
+        if result.row_count != 1u32 {
+            return 83;
+        }
+    }
+    if g_exec_result_deallocs < 1 {
+        return 84;
+    }
+    return 0;
+}
+
+fn main() i32 {
+    const a: i32 = run_cursor_seqscan_filter_limit();
+    if a != 0 {
+        return a;
+    }
+    const b: i32 = run_primary_lookup_and_project();
+    if b != 0 {
+        return b;
+    }
+    const c: i32 = run_project_filter_limit_and_empty();
+    if c != 0 {
+        return c;
+    }
+    const d: i32 = run_error_path_cursor_expired_and_pressure();
+    if d != 0 {
+        return d;
+    }
+    const e: i32 = run_drop_tracking();
+    if e != 0 {
+        return e;
+    }
+    const f: i32 = run_query_result_drop_tracking();
+    if f != 0 {
+        return f;
+    }
+    return 0;
+}

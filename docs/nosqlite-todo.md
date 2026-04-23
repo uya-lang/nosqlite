@@ -169,28 +169,28 @@
 
 ## Phase 8 - Executor v1
 
-- [ ] 先写失败测试：`SeqScan`、`PrimaryLookup`、`Filter`、`Project`、`Limit`
-- [ ] 定义 `CommitViewPin`
-- [ ] 定义 `QueryCursor`
-- [ ] 定义 `RowRef`
-- [ ] 定义拥有所有权的 `QueryResult`
-- [ ] 定义 `OwnedRow` / 结果编码格式
-- [ ] 为 `QueryCursor` 和 `CommitViewPin` 定义 `drop`
-- [ ] 实现 `SeqScan`
-- [ ] 实现 `PrimaryLookup`
-- [ ] 实现 `Filter`
-- [ ] 实现 `Project`
-- [ ] 实现 `Limit`
-- [ ] 实现表达式求值器
-- [ ] 实现结果集收集
-- [ ] 实现 `db_query_cursor`
-- [ ] 实现 `db_query` 物化包装层
-- [ ] 明确 `db_query_cursor` 不得借用语句级 arena
-- [ ] 实现 `CursorExpired`
-- [ ] 实现 `SnapshotPressure`
-- [ ] 实现 `SELECT _id, $.path ...`
-- [ ] 编写查询结果正确性测试
-- [ ] 编写空结果与错误路径测试
+- [x] 先写失败测试：`SeqScan`、`PrimaryLookup`、`Filter`、`Project`、`Limit`
+- [x] 定义 `CommitViewPin`
+- [x] 定义 `QueryCursor`
+- [x] 定义 `RowRef`
+- [x] 定义拥有所有权的 `QueryResult`
+- [x] 定义 `OwnedRow` / 结果编码格式
+- [x] 为 `QueryCursor` 和 `CommitViewPin` 定义 `drop`
+- [x] 实现 `SeqScan`
+- [x] 实现 `PrimaryLookup`
+- [x] 实现 `Filter`
+- [x] 实现 `Project`
+- [x] 实现 `Limit`
+- [x] 实现表达式求值器
+- [x] 实现结果集收集
+- [x] 实现 `db_query_cursor`
+- [x] 实现 `db_query` 物化包装层
+- [x] 明确 `db_query_cursor` 不得借用语句级 arena
+- [x] 实现 `CursorExpired`
+- [x] 实现 `SnapshotPressure`
+- [x] 实现 `SELECT _id, $.path ...`
+- [x] 编写查询结果正确性测试
+- [x] 编写空结果与错误路径测试
 
 ## Phase 9 - 快照读与提交视图
 

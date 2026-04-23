@@ -18,6 +18,8 @@
   对应 SQL token、lexer、parser、JSON path 语法与 AST pretty print。
 - `nosqlite/tests/plan/`
   对应 Binder、Planner、索引选择、Filter/Limit 规划与 EXPLAIN。
+- `nosqlite/tests/exec/`
+  对应执行层、流式 cursor、物化结果、投影、过滤、Limit 与执行期错误。
 - `nosqlite/tests/storage/`
   对应 pager、page header、meta page、WAL header、slotted page。
 - `nosqlite/tests/fixtures/`
@@ -37,6 +39,7 @@
 - `nosqlite/test_docblob_path.uya` -> `tests/doc/`
 - `nosqlite/test_sql_parser.uya` -> `tests/sql/`
 - `nosqlite/test_binder_planner.uya` -> `tests/plan/`
+- `nosqlite/test_exec_runtime.uya` -> `tests/exec/`
 - `nosqlite/test_storage_page_basics.uya` -> `tests/storage/`
 - `nosqlite/test_storage_pager_runtime.uya` -> `tests/storage/`
 - `nosqlite/test_storage_slotted_page_runtime.uya` -> `tests/storage/`

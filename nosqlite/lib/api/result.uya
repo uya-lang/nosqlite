@@ -1,0 +1,186 @@
+// lib.api - query result types and helpers
+// 模块路径：lib/api/result.uya → use lib.api.result;
+
+use std.mem.allocator.IAllocator;
+use lib.index.key.RecordPointer;
+
+export error QueryResultInvalidBuffer;
+export error QueryResultInvalidCell;
+export error QueryResultCellNotFound;
+export error QueryResultWrongType;
+
+export const QUERY_RESULT_MAX_ROWS: usize = 128;
+export const OWNED_ROW_MAX_BLOB: usize = 4096;
+export const RESULT_BLOB_HEADER_SIZE: usize = 2;
+export const RESULT_CELL_HEADER_SIZE: usize = 4;
+
+export enum ResultCellKind {
+    NULL,
+    BOOL,
+    INT64,
+    UINT64,
+    NUMBER_TEXT,
+    STRING,
+}
+
+export struct RowRef {
+    doc_id: u64,
+    record_ptr: RecordPointer,
+    doc_blob: &[byte],
+}
+
+export struct OwnedRow {
+    result_len: u16,
+    result_blob: [byte: OWNED_ROW_MAX_BLOB],
+}
+
+export struct QueryResult {
+    allocator: IAllocator,
+    column_count: u16,
+    row_count: u32,
+    rows: &OwnedRow,
+
+    fn drop(self: QueryResult) void {
+        if self.rows != null {
+            self.allocator.dealloc(self.rows as &byte);
+        }
+    },
+}
+
+fn result_load_u16_le(data: &[byte], off: usize) u16 {
+    return (data.ptr[off] as u16) |
+        ((data.ptr[off + 1usize] as u16) << 8);
+}
+
+fn result_load_u32_le(data: &[byte], off: usize) u32 {
+    return (data.ptr[off] as u32) |
+        ((data.ptr[off + 1usize] as u32) << 8) |
+        ((data.ptr[off + 2usize] as u32) << 16) |
+        ((data.ptr[off + 3usize] as u32) << 24);
+}
+
+fn result_load_u64_le(data: &[byte], off: usize) u64 {
+    return (data.ptr[off] as u64) |
+        ((data.ptr[off + 1usize] as u64) << 8) |
+        ((data.ptr[off + 2usize] as u64) << 16) |
+        ((data.ptr[off + 3usize] as u64) << 24) |
+        ((data.ptr[off + 4usize] as u64) << 32) |
+        ((data.ptr[off + 5usize] as u64) << 40) |
+        ((data.ptr[off + 6usize] as u64) << 48) |
+        ((data.ptr[off + 7usize] as u64) << 56);
+}
+
+fn result_load_i64_le(data: &[byte], off: usize) i64 {
+    return result_load_u64_le(data, off) as i64;
+}
+
+fn owned_row_bytes(row: &OwnedRow) !&[byte] {
+    if row == null || row.result_len as usize > OWNED_ROW_MAX_BLOB {
+        return error.QueryResultInvalidBuffer;
+    }
+    return row.result_blob[0: row.result_len as usize];
+}
+
+fn owned_row_cell_payload(row: &OwnedRow, cell_index: u16, kind_out: &ResultCellKind) !&[byte] {
+    const data: &[byte] = try owned_row_bytes(row);
+    if data.len < RESULT_BLOB_HEADER_SIZE {
+        return error.QueryResultInvalidBuffer;
+    }
+    const column_count: u16 = result_load_u16_le(data, 0usize);
+    if cell_index >= column_count {
+        return error.QueryResultCellNotFound;
+    }
+
+    var cursor: usize = RESULT_BLOB_HEADER_SIZE;
+    var idx: u16 = 0u16;
+    while idx < column_count {
+        if cursor + RESULT_CELL_HEADER_SIZE > data.len {
+            return error.QueryResultInvalidBuffer;
+        }
+        const raw_kind: u16 = result_load_u16_le(data, cursor);
+        if raw_kind > ResultCellKind.STRING as u16 {
+            return error.QueryResultInvalidCell;
+        }
+        const kind: ResultCellKind = (raw_kind as! ResultCellKind) catch {
+            return error.QueryResultInvalidCell;
+        };
+        const payload_len: usize = result_load_u16_le(data, cursor + 2usize) as usize;
+        cursor = cursor + RESULT_CELL_HEADER_SIZE;
+        if cursor + payload_len > data.len {
+            return error.QueryResultInvalidBuffer;
+        }
+        if idx == cell_index {
+            if kind_out != null {
+                kind_out[0] = kind;
+            }
+            return data[cursor: payload_len];
+        }
+        cursor = cursor + payload_len;
+        idx = idx + 1u16;
+    }
+    return error.QueryResultCellNotFound;
+}
+
+export fn query_result_row(result: &QueryResult, row_index: u32) !&OwnedRow {
+    if result == null || result.rows == null || row_index >= result.row_count || row_index as usize >= QUERY_RESULT_MAX_ROWS {
+        return error.QueryResultCellNotFound;
+    }
+    const idx: usize = (row_index as! usize) catch {
+        return error.QueryResultCellNotFound;
+    };
+    if idx >= QUERY_RESULT_MAX_ROWS {
+        return error.QueryResultCellNotFound;
+    }
+    const addr: usize = @usize_from_ptr(result.rows as &void) + idx * (@size_of(OwnedRow) as usize);
+    return @ptr_from_usize(addr) as &OwnedRow;
+}
+
+export fn owned_row_column_count(row: &OwnedRow) !u16 {
+    const data: &[byte] = try owned_row_bytes(row);
+    if data.len < RESULT_BLOB_HEADER_SIZE {
+        return error.QueryResultInvalidBuffer;
+    }
+    return result_load_u16_le(data, 0usize);
+}
+
+export fn owned_row_cell_kind(row: &OwnedRow, cell_index: u16) !ResultCellKind {
+    var kind: ResultCellKind = ResultCellKind.NULL;
+    _ = try owned_row_cell_payload(row, cell_index, &kind);
+    return kind;
+}
+
+export fn owned_row_cell_u64(row: &OwnedRow, cell_index: u16) !u64 {
+    var kind: ResultCellKind = ResultCellKind.NULL;
+    const payload: &[byte] = try owned_row_cell_payload(row, cell_index, &kind);
+    if kind != ResultCellKind.UINT64 || payload.len != 8usize {
+        return error.QueryResultWrongType;
+    }
+    return result_load_u64_le(payload, 0usize);
+}
+
+export fn owned_row_cell_i64(row: &OwnedRow, cell_index: u16) !i64 {
+    var kind: ResultCellKind = ResultCellKind.NULL;
+    const payload: &[byte] = try owned_row_cell_payload(row, cell_index, &kind);
+    if kind != ResultCellKind.INT64 || payload.len != 8usize {
+        return error.QueryResultWrongType;
+    }
+    return result_load_i64_le(payload, 0usize);
+}
+
+export fn owned_row_cell_bool(row: &OwnedRow, cell_index: u16) !bool {
+    var kind: ResultCellKind = ResultCellKind.NULL;
+    const payload: &[byte] = try owned_row_cell_payload(row, cell_index, &kind);
+    if kind != ResultCellKind.BOOL || payload.len != 1usize {
+        return error.QueryResultWrongType;
+    }
+    return payload.ptr[0usize] != 0 as byte;
+}
+
+export fn owned_row_cell_text(row: &OwnedRow, cell_index: u16) !&[byte] {
+    var kind: ResultCellKind = ResultCellKind.NULL;
+    const payload: &[byte] = try owned_row_cell_payload(row, cell_index, &kind);
+    if kind != ResultCellKind.STRING && kind != ResultCellKind.NUMBER_TEXT {
+        return error.QueryResultWrongType;
+    }
+    return payload;
+}
