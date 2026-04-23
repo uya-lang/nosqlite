@@ -194,22 +194,22 @@
 
 ## Phase 9 - 快照读与提交视图
 
-- [ ] 先写失败测试：旧读者不中断、retired 资源回收、cursor 过期
-- [ ] 定义 `CommitView`
-- [ ] 将 `page_table_gen` 纳入 `CommitView`
-- [ ] 实现 reader pin / unpin
-- [ ] 实现不可变 page table
-- [ ] 实现提交后原子切换当前视图
-- [ ] 实现 retired view 延迟回收
-- [ ] 实现 retired page frame 延迟回收
-- [ ] 实现查询开始时绑定快照
-- [ ] 用 guard + `drop` 封装 view pin 生命周期
-- [ ] 实现 `soft_retired_bytes` 监控
-- [ ] 实现 `hard_retired_bytes` 限流/拒绝策略
-- [ ] 实现 cursor lease 到期失效
-- [ ] 确认提交期间旧读者不中断
-- [ ] 验证 hard snapshot pressure 下写侧会 backpressure
-- [ ] 编写“长查询 + 并发提交”测试
+- [x] 先写失败测试：旧读者不中断、retired 资源回收、cursor 过期
+- [x] 定义 `CommitView`
+- [x] 将 `page_table_gen` 纳入 `CommitView`
+- [x] 实现 reader pin / unpin
+- [x] 实现不可变 page table
+- [x] 实现提交后原子切换当前视图
+- [x] 实现 retired view 延迟回收
+- [x] 实现 retired page frame 延迟回收
+- [x] 实现查询开始时绑定快照
+- [x] 用 guard + `drop` 封装 view pin 生命周期
+- [x] 实现 `soft_retired_bytes` 监控
+- [x] 实现 `hard_retired_bytes` 限流/拒绝策略
+- [x] 实现 cursor lease 到期失效
+- [x] 确认提交期间旧读者不中断
+- [x] 验证 hard snapshot pressure 下写侧会 backpressure
+- [x] 编写“长查询 + 并发提交”测试
 
 ## Phase 10 - 写路径 v1
 

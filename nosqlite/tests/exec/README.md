@@ -2,6 +2,7 @@
 
 本组覆盖：
 
+- `CommitView`
 - `CommitViewPin`
 - `QueryCursor`
 - `RowRef`
@@ -15,6 +16,8 @@
 - `db_query`
 - `CursorExpired`
 - `SnapshotPressure`
+- 快照绑定 / retired view 回收
+- 长查询 + 并发提交
 
 当前入口文件：
 

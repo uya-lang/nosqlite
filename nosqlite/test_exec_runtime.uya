@@ -3,21 +3,29 @@ use lib.core.types;
 use std.mem.allocator.IAllocator;
 use std.mem.allocator.MallocAllocator;
 use std.mem.allocator.get_allocator;
+use lib.storage.pager.SnapshotPressurePolicy;
 use lib.storage.pager.SnapshotPressureStatus;
+use lib.api.db.CommitView;
 use lib.api.db.DbHandle;
 use lib.api.db.QueryCursor;
 use lib.api.db.db_test_create_at_stem;
 use lib.api.db.db_test_create_collection;
 use lib.api.db.db_test_insert_json;
+use lib.api.db.db_test_reset_primary_index;
+use lib.api.db.db_test_set_snapshot_policy;
 use lib.api.db.db_test_set_now_ms;
+use lib.api.db.db_test_clear_snapshot_status_override;
 use lib.api.db.db_test_set_snapshot_status;
+use lib.api.db.db_test_snapshot_status;
 use lib.api.db.db_test_track_drops;
+use lib.api.db.db_test_current_commit_view;
 use lib.api.db.db_query_cursor;
 use lib.api.db.db_query;
 use lib.api.db.db_query_with_allocator;
 use lib.api.db.cursor_next;
 use lib.api.db.cursor_row;
 use lib.api.db.query_cursor_is_open;
+use lib.api.db.query_cursor_commit_view;
 use lib.api.result.QueryResult;
 use lib.api.result.OwnedRow;
 use lib.api.result.RowRef;
@@ -151,6 +159,23 @@ fn run_primary_lookup_and_project() i32 {
     return 0;
 }
 
+fn run_primary_lookup_uses_index() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_db(&db) catch {
+        return 31;
+    };
+    _ = db_test_reset_primary_index(&db, "users") catch {
+        return 32;
+    };
+    const result: QueryResult = db_query(&db, "SELECT _id FROM users WHERE _id = 2 LIMIT 1;") catch {
+        return 33;
+    };
+    if result.row_count != 0u32 {
+        return 34;
+    }
+    return 0;
+}
+
 fn run_project_filter_limit_and_empty() i32 {
     var db: DbHandle = DbHandle{};
     _ = prepare_db(&db) catch {
@@ -223,9 +248,21 @@ fn run_error_path_cursor_expired_and_pressure() i32 {
         retired_bytes: 4096u64,
         retired_views: 4u32,
     });
+    const pressured: SnapshotPressureStatus = db_test_snapshot_status(&db);
+    if pressured.retired_bytes != 4096u64 || pressured.retired_views != 4u32 {
+        return 67;
+    }
     const blocked: !QueryCursor = db_query_cursor(&db, "SELECT _id FROM users LIMIT 1;");
     if blocked.error_id == 0u32 {
         return 65;
+    }
+
+    db_test_clear_snapshot_status_override(&db);
+    const recovered: QueryCursor = db_query_cursor(&db, "SELECT _id FROM users LIMIT 1;") catch {
+        return 68;
+    };
+    if !query_cursor_is_open(&recovered) {
+        return 69;
     }
     return 0;
 }
@@ -276,6 +313,169 @@ fn run_query_result_drop_tracking() i32 {
     return 0;
 }
 
+fn run_commit_view_snapshot_and_retired_cleanup() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_db(&db) catch {
+        return 91;
+    };
+    db_test_set_now_ms(&db, 1000u64);
+
+    const before_open: CommitView = db_test_current_commit_view(&db);
+    var retired_bytes_during_pin: u64 = 0u64;
+
+    {
+        var cursor: QueryCursor = db_query_cursor(&db, "SELECT _id FROM users LIMIT 10;") catch {
+            return 92;
+        };
+        const after_open: CommitView = db_test_current_commit_view(&db);
+        const cursor_view: CommitView = query_cursor_commit_view(&cursor);
+        if after_open.generation != before_open.generation || after_open.page_table_gen != before_open.page_table_gen {
+            return 93;
+        }
+        if cursor_view.generation != before_open.generation || cursor_view.page_table_gen != before_open.page_table_gen {
+            return 94;
+        }
+
+        if !(cursor_next(&cursor) catch {
+            return 95;
+        }) {
+            return 96;
+        }
+        const row1: RowRef = cursor_row(&cursor) catch {
+            return 97;
+        };
+        if row1.doc_id != 1u64 {
+            return 98;
+        }
+
+        const inserted: u64 = db_test_insert_json(&db, "users", "{\"name\":\"dina\",\"age\":29,\"active\":true}") catch {
+            return 99;
+        };
+        if inserted != 4u64 {
+            return 100;
+        }
+
+        const after_commit: CommitView = db_test_current_commit_view(&db);
+        if after_commit.generation <= before_open.generation || after_commit.page_table_gen <= before_open.page_table_gen {
+            return 101;
+        }
+        if query_cursor_commit_view(&cursor).generation != before_open.generation {
+            return 102;
+        }
+
+        const retired_status: SnapshotPressureStatus = db_test_snapshot_status(&db);
+        retired_bytes_during_pin = retired_status.retired_bytes;
+        if retired_status.retired_views != 1u32 || retired_status.retired_bytes == 0u64 {
+            return 103;
+        }
+
+        if !(cursor_next(&cursor) catch {
+            return 104;
+        }) {
+            return 105;
+        }
+        if (cursor_row(&cursor) catch {
+            return 106;
+        }).doc_id != 2u64 {
+            return 107;
+        }
+        if !(cursor_next(&cursor) catch {
+            return 108;
+        }) {
+            return 109;
+        }
+        if (cursor_row(&cursor) catch {
+            return 110;
+        }).doc_id != 3u64 {
+            return 111;
+        }
+        if (cursor_next(&cursor) catch {
+            return 112;
+        }) {
+            return 113;
+        }
+
+        const latest: QueryResult = db_query(&db, "SELECT _id FROM users LIMIT 10;") catch {
+            return 114;
+        };
+        if latest.row_count != 4u32 {
+            return 115;
+        }
+        if (owned_row_cell_u64((query_result_row(&latest, 3u32) catch {
+            return 116;
+        }), 0u16) catch {
+            return 117;
+        }) != 4u64 {
+            return 118;
+        }
+    }
+
+    const cleaned: SnapshotPressureStatus = db_test_snapshot_status(&db);
+    if retired_bytes_during_pin == 0u64 {
+        return 119;
+    }
+    if cleaned.retired_views != 0u32 || cleaned.retired_bytes != 0u64 {
+        return 120;
+    }
+    return 0;
+}
+
+fn run_hard_snapshot_pressure_blocks_reads_and_writes() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_db(&db) catch {
+        return 121;
+    };
+    db_test_set_snapshot_policy(&db, SnapshotPressurePolicy{
+        soft_retired_bytes: 64u64,
+        hard_retired_bytes: 128u64,
+        max_retired_views: 1u32,
+        cursor_lease_ms: 30000u64,
+    });
+
+    {
+        var cursor: QueryCursor = db_query_cursor(&db, "SELECT _id FROM users LIMIT 10;") catch {
+            return 122;
+        };
+        _ = db_test_insert_json(&db, "users", "{\"name\":\"erin\",\"age\":22,\"active\":true}") catch {
+            return 123;
+        };
+
+        const status: SnapshotPressureStatus = db_test_snapshot_status(&db);
+        if status.retired_views != 1u32 || status.retired_bytes < 128u64 {
+            return 124;
+        }
+
+        const blocked_cursor: !QueryCursor = db_query_cursor(&db, "SELECT _id FROM users LIMIT 1;");
+        if blocked_cursor.error_id == 0u32 {
+            return 125;
+        }
+
+        const blocked_write: !u64 = db_test_insert_json(&db, "users", "{\"name\":\"faye\",\"age\":24,\"active\":false}");
+        if blocked_write.error_id == 0u32 {
+            return 126;
+        }
+
+        if !(cursor_next(&cursor) catch {
+            return 127;
+        }) {
+            return 128;
+        }
+    }
+
+    const cleaned: SnapshotPressureStatus = db_test_snapshot_status(&db);
+    if cleaned.retired_views != 0u32 || cleaned.retired_bytes != 0u64 {
+        return 129;
+    }
+
+    const reopened: QueryCursor = db_query_cursor(&db, "SELECT _id FROM users LIMIT 1;") catch {
+        return 130;
+    };
+    if !query_cursor_is_open(&reopened) {
+        return 131;
+    }
+    return 0;
+}
+
 fn main() i32 {
     const a: i32 = run_cursor_seqscan_filter_limit();
     if a != 0 {
@@ -284,6 +484,10 @@ fn main() i32 {
     const b: i32 = run_primary_lookup_and_project();
     if b != 0 {
         return b;
+    }
+    const b2: i32 = run_primary_lookup_uses_index();
+    if b2 != 0 {
+        return b2;
     }
     const c: i32 = run_project_filter_limit_and_empty();
     if c != 0 {
@@ -300,6 +504,14 @@ fn main() i32 {
     const f: i32 = run_query_result_drop_tracking();
     if f != 0 {
         return f;
+    }
+    const g: i32 = run_commit_view_snapshot_and_retired_cleanup();
+    if g != 0 {
+        return g;
+    }
+    const h: i32 = run_hard_snapshot_pressure_blocks_reads_and_writes();
+    if h != 0 {
+        return h;
     }
     return 0;
 }

@@ -21,7 +21,9 @@ use lib.storage.pager.catalog_allocate_next_doc_id_at_stem;
 use lib.storage.pager.cursor_lease_start;
 use lib.storage.pager.cursor_lease_validate;
 use lib.storage.pager.snapshot_pressure_cursor_can_open;
+use lib.storage.pager.snapshot_pressure_require_write_ok;
 use lib.catalog.schema.CollectionMeta;
+use lib.core.NOSQLITE_PAGE_SIZE_DEFAULT;
 use lib.index.key.RecordPointer;
 use lib.index.key.record_pointer_make;
 use lib.index.btree.PrimaryBTree;
@@ -78,8 +80,12 @@ export error DbScalarExpected;
 export const DB_MAX_COLLECTIONS: usize = 4;
 export const DB_MAX_ROWS_PER_COLLECTION: usize = 64;
 export const DB_MAX_CURSOR_ROWS: usize = 64;
+const DB_MAX_COMMIT_VIEWS: usize = 8;
 const DB_PATH_BUF_SIZE: usize = 512;
 const DB_DOC_BLOB_MAX: usize = 4096;
+const DB_VIEW_BASE_RETAINED_BYTES: u64 = 64u64;
+const DB_COLLECTION_RETAINED_BYTES: u64 = 32u64;
+const DB_ROW_RETAINED_BYTES: u64 = 16u64;
 
 struct DbStoredRow {
     present: bool,
@@ -97,30 +103,54 @@ struct DbCollection {
     primary_root_page: u32,
     row_count: u16,
     rows: [DbStoredRow: DB_MAX_ROWS_PER_COLLECTION],
-    primary_index: PrimaryBTree,
+}
+
+export struct CommitView {
+    generation: u64,
+    commit_lsn: u64,
+    catalog_root: u32,
+    page_count: u32,
+    freelist_head: u32,
+    page_table_gen: u64,
+}
+
+struct CommitViewState {
+    present: bool,
+    retired: bool,
+    reader_pins: u32,
+    retained_bytes: u64,
+    view: CommitView,
+    collection_count: u16,
+    collections: [DbCollection: DB_MAX_COLLECTIONS],
 }
 
 export struct DbHandle {
     stem_len: u16,
     stem: [byte: DB_PATH_BUF_SIZE],
-    collection_count: u16,
-    collections: [DbCollection: DB_MAX_COLLECTIONS],
     snapshot_policy: SnapshotPressurePolicy,
     snapshot_status: SnapshotPressureStatus,
+    snapshot_status_override_enabled: bool,
+    snapshot_status_override: SnapshotPressureStatus,
     now_ms: u64,
-    view_gen: u64,
+    current_view_slot: u16,
+    next_view_generation: u64,
+    next_page_table_gen: u64,
+    commit_views: [CommitViewState: DB_MAX_COMMIT_VIEWS],
+    primary_indexes: [PrimaryBTree: DB_MAX_COLLECTIONS],
     cursor_release_counter: &i32,
     pin_release_counter: &i32,
 }
 
 export struct CommitViewPin {
-    view_gen: u64,
+    db: &DbHandle,
+    view_slot: u16,
+    view: CommitView,
     lease: CursorLease,
     held: bool,
     release_counter: &i32,
 
     fn drop(self: CommitViewPin) void {
-        commit_view_pin_release_counter_bump(self.release_counter, self.held);
+        commit_view_pin_drop(self);
     },
 }
 
@@ -137,7 +167,7 @@ export struct QueryCursor {
     release_counter: &i32,
 
     fn drop(self: QueryCursor) void {
-        query_cursor_release(&self);
+        query_cursor_drop(self);
     },
 }
 
@@ -205,13 +235,231 @@ fn db_default_snapshot_policy() SnapshotPressurePolicy {
     };
 }
 
-fn db_find_collection_slot_by_id(db: &DbHandle, collection_id: u32) !u16 {
+fn db_zero_commit_view() CommitView {
+    return CommitView{
+        generation: 0u64,
+        commit_lsn: 0u64,
+        catalog_root: 0u32,
+        page_count: 0u32,
+        freelist_head: 0u32,
+        page_table_gen: 0u64,
+    };
+}
+
+fn db_clear_commit_view_state(state: &CommitViewState) void {
+    if state == null {
+        return;
+    }
+    state[0] = CommitViewState{
+        present: false,
+        retired: false,
+        reader_pins: 0u32,
+        retained_bytes: 0u64,
+        view: db_zero_commit_view(),
+        collection_count: 0u16,
+        collections: [],
+    };
+}
+
+fn db_commit_view_state(db: &DbHandle, view_slot: u16) !&CommitViewState {
     if db == null {
         return error.DbHandleInvalid;
     }
+    const view_idx: usize = (view_slot as! usize) catch {
+        return error.DbHandleInvalid;
+    };
+    if view_idx >= DB_MAX_COMMIT_VIEWS {
+        return error.DbHandleInvalid;
+    }
+    const state: &CommitViewState = &db.commit_views[view_idx];
+    if !state.present {
+        return error.DbHandleInvalid;
+    }
+    return state;
+}
+
+fn db_current_view_state(db: &DbHandle) !&CommitViewState {
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    return db_commit_view_state(db, db.current_view_slot);
+}
+
+fn db_effective_snapshot_status(db: &DbHandle) SnapshotPressureStatus {
+    if db != null && db.snapshot_status_override_enabled {
+        return db.snapshot_status_override;
+    }
+    if db == null {
+        return SnapshotPressureStatus{
+            retired_bytes: 0u64,
+            retired_views: 0u32,
+        };
+    }
+    return db.snapshot_status;
+}
+
+fn db_compute_view_page_count(state: &CommitViewState) u32 {
+    if state == null || !state.present {
+        return 0u32;
+    }
+    var total: u32 = 0u32;
     var i: u16 = 0u16;
-    while i < db.collection_count {
-        if db.collections[i as usize].present && db.collections[i as usize].collection_id == collection_id {
+    while i < state.collection_count {
+        if state.collections[i as usize].present {
+            total = total + state.collections[i as usize].row_count as u32;
+        }
+        i = i + 1u16;
+    }
+    return total;
+}
+
+fn db_compute_view_retained_bytes(state: &CommitViewState) u64 {
+    if state == null || !state.present {
+        return 0u64;
+    }
+    var total: u64 = DB_VIEW_BASE_RETAINED_BYTES;
+    var i: u16 = 0u16;
+    while i < state.collection_count {
+        const collection: &DbCollection = &state.collections[i as usize];
+        if collection.present {
+            total = total + DB_COLLECTION_RETAINED_BYTES;
+            var row_idx: u16 = 0u16;
+            while row_idx < collection.row_count {
+                const row: &DbStoredRow = &collection.rows[row_idx as usize];
+                if row.present {
+                    total = total + DB_ROW_RETAINED_BYTES + row.doc_len as u64;
+                }
+                row_idx = row_idx + 1u16;
+            }
+        }
+        i = i + 1u16;
+    }
+    return total;
+}
+
+fn db_finalize_view_state(state: &CommitViewState) void {
+    if state == null || !state.present {
+        return;
+    }
+    state.view.page_count = db_compute_view_page_count(state);
+    state.retained_bytes = db_compute_view_retained_bytes(state);
+}
+
+fn db_refresh_snapshot_status(db: &DbHandle) void {
+    if db == null {
+        return;
+    }
+    var retired_bytes: u64 = 0u64;
+    var retired_views: u32 = 0u32;
+    var i: usize = 0usize;
+    while i < DB_MAX_COMMIT_VIEWS {
+        const state: &CommitViewState = &db.commit_views[i];
+        if state.present && state.retired {
+            retired_views = retired_views + 1u32;
+            retired_bytes = retired_bytes + state.retained_bytes;
+        }
+        i = i + 1usize;
+    }
+    db.snapshot_status = SnapshotPressureStatus{
+        retired_bytes: retired_bytes,
+        retired_views: retired_views,
+    };
+}
+
+fn db_cleanup_retired_views(db: &DbHandle) void {
+    if db == null {
+        return;
+    }
+    var i: usize = 0usize;
+    while i < DB_MAX_COMMIT_VIEWS {
+        const state: &CommitViewState = &db.commit_views[i];
+        if state.present && state.retired && state.reader_pins == 0u32 {
+            db_clear_commit_view_state(state);
+        }
+        i = i + 1usize;
+    }
+    db_refresh_snapshot_status(db);
+}
+
+fn db_allocate_view_slot(db: &DbHandle) !u16 {
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    db_cleanup_retired_views(db);
+    var i: usize = 0usize;
+    while i < DB_MAX_COMMIT_VIEWS {
+        if !db.commit_views[i].present {
+            return (i as! u16) catch {
+                return error.SnapshotPressure;
+            };
+        }
+        i = i + 1usize;
+    }
+    return error.SnapshotPressure;
+}
+
+fn db_stage_view_from_current(db: &DbHandle) !u16 {
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    db_cleanup_retired_views(db);
+    const effective_status: SnapshotPressureStatus = db_effective_snapshot_status(db);
+    try snapshot_pressure_require_write_ok(&db.snapshot_policy, &effective_status);
+    const source: &CommitViewState = try db_current_view_state(db);
+    const new_slot: u16 = try db_allocate_view_slot(db);
+    const new_idx: usize = (new_slot as! usize) catch {
+        return error.SnapshotPressure;
+    };
+    if new_idx >= DB_MAX_COMMIT_VIEWS {
+        return error.SnapshotPressure;
+    }
+    const target: &CommitViewState = &db.commit_views[new_idx];
+    db_clear_commit_view_state(target);
+    target.present = true;
+    target.retired = false;
+    target.reader_pins = 0u32;
+    target.retained_bytes = 0u64;
+    target.view = CommitView{
+        generation: db.next_view_generation,
+        commit_lsn: db.next_view_generation,
+        catalog_root: source.view.catalog_root,
+        page_count: source.view.page_count,
+        freelist_head: source.view.freelist_head,
+        page_table_gen: db.next_page_table_gen,
+    };
+    target.collection_count = source.collection_count;
+    var i: u16 = 0u16;
+    while i < source.collection_count {
+        target.collections[i as usize] = source.collections[i as usize];
+        i = i + 1u16;
+    }
+    return new_slot;
+}
+
+fn db_publish_view_slot(db: &DbHandle, new_slot: u16) !void {
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    const new_state: &CommitViewState = try db_commit_view_state(db, new_slot);
+    db_finalize_view_state(new_state);
+    const old_slot: u16 = db.current_view_slot;
+    db.current_view_slot = new_slot;
+    if (old_slot as usize) < DB_MAX_COMMIT_VIEWS {
+        const old_state: &CommitViewState = &db.commit_views[old_slot as usize];
+        if old_state.present {
+            old_state.retired = true;
+        }
+    }
+    db.next_view_generation = db.next_view_generation + 1u64;
+    db.next_page_table_gen = db.next_page_table_gen + 1u64;
+    db_cleanup_retired_views(db);
+}
+
+fn db_find_collection_slot_by_id_in_view(db: &DbHandle, view_slot: u16, collection_id: u32) !u16 {
+    const state: &CommitViewState = try db_commit_view_state(db, view_slot);
+    var i: u16 = 0u16;
+    while i < state.collection_count {
+        if state.collections[i as usize].present && state.collections[i as usize].collection_id == collection_id {
             return i;
         }
         i = i + 1u16;
@@ -219,13 +467,14 @@ fn db_find_collection_slot_by_id(db: &DbHandle, collection_id: u32) !u16 {
     return error.DbCollectionNotFound;
 }
 
-fn db_find_collection_slot_by_name(db: &DbHandle, name: &[const byte]) !u16 {
+fn db_find_collection_slot_by_name_in_view(db: &DbHandle, view_slot: u16, name: &[const byte]) !u16 {
     if db == null || name.ptr == null {
         return error.DbCollectionNotFound;
     }
+    const state: &CommitViewState = try db_commit_view_state(db, view_slot);
     var i: u16 = 0u16;
-    while i < db.collection_count {
-        const col: &DbCollection = &db.collections[i as usize];
+    while i < state.collection_count {
+        const col: &DbCollection = &state.collections[i as usize];
         if col.present && col.name_len as usize == name.len {
             var same: bool = true;
             var j: usize = 0usize;
@@ -245,6 +494,20 @@ fn db_find_collection_slot_by_name(db: &DbHandle, name: &[const byte]) !u16 {
     return error.DbCollectionNotFound;
 }
 
+fn db_find_collection_slot_by_id(db: &DbHandle, collection_id: u32) !u16 {
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    return db_find_collection_slot_by_id_in_view(db, db.current_view_slot, collection_id);
+}
+
+fn db_find_collection_slot_by_name(db: &DbHandle, name: &[const byte]) !u16 {
+    if db == null {
+        return error.DbCollectionNotFound;
+    }
+    return db_find_collection_slot_by_name_in_view(db, db.current_view_slot, name);
+}
+
 fn db_row_blob(row: &DbStoredRow) !&[byte] {
     if row == null || !row.present || row.doc_len as usize > DB_DOC_BLOB_MAX {
         return error.DbRowTooLarge;
@@ -252,17 +515,18 @@ fn db_row_blob(row: &DbStoredRow) !&[byte] {
     return row.doc_blob[0: row.doc_len as usize];
 }
 
-fn db_collection_row_ref(db: &DbHandle, collection_slot: u16, row_slot: u16) !RowRef {
+fn db_collection_row_ref(db: &DbHandle, view_slot: u16, collection_slot: u16, row_slot: u16) !RowRef {
     if db == null || collection_slot as usize >= DB_MAX_COLLECTIONS {
         return error.DbCollectionNotFound;
     }
+    const state: &CommitViewState = try db_commit_view_state(db, view_slot);
     const collection_idx: usize = (collection_slot as! usize) catch {
         return error.DbCollectionNotFound;
     };
     if collection_idx >= DB_MAX_COLLECTIONS {
         return error.DbCollectionNotFound;
     }
-    const collection: &DbCollection = &db.collections[collection_idx];
+    const collection: &DbCollection = &state.collections[collection_idx];
     if !collection.present || row_slot >= collection.row_count || row_slot as usize >= DB_MAX_ROWS_PER_COLLECTION {
         return error.DbCollectionNotFound;
     }
@@ -280,19 +544,27 @@ fn db_collection_row_ref(db: &DbHandle, collection_slot: u16, row_slot: u16) !Ro
     };
 }
 
-fn commit_view_pin_release_counter_bump(release_counter: &i32, held: bool) void {
-    if held && release_counter != null {
-        release_counter[0] = release_counter[0] + 1;
-    }
+fn db_pin_current_view_slot(db: &DbHandle) !u16 {
+    const state: &CommitViewState = try db_current_view_state(db);
+    state.reader_pins = state.reader_pins + 1u32;
+    return db.current_view_slot;
 }
 
-fn query_cursor_release_counter_bump(release_counter: &i32, pin_release_counter: &i32, held: bool) void {
-    if held && release_counter != null {
-        release_counter[0] = release_counter[0] + 1;
+fn db_unpin_view_slot(db: &DbHandle, view_slot: u16) void {
+    if db == null {
+        return;
     }
-    if held && pin_release_counter != null {
-        pin_release_counter[0] = pin_release_counter[0] + 1;
+    const view_idx: usize = (view_slot as! usize) catch {
+        return;
+    };
+    if view_idx >= DB_MAX_COMMIT_VIEWS {
+        return;
     }
+    const state: &CommitViewState = &db.commit_views[view_idx];
+    if state.present && state.reader_pins > 0u32 {
+        state.reader_pins = state.reader_pins - 1u32;
+    }
+    db_cleanup_retired_views(db);
 }
 
 fn commit_view_pin_release(pin: &CommitViewPin) void {
@@ -302,26 +574,39 @@ fn commit_view_pin_release(pin: &CommitViewPin) void {
     if pin.release_counter != null {
         pin.release_counter[0] = pin.release_counter[0] + 1;
     }
+    db_unpin_view_slot(pin.db, pin.view_slot);
     pin.held = false;
+}
+
+fn commit_view_pin_drop(pin: CommitViewPin) void {
+    if !pin.held {
+        return;
+    }
+    if pin.release_counter != null {
+        pin.release_counter[0] = pin.release_counter[0] + 1;
+    }
+    db_unpin_view_slot(pin.db, pin.view_slot);
 }
 
 export fn commit_view_pin_is_held(pin: &CommitViewPin) bool {
     return pin != null && pin.held;
 }
 
-fn query_cursor_release(cursor: &QueryCursor) void {
-    if cursor == null {
-        return;
-    }
+fn query_cursor_drop(cursor: QueryCursor) void {
     if cursor.release_counter != null && (cursor.has_current || cursor.pin.held) {
         cursor.release_counter[0] = cursor.release_counter[0] + 1;
     }
-    commit_view_pin_release(&cursor.pin);
-    cursor.has_current = false;
 }
 
 export fn query_cursor_is_open(cursor: &QueryCursor) bool {
     return cursor != null && commit_view_pin_is_held(&cursor.pin);
+}
+
+export fn query_cursor_commit_view(cursor: &QueryCursor) CommitView {
+    if cursor == null {
+        return db_zero_commit_view();
+    }
+    return cursor.pin.view;
 }
 
 fn exec_copy_text(text: &[const byte], out: &[byte], len_out: &u16) !void {
@@ -789,15 +1074,16 @@ fn db_project_row(bound: &BoundSelect, rowref: &RowRef, out_row: &OwnedRow) !voi
     };
 }
 
-fn db_plan_collect(db: &DbHandle, plan: &QueryPlan, collection_slot: u16, node_index: i16, out_rows: &[u16], count_out: &u16) !void {
+fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_slot: u16, node_index: i16, out_rows: &[u16], count_out: &u16) !void {
     const node: &PlanNode = try plan_node(plan, node_index);
+    const state: &CommitViewState = try db_commit_view_state(db, view_slot);
     const collection_idx: usize = (collection_slot as! usize) catch {
         return error.DbCollectionNotFound;
     };
     if collection_idx >= DB_MAX_COLLECTIONS {
         return error.DbCollectionNotFound;
     }
-    const collection: &DbCollection = &db.collections[collection_idx];
+    const collection: &DbCollection = &state.collections[collection_idx];
     if node.kind == PlanNodeKind.SEQ_SCAN {
         if collection.row_count as usize > out_rows.len {
             return error.DbRowFull;
@@ -811,7 +1097,7 @@ fn db_plan_collect(db: &DbHandle, plan: &QueryPlan, collection_slot: u16, node_i
         return;
     }
     if node.kind == PlanNodeKind.PRIMARY_LOOKUP {
-        const ptr: RecordPointer = primary_btree_lookup(&collection.primary_index, node.lookup_doc_id) catch {
+        const ptr: RecordPointer = primary_btree_lookup(&db.primary_indexes[collection_idx], node.lookup_doc_id) catch {
             count_out[0] = 0u16;
             return;
         };
@@ -830,7 +1116,7 @@ fn db_plan_collect(db: &DbHandle, plan: &QueryPlan, collection_slot: u16, node_i
     }
     var child_rows: [u16: DB_MAX_CURSOR_ROWS] = [];
     var child_count: u16 = 0u16;
-    try db_plan_collect(db, plan, collection_slot, node.child, child_rows[0: DB_MAX_CURSOR_ROWS], &child_count);
+    try db_plan_collect(db, view_slot, plan, collection_slot, node.child, child_rows[0: DB_MAX_CURSOR_ROWS], &child_count);
     if node.kind == PlanNodeKind.LIMIT {
         var limited: u16 = child_count;
         const limit_u16: u16 = (node.limit_value as! u16) catch {
@@ -851,7 +1137,7 @@ fn db_plan_collect(db: &DbHandle, plan: &QueryPlan, collection_slot: u16, node_i
         var out_count: u16 = 0u16;
         var i: u16 = 0u16;
         while i < child_count {
-            const rowref: RowRef = try db_collection_row_ref(db, collection_slot, child_rows[i as usize]);
+            const rowref: RowRef = try db_collection_row_ref(db, view_slot, collection_slot, child_rows[i as usize]);
             if try db_eval_predicate(db, &plan.bound, &rowref, node.filter_expr) {
                 out_rows.ptr[out_count as usize] = child_rows[i as usize];
                 out_count = out_count + 1u16;
@@ -871,18 +1157,50 @@ export fn db_test_init_at_stem(db: &DbHandle, stem: &const byte) !void {
     db[0] = DbHandle{
         stem_len: 0u16,
         stem: [],
-        collection_count: 0u16,
-        collections: [],
         snapshot_policy: db_default_snapshot_policy(),
         snapshot_status: SnapshotPressureStatus{
             retired_bytes: 0u64,
             retired_views: 0u32,
         },
+        snapshot_status_override_enabled: false,
+        snapshot_status_override: SnapshotPressureStatus{
+            retired_bytes: 0u64,
+            retired_views: 0u32,
+        },
         now_ms: 0u64,
-        view_gen: 1u64,
+        current_view_slot: 0u16,
+        next_view_generation: 2u64,
+        next_page_table_gen: 2u64,
+        commit_views: [],
+        primary_indexes: [],
         cursor_release_counter: null,
         pin_release_counter: null,
     };
+    var index_slot: usize = 0usize;
+    while index_slot < DB_MAX_COLLECTIONS {
+        db.primary_indexes[index_slot] = try primary_btree_init(256u32);
+        index_slot = index_slot + 1usize;
+    }
+    var i: usize = 0usize;
+    while i < DB_MAX_COMMIT_VIEWS {
+        db_clear_commit_view_state(&db.commit_views[i]);
+        i = i + 1usize;
+    }
+    const initial: &CommitViewState = &db.commit_views[0usize];
+    initial.present = true;
+    initial.retired = false;
+    initial.reader_pins = 0u32;
+    initial.view = CommitView{
+        generation: 1u64,
+        commit_lsn: 1u64,
+        catalog_root: 2u32,
+        page_count: 0u32,
+        freelist_head: 0u32,
+        page_table_gen: 1u64,
+    };
+    initial.collection_count = 0u16;
+    db_finalize_view_state(initial);
+    db_refresh_snapshot_status(db);
     const len: usize = strlen(stem);
     if len + 1usize > DB_PATH_BUF_SIZE {
         return error.DbHandleInvalid;
@@ -914,19 +1232,65 @@ export fn db_test_set_now_ms(db: &DbHandle, now_ms: u64) void {
     }
 }
 
-export fn db_test_set_snapshot_status(db: &DbHandle, status: SnapshotPressureStatus) void {
+export fn db_test_set_snapshot_policy(db: &DbHandle, policy: SnapshotPressurePolicy) void {
     if db != null {
-        db.snapshot_status = status;
+        db.snapshot_policy = policy;
     }
 }
 
+export fn db_test_set_snapshot_status(db: &DbHandle, status: SnapshotPressureStatus) void {
+    if db != null {
+        db.snapshot_status_override_enabled = true;
+        db.snapshot_status_override = status;
+    }
+}
+
+export fn db_test_clear_snapshot_status_override(db: &DbHandle) void {
+    if db != null {
+        db.snapshot_status_override_enabled = false;
+        db_refresh_snapshot_status(db);
+    }
+}
+
+export fn db_test_snapshot_status(db: &DbHandle) SnapshotPressureStatus {
+    return db_effective_snapshot_status(db);
+}
+
+export fn db_test_current_commit_view(db: &DbHandle) CommitView {
+    const state: &CommitViewState = db_current_view_state(db) catch {
+        return db_zero_commit_view();
+    };
+    return state.view;
+}
+
+export fn db_test_reset_primary_index(db: &DbHandle, collection_name: &[const byte]) !void {
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    const slot: u16 = try db_find_collection_slot_by_name(db, collection_name);
+    db.primary_indexes[slot as usize] = try primary_btree_init(256u32);
+}
+
 export fn db_test_create_collection(db: &DbHandle, name: &[const byte]) !void {
-    if db == null || db.collection_count as usize >= DB_MAX_COLLECTIONS {
+    if db == null {
+        return error.DbCollectionFull;
+    }
+    const current: &CommitViewState = try db_current_view_state(db);
+    if current.collection_count as usize >= DB_MAX_COLLECTIONS {
         return error.DbCollectionFull;
     }
     const created: CollectionMeta = try catalog_create_collection_at_stem(db_stem_ptr(db), name);
-    const slot: usize = db.collection_count as usize;
-    db.collections[slot] = DbCollection{
+    const view_slot: u16 = try db_stage_view_from_current(db);
+    const state: &CommitViewState = try db_commit_view_state(db, view_slot);
+    errdefer {
+        db_clear_commit_view_state(state);
+        db_refresh_snapshot_status(db);
+    }
+    const slot: usize = state.collection_count as usize;
+    if slot >= DB_MAX_COLLECTIONS {
+        return error.DbCollectionFull;
+    }
+    state.collections[slot] = DbCollection{
         present: true,
         collection_id: created.collection_id,
         name_len: 0u16,
@@ -934,13 +1298,11 @@ export fn db_test_create_collection(db: &DbHandle, name: &[const byte]) !void {
         primary_root_page: created.primary_root_page,
         row_count: 0u16,
         rows: [],
-        primary_index: try primary_btree_init(256u32),
     };
-    if slot >= DB_MAX_COLLECTIONS {
-        return error.DbCollectionFull;
-    }
-    try db_copy_name(name, db.collections[slot].name[0: 64], &db.collections[slot].name_len);
-    db.collection_count = db.collection_count + 1u16;
+    try db_copy_name(name, state.collections[slot].name[0: 64], &state.collections[slot].name_len);
+    db.primary_indexes[slot] = try primary_btree_init(256u32);
+    state.collection_count = state.collection_count + 1u16;
+    try db_publish_view_slot(db, view_slot);
 }
 
 export fn db_test_insert_json(db: &DbHandle, collection_name: &[const byte], json: &[const byte]) !u64 {
@@ -948,9 +1310,6 @@ export fn db_test_insert_json(db: &DbHandle, collection_name: &[const byte], jso
         return error.DbHandleInvalid;
     }
     const slot: u16 = try db_find_collection_slot_by_name(db, collection_name);
-    if db.collections[slot as usize].row_count as usize >= DB_MAX_ROWS_PER_COLLECTION {
-        return error.DbRowFull;
-    }
     const doc_id: u64 = try catalog_allocate_next_doc_id_at_stem(db_stem_ptr(db), collection_name);
 
     var arena_buf: [byte: 8192] = [];
@@ -958,17 +1317,26 @@ export fn db_test_insert_json(db: &DbHandle, collection_name: &[const byte], jso
     arena_init(&arena, &arena_buf[0], 8192usize);
     const value: JsonValue = try parse(&arena, json.ptr, json.len);
 
+    const view_slot: u16 = try db_stage_view_from_current(db);
+    const state: &CommitViewState = try db_commit_view_state(db, view_slot);
+    errdefer {
+        db_clear_commit_view_state(state);
+        db_refresh_snapshot_status(db);
+    }
     const collection_idx: usize = (slot as! usize) catch {
         return error.DbCollectionNotFound;
     };
     if collection_idx >= DB_MAX_COLLECTIONS {
         return error.DbCollectionNotFound;
     }
-    const row_slot: usize = db.collections[collection_idx].row_count as usize;
+    if state.collections[collection_idx].row_count as usize >= DB_MAX_ROWS_PER_COLLECTION {
+        return error.DbRowFull;
+    }
+    const row_slot: usize = state.collections[collection_idx].row_count as usize;
     if row_slot >= DB_MAX_ROWS_PER_COLLECTION {
         return error.DbRowFull;
     }
-    const row: &DbStoredRow = &db.collections[collection_idx].rows[row_slot];
+    const row: &DbStoredRow = &state.collections[collection_idx].rows[row_slot];
     const encoded_len: usize = try doc_encode_json_value(&value, row.doc_blob[0: DB_DOC_BLOB_MAX]);
     row.present = true;
     row.doc_id = doc_id;
@@ -976,8 +1344,9 @@ export fn db_test_insert_json(db: &DbHandle, collection_name: &[const byte], jso
         return error.DbRowTooLarge;
     };
     row.record_ptr = record_pointer_make(1000u32 + doc_id as u32, row_slot as u16);
-    db.collections[collection_idx].row_count = db.collections[collection_idx].row_count + 1u16;
-    try primary_btree_insert(&db.collections[collection_idx].primary_index, doc_id, &row.record_ptr);
+    state.collections[collection_idx].row_count = state.collections[collection_idx].row_count + 1u16;
+    try primary_btree_insert(&db.primary_indexes[collection_idx], doc_id, &row.record_ptr);
+    try db_publish_view_slot(db, view_slot);
     return doc_id;
 }
 
@@ -985,7 +1354,9 @@ export fn db_query_cursor(db: &DbHandle, sql: &[const byte]) !QueryCursor {
     if db == null {
         return error.DbHandleInvalid;
     }
-    if !snapshot_pressure_cursor_can_open(&db.snapshot_policy, &db.snapshot_status) {
+    db_cleanup_retired_views(db);
+    const effective_status: SnapshotPressureStatus = db_effective_snapshot_status(db);
+    if !snapshot_pressure_cursor_can_open(&db.snapshot_policy, &effective_status) {
         return error.SnapshotPressure;
     }
     const stmt: SqlStmt = try sql_parse(sql);
@@ -994,19 +1365,29 @@ export fn db_query_cursor(db: &DbHandle, sql: &[const byte]) !QueryCursor {
     }
     const bound: BoundSelect = try bind_select_at_stem(db_stem_ptr(db), &stmt);
     const plan: QueryPlan = try plan_select(&bound);
-    const collection_slot: u16 = try db_find_collection_slot_by_id(db, bound.collection_id);
-    var cursor: QueryCursor = QueryCursor{
+    const view_slot: u16 = try db_pin_current_view_slot(db);
+    errdefer {
+        db_unpin_view_slot(db, view_slot);
+    }
+    const view_state: &CommitViewState = try db_commit_view_state(db, view_slot);
+    const collection_slot: u16 = try db_find_collection_slot_by_id_in_view(db, view_slot, bound.collection_id);
+    var match_rows: [u16: DB_MAX_CURSOR_ROWS] = [];
+    var match_count: u16 = 0u16;
+    try db_plan_collect(db, view_slot, &plan, collection_slot, plan.root_node, match_rows[0: DB_MAX_CURSOR_ROWS], &match_count);
+    return QueryCursor{
         db: db,
         pin: CommitViewPin{
-            view_gen: db.view_gen,
+            db: db,
+            view_slot: view_slot,
+            view: view_state.view,
             lease: cursor_lease_start(&db.snapshot_policy, db.now_ms),
             held: true,
             release_counter: db.pin_release_counter,
         },
         plan: plan,
         collection_slot: collection_slot,
-        match_count: 0u16,
-        match_rows: [],
+        match_count: match_count,
+        match_rows: match_rows,
         next_index: 0u16,
         has_current: false,
         current_row: RowRef{
@@ -1016,9 +1397,6 @@ export fn db_query_cursor(db: &DbHandle, sql: &[const byte]) !QueryCursor {
         },
         release_counter: db.cursor_release_counter,
     };
-    try db_plan_collect(db, &cursor.plan, collection_slot, cursor.plan.root_node, cursor.match_rows[0: DB_MAX_CURSOR_ROWS], &cursor.match_count);
-    db.view_gen = db.view_gen + 1u64;
-    return cursor;
 }
 
 export fn cursor_next(cursor: &QueryCursor) !bool {
@@ -1037,7 +1415,7 @@ export fn cursor_next(cursor: &QueryCursor) !bool {
         return error.DbInvalidProjection;
     }
     const row_slot: u16 = cursor.match_rows[next_idx];
-    cursor.current_row = try db_collection_row_ref(cursor.db, cursor.collection_slot, row_slot);
+    cursor.current_row = try db_collection_row_ref(cursor.db, cursor.pin.view_slot, cursor.collection_slot, row_slot);
     cursor.next_index = cursor.next_index + 1u16;
     cursor.has_current = true;
     return true;
