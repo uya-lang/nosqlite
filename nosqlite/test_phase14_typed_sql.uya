@@ -1,0 +1,70 @@
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+
+use lib.sql.typed.TypedSqlValidationCode;
+use lib.sql.typed.TypedSqlValidationResult;
+use lib.sql.typed.typed_sql_validate;
+
+fn app_schema() &[const byte] {
+    return &"users.name:string; users.age:number; users.active:bool; users.profile.name:string; orders.total:number"[0: 102];
+}
+
+fn byte_slices_equal(a: &[const byte], b: &[const byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+test "nosqlite_phase14_typed_sql_accepts_declared_fields" {
+    const result: TypedSqlValidationResult = typed_sql_validate(
+        "SELECT _id, $.name FROM users WHERE $.age >= 18 AND $.active = TRUE ORDER BY $.profile.name ASC LIMIT 10;",
+        app_schema(),
+    );
+    try assert_eq_i32(result.code as i32, TypedSqlValidationCode.OK as i32);
+
+    const query: &[const byte] = typed_sql(
+        "SELECT $.profile.name FROM users WHERE $.age >= 18;",
+        "users.name:string; users.age:number; users.active:bool; users.profile.name:string; orders.total:number",
+    );
+    try assert_eq_bool(byte_slices_equal(query, "SELECT $.profile.name FROM users WHERE $.age >= 18;"), true);
+}
+
+test "nosqlite_phase14_typed_sql_reports_missing_field" {
+    const result: TypedSqlValidationResult = typed_sql_validate(
+        "SELECT $.missing FROM users;",
+        app_schema(),
+    );
+    try assert_eq_i32(result.code as i32, TypedSqlValidationCode.FIELD_NOT_FOUND as i32);
+}
+
+test "nosqlite_phase14_typed_sql_reports_type_mismatch" {
+    const result: TypedSqlValidationResult = typed_sql_validate(
+        "SELECT $.name FROM users WHERE $.age = 'old';",
+        app_schema(),
+    );
+    try assert_eq_i32(result.code as i32, TypedSqlValidationCode.TYPE_MISMATCH as i32);
+}
+
+test "nosqlite_phase14_typed_sql_reports_schema_sql_mismatch" {
+    const result: TypedSqlValidationResult = typed_sql_validate(
+        "SELECT $.total FROM invoices WHERE $.total >= 10;",
+        app_schema(),
+    );
+    try assert_eq_i32(result.code as i32, TypedSqlValidationCode.COLLECTION_NOT_FOUND as i32);
+}
+
+test "nosqlite_phase14_typed_sql_does_not_create_runtime_fact" {
+    const query: &[const byte] = typed_sql(
+        "SELECT $.name FROM users;",
+        "users.name:string; users.age:number; users.active:bool; users.profile.name:string; orders.total:number",
+    );
+    try assert_eq_bool(byte_slices_equal(query, "SELECT $.name FROM users;"), true);
+}

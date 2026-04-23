@@ -7,6 +7,7 @@
 - [TDD 执行说明](./nosqlite-tdd.md)
 - [最小 API 草案](./nosqlite-api-draft.md)
 - [SQL 语法说明](./nosqlite-sql-syntax.md)
+- [Typed SQL 静态校验](./nosqlite-typed-sql.md)
 - [Benchmark 输出格式](./nosqlite-benchmark-format.md)
 - [格式兼容与升级](./nosqlite-format-compat.md)
 - [示例](./nosqlite-examples.md)

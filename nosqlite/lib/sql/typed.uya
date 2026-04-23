@@ -1,0 +1,752 @@
+// lib.sql - optional compile-time SQL/schema checker
+// 模块路径：lib/sql/typed.uya → use lib.sql.typed;
+
+use lib.sql.ast.SqlBinaryOp;
+use lib.sql.ast.SqlExprKind;
+use lib.sql.ast.SqlExprNode;
+use lib.sql.ast.SqlIdentifier;
+use lib.sql.ast.SqlLiteralKind;
+use lib.sql.ast.SqlStmt;
+use lib.sql.ast.SqlStmtKind;
+use lib.sql.ast.SqlUnaryOp;
+use lib.sql.ast.SQL_MAX_IDENTIFIER_LEN;
+use lib.sql.ast.SQL_MAX_PATH_LEN;
+use lib.sql.ast.sql_expr_node;
+use lib.sql.ast.sql_identifier_slice;
+use lib.sql.ast.sql_path_slice;
+use lib.sql.parser.sql_parse;
+
+export const TYPED_SQL_SCHEMA_MAX_FIELDS: usize = 64;
+
+export enum TypedSqlFieldType {
+    UNKNOWN,
+    ANY,
+    NULL,
+    BOOL,
+    NUMBER,
+    STRING,
+}
+
+export enum TypedSqlValidationCode {
+    OK,
+    SQL_PARSE_ERROR,
+    SCHEMA_PARSE_ERROR,
+    COLLECTION_NOT_FOUND,
+    FIELD_NOT_FOUND,
+    TYPE_MISMATCH,
+    UNSUPPORTED_STMT,
+}
+
+export const TYPED_SQL_CODE_OK: i32 = 0;
+export const TYPED_SQL_CODE_SQL_PARSE_ERROR: i32 = 1;
+export const TYPED_SQL_CODE_SCHEMA_PARSE_ERROR: i32 = 2;
+export const TYPED_SQL_CODE_COLLECTION_NOT_FOUND: i32 = 3;
+export const TYPED_SQL_CODE_FIELD_NOT_FOUND: i32 = 4;
+export const TYPED_SQL_CODE_TYPE_MISMATCH: i32 = 5;
+export const TYPED_SQL_CODE_UNSUPPORTED_STMT: i32 = 6;
+
+export struct TypedSqlValidationResult {
+    code: TypedSqlValidationCode,
+}
+
+struct TypedSqlSchemaEntry {
+    collection_len: u16,
+    collection: [byte: SQL_MAX_IDENTIFIER_LEN],
+    path_len: u16,
+    path: [byte: SQL_MAX_PATH_LEN],
+    field_type: TypedSqlFieldType,
+}
+
+struct TypedSqlSchema {
+    valid: bool,
+    entry_count: u16,
+    entries: [TypedSqlSchemaEntry: TYPED_SQL_SCHEMA_MAX_FIELDS],
+}
+
+fn typed_sql_result(code: TypedSqlValidationCode) TypedSqlValidationResult {
+    return TypedSqlValidationResult{ code: code };
+}
+
+fn typed_sql_is_ws(ch: byte) bool {
+    return ch == 32 as byte ||
+        ch == 9 as byte ||
+        ch == 10 as byte ||
+        ch == 13 as byte;
+}
+
+fn typed_sql_skip_ws(text: &[const byte], cursor: usize) usize {
+    var i: usize = cursor;
+    while i < text.len && typed_sql_is_ws(text.ptr[i]) {
+        i = i + 1usize;
+    }
+    return i;
+}
+
+fn typed_sql_trim_end(text: &[const byte], start: usize, end_in: usize) usize {
+    var end: usize = end_in;
+    while end > start && typed_sql_is_ws(text.ptr[end - 1usize]) {
+        end = end - 1usize;
+    }
+    return end;
+}
+
+fn typed_sql_slice_equals(a: &[const byte], b: &[const byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn typed_sql_ascii_lower(ch: byte) byte {
+    if ch >= 65 as byte && ch <= 90 as byte {
+        return ch + 32 as byte;
+    }
+    return ch;
+}
+
+fn typed_sql_is_ident_char(ch: byte) bool {
+    return (ch >= 65 as byte && ch <= 90 as byte) ||
+        (ch >= 97 as byte && ch <= 122 as byte) ||
+        (ch >= 48 as byte && ch <= 57 as byte) ||
+        ch == 95 as byte;
+}
+
+fn typed_sql_keyword_at(text: &[const byte], pos: usize, keyword: &[const byte]) bool {
+    if text.ptr == null || keyword.ptr == null || pos + keyword.len > text.len {
+        return false;
+    }
+    if pos > 0usize && typed_sql_is_ident_char(text.ptr[pos - 1usize]) {
+        return false;
+    }
+    if pos + keyword.len < text.len && typed_sql_is_ident_char(text.ptr[pos + keyword.len]) {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < keyword.len {
+        if typed_sql_ascii_lower(text.ptr[pos + i]) != typed_sql_ascii_lower(keyword.ptr[i]) {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn typed_sql_find_keyword(text: &[const byte], keyword: &[const byte], start: usize) usize {
+    var i: usize = start;
+    while i < text.len {
+        if typed_sql_keyword_at(text, i, keyword) {
+            return i;
+        }
+        i = i + 1usize;
+    }
+    return text.len;
+}
+
+fn typed_sql_parse_identifier_end(text: &[const byte], start: usize) usize {
+    var i: usize = start;
+    while i < text.len && typed_sql_is_ident_char(text.ptr[i]) {
+        i = i + 1usize;
+    }
+    return i;
+}
+
+fn typed_sql_range_equals(text: &[const byte], start: usize, end: usize, expected: &[const byte]) bool {
+    if end < start || end - start != expected.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < expected.len {
+        if text.ptr[start + i] != expected.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn typed_sql_parse_field_type(text: &[const byte], start: usize, end: usize) TypedSqlFieldType {
+    if typed_sql_range_equals(text, start, end, "any") {
+        return TypedSqlFieldType.ANY;
+    }
+    if typed_sql_range_equals(text, start, end, "null") {
+        return TypedSqlFieldType.NULL;
+    }
+    if typed_sql_range_equals(text, start, end, "bool") {
+        return TypedSqlFieldType.BOOL;
+    }
+    if typed_sql_range_equals(text, start, end, "number") {
+        return TypedSqlFieldType.NUMBER;
+    }
+    if typed_sql_range_equals(text, start, end, "string") {
+        return TypedSqlFieldType.STRING;
+    }
+    return TypedSqlFieldType.UNKNOWN;
+}
+
+fn typed_sql_copy_range(src: &[const byte], start: usize, end: usize, dst: &[byte], len_out: &u16) bool {
+    if end < start || dst.ptr == null || len_out == null || end - start > dst.len {
+        return false;
+    }
+    const len: usize = end - start;
+    len_out[0] = (len as! u16) catch {
+        return false;
+    };
+    var i: usize = 0usize;
+    while i < len {
+        dst.ptr[i] = src.ptr[start + i];
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn typed_sql_parse_schema(text: &[const byte]) TypedSqlSchema {
+    var schema: TypedSqlSchema = TypedSqlSchema{
+        valid: true,
+        entry_count: 0u16,
+        entries: [],
+    };
+    if text.ptr == null {
+        schema.valid = false;
+        return schema;
+    }
+
+    var cursor: usize = typed_sql_skip_ws(text, 0usize);
+    while cursor < text.len {
+        if schema.entry_count as usize >= TYPED_SQL_SCHEMA_MAX_FIELDS {
+            schema.valid = false;
+            return schema;
+        }
+
+        const collection_start: usize = cursor;
+        while cursor < text.len &&
+            text.ptr[cursor] != 46 as byte &&
+            text.ptr[cursor] != 59 as byte {
+            cursor = cursor + 1usize;
+        }
+        const collection_end: usize = typed_sql_trim_end(text, collection_start, cursor);
+        if cursor >= text.len || text.ptr[cursor] != 46 as byte || collection_end == collection_start {
+            schema.valid = false;
+            return schema;
+        }
+        cursor = cursor + 1usize;
+
+        const path_start: usize = typed_sql_skip_ws(text, cursor);
+        cursor = path_start;
+        while cursor < text.len && text.ptr[cursor] != 58 as byte && text.ptr[cursor] != 59 as byte {
+            cursor = cursor + 1usize;
+        }
+        const path_end: usize = typed_sql_trim_end(text, path_start, cursor);
+        if cursor >= text.len || text.ptr[cursor] != 58 as byte || path_end == path_start {
+            schema.valid = false;
+            return schema;
+        }
+        cursor = cursor + 1usize;
+
+        const type_start: usize = typed_sql_skip_ws(text, cursor);
+        cursor = type_start;
+        while cursor < text.len && text.ptr[cursor] != 59 as byte {
+            cursor = cursor + 1usize;
+        }
+        const type_end: usize = typed_sql_trim_end(text, type_start, cursor);
+        const field_type: TypedSqlFieldType = typed_sql_parse_field_type(text, type_start, type_end);
+        if field_type == TypedSqlFieldType.UNKNOWN {
+            schema.valid = false;
+            return schema;
+        }
+
+        const entry_slot: usize = schema.entry_count as usize;
+        const entry: &TypedSqlSchemaEntry = &schema.entries[entry_slot];
+        if !typed_sql_copy_range(text, collection_start, collection_end, entry.collection[0: SQL_MAX_IDENTIFIER_LEN], &entry.collection_len) ||
+            !typed_sql_copy_range(text, path_start, path_end, entry.path[0: SQL_MAX_PATH_LEN], &entry.path_len) {
+            schema.valid = false;
+            return schema;
+        }
+        entry.field_type = field_type;
+        schema.entry_count = schema.entry_count + 1u16;
+
+        if cursor < text.len && text.ptr[cursor] == 59 as byte {
+            cursor = cursor + 1usize;
+        }
+        cursor = typed_sql_skip_ws(text, cursor);
+    }
+    return schema;
+}
+
+fn typed_sql_collection_range_exists(schema: &TypedSqlSchema, text: &[const byte], start: usize, end: usize) bool {
+    if schema == null || text.ptr == null || end <= start {
+        return false;
+    }
+    const collection: &[const byte] = text[start: end - start];
+    return typed_sql_collection_exists(schema, collection);
+}
+
+fn typed_sql_find_collection_range(sql: &[const byte], start_out: &usize, end_out: &usize) bool {
+    if sql.ptr == null || start_out == null || end_out == null {
+        return false;
+    }
+    var keyword_pos: usize = typed_sql_find_keyword(sql, "from", 0usize);
+    if keyword_pos < sql.len {
+        const start: usize = typed_sql_skip_ws(sql, keyword_pos + 4usize);
+        const end: usize = typed_sql_parse_identifier_end(sql, start);
+        if end > start {
+            start_out[0] = start;
+            end_out[0] = end;
+            return true;
+        }
+    }
+    keyword_pos = typed_sql_find_keyword(sql, "update", 0usize);
+    if keyword_pos < sql.len {
+        const start: usize = typed_sql_skip_ws(sql, keyword_pos + 6usize);
+        const end: usize = typed_sql_parse_identifier_end(sql, start);
+        if end > start {
+            start_out[0] = start;
+            end_out[0] = end;
+            return true;
+        }
+    }
+    keyword_pos = typed_sql_find_keyword(sql, "into", 0usize);
+    if keyword_pos < sql.len {
+        const start: usize = typed_sql_skip_ws(sql, keyword_pos + 4usize);
+        const end: usize = typed_sql_parse_identifier_end(sql, start);
+        if end > start {
+            start_out[0] = start;
+            end_out[0] = end;
+            return true;
+        }
+    }
+    keyword_pos = typed_sql_find_keyword(sql, "on", 0usize);
+    if keyword_pos < sql.len {
+        const start: usize = typed_sql_skip_ws(sql, keyword_pos + 2usize);
+        const end: usize = typed_sql_parse_identifier_end(sql, start);
+        if end > start {
+            start_out[0] = start;
+            end_out[0] = end;
+            return true;
+        }
+    }
+    return false;
+}
+
+fn typed_sql_is_path_char(ch: byte) bool {
+    return typed_sql_is_ident_char(ch) ||
+        ch == 36 as byte ||
+        ch == 46 as byte ||
+        ch == 91 as byte ||
+        ch == 93 as byte;
+}
+
+fn typed_sql_parse_path_end(sql: &[const byte], start: usize) usize {
+    var i: usize = start;
+    while i < sql.len && typed_sql_is_path_char(sql.ptr[i]) {
+        i = i + 1usize;
+    }
+    return i;
+}
+
+fn typed_sql_lookup_path_range(schema: &TypedSqlSchema, collection: &[const byte], sql: &[const byte], start: usize, end: usize) TypedSqlFieldType {
+    if end <= start {
+        return TypedSqlFieldType.UNKNOWN;
+    }
+    return typed_sql_lookup_field(schema, collection, sql[start: end - start]);
+}
+
+fn typed_sql_operator_end(sql: &[const byte], start: usize) usize {
+    if start >= sql.len {
+        return start;
+    }
+    const ch: byte = sql.ptr[start];
+    if ch == 61 as byte {
+        return start + 1usize;
+    }
+    if ch == 33 as byte && start + 1usize < sql.len && sql.ptr[start + 1usize] == 61 as byte {
+        return start + 2usize;
+    }
+    if ch == 60 as byte || ch == 62 as byte {
+        if start + 1usize < sql.len && sql.ptr[start + 1usize] == 61 as byte {
+            return start + 2usize;
+        }
+        return start + 1usize;
+    }
+    return start;
+}
+
+fn typed_sql_literal_type_at(sql: &[const byte], start: usize) TypedSqlFieldType {
+    if start >= sql.len {
+        return TypedSqlFieldType.UNKNOWN;
+    }
+    const ch: byte = sql.ptr[start];
+    if ch == 39 as byte {
+        return TypedSqlFieldType.STRING;
+    }
+    if typed_sql_keyword_at(sql, start, "true") || typed_sql_keyword_at(sql, start, "false") {
+        return TypedSqlFieldType.BOOL;
+    }
+    if typed_sql_keyword_at(sql, start, "null") {
+        return TypedSqlFieldType.NULL;
+    }
+    if ch == 45 as byte || (ch >= 48 as byte && ch <= 57 as byte) {
+        return TypedSqlFieldType.NUMBER;
+    }
+    return TypedSqlFieldType.UNKNOWN;
+}
+
+export fn typed_sql_validate_static(sql: &[const byte], schema_text: &[const byte]) TypedSqlValidationResult {
+    const schema: TypedSqlSchema = typed_sql_parse_schema(schema_text);
+    if !schema.valid {
+        return typed_sql_result(TypedSqlValidationCode.SCHEMA_PARSE_ERROR);
+    }
+    var collection_start: usize = 0usize;
+    var collection_end: usize = 0usize;
+    if !typed_sql_find_collection_range(sql, &collection_start, &collection_end) {
+        return typed_sql_result(TypedSqlValidationCode.SQL_PARSE_ERROR);
+    }
+    if !typed_sql_collection_range_exists(&schema, sql, collection_start, collection_end) {
+        return typed_sql_result(TypedSqlValidationCode.COLLECTION_NOT_FOUND);
+    }
+    const collection: &[const byte] = sql[collection_start: collection_end - collection_start];
+
+    var cursor: usize = 0usize;
+    while cursor < sql.len {
+        if sql.ptr[cursor] != 36 as byte {
+            cursor = cursor + 1usize;
+            continue;
+        }
+        const path_start: usize = cursor;
+        const path_end: usize = typed_sql_parse_path_end(sql, path_start);
+        const field_type: TypedSqlFieldType = typed_sql_lookup_path_range(&schema, collection, sql, path_start, path_end);
+        if field_type == TypedSqlFieldType.UNKNOWN {
+            return typed_sql_result(TypedSqlValidationCode.FIELD_NOT_FOUND);
+        }
+
+        const after_path: usize = typed_sql_skip_ws(sql, path_end);
+        const after_op: usize = typed_sql_operator_end(sql, after_path);
+        if after_op > after_path {
+            const literal_start: usize = typed_sql_skip_ws(sql, after_op);
+            const literal_type: TypedSqlFieldType = typed_sql_literal_type_at(sql, literal_start);
+            if literal_type != TypedSqlFieldType.UNKNOWN &&
+                !typed_sql_comparison_ok(SqlBinaryOp.EQ, field_type, literal_type) {
+                return typed_sql_result(TypedSqlValidationCode.TYPE_MISMATCH);
+            }
+        }
+        cursor = path_end;
+    }
+    return typed_sql_result(TypedSqlValidationCode.OK);
+}
+
+export fn typed_sql_validate_static_code(sql: &[const byte], schema_text: &[const byte]) i32 {
+    const result: TypedSqlValidationResult = typed_sql_validate_static(sql, schema_text);
+    return result.code as i32;
+}
+
+fn typed_sql_entry_collection(entry: &TypedSqlSchemaEntry) &[const byte] {
+    if entry == null {
+        return &""[0: 0];
+    }
+    return entry.collection[0: entry.collection_len as usize];
+}
+
+fn typed_sql_entry_path(entry: &TypedSqlSchemaEntry) &[const byte] {
+    if entry == null {
+        return &""[0: 0];
+    }
+    return entry.path[0: entry.path_len as usize];
+}
+
+fn typed_sql_collection_exists(schema: &TypedSqlSchema, collection: &[const byte]) bool {
+    if schema == null || collection.ptr == null {
+        return false;
+    }
+    var i: u16 = 0u16;
+    while i < schema.entry_count {
+        const entry: &TypedSqlSchemaEntry = &schema.entries[i as usize];
+        if typed_sql_slice_equals(typed_sql_entry_collection(entry), collection) {
+            return true;
+        }
+        i = i + 1u16;
+    }
+    return false;
+}
+
+fn typed_sql_path_body(path: &[const byte]) &[const byte] {
+    if path.len >= 2usize && path.ptr[0] == 36 as byte && path.ptr[1] == 46 as byte {
+        return path[2: path.len - 2usize];
+    }
+    if path.len >= 1usize && path.ptr[0] == 36 as byte {
+        return path[1: path.len - 1usize];
+    }
+    return path;
+}
+
+fn typed_sql_lookup_field(schema: &TypedSqlSchema, collection: &[const byte], path: &[const byte]) TypedSqlFieldType {
+    if schema == null || collection.ptr == null || path.ptr == null {
+        return TypedSqlFieldType.UNKNOWN;
+    }
+    const body: &[const byte] = typed_sql_path_body(path);
+    var i: u16 = 0u16;
+    while i < schema.entry_count {
+        const entry: &TypedSqlSchemaEntry = &schema.entries[i as usize];
+        if typed_sql_slice_equals(typed_sql_entry_collection(entry), collection) &&
+            typed_sql_slice_equals(typed_sql_entry_path(entry), body) {
+            return entry.field_type;
+        }
+        i = i + 1u16;
+    }
+    return TypedSqlFieldType.UNKNOWN;
+}
+
+fn typed_sql_literal_type(node: &SqlExprNode) TypedSqlFieldType {
+    if node == null {
+        return TypedSqlFieldType.UNKNOWN;
+    }
+    if node.literal.kind == SqlLiteralKind.NULL {
+        return TypedSqlFieldType.NULL;
+    }
+    if node.literal.kind == SqlLiteralKind.BOOL {
+        return TypedSqlFieldType.BOOL;
+    }
+    if node.literal.kind == SqlLiteralKind.NUMBER {
+        return TypedSqlFieldType.NUMBER;
+    }
+    if node.literal.kind == SqlLiteralKind.STRING {
+        return TypedSqlFieldType.STRING;
+    }
+    return TypedSqlFieldType.UNKNOWN;
+}
+
+fn typed_sql_type_is_boolish(field_type: TypedSqlFieldType) bool {
+    return field_type == TypedSqlFieldType.BOOL || field_type == TypedSqlFieldType.ANY;
+}
+
+fn typed_sql_type_is_numeric(field_type: TypedSqlFieldType) bool {
+    return field_type == TypedSqlFieldType.NUMBER || field_type == TypedSqlFieldType.ANY;
+}
+
+fn typed_sql_types_match(left: TypedSqlFieldType, right: TypedSqlFieldType) bool {
+    return left == TypedSqlFieldType.ANY ||
+        right == TypedSqlFieldType.ANY ||
+        left == right;
+}
+
+fn typed_sql_comparison_ok(op: SqlBinaryOp, left: TypedSqlFieldType, right: TypedSqlFieldType) bool {
+    if op == SqlBinaryOp.EQ || op == SqlBinaryOp.NE {
+        return typed_sql_types_match(left, right);
+    }
+    if left == TypedSqlFieldType.ANY || right == TypedSqlFieldType.ANY {
+        return true;
+    }
+    if left == TypedSqlFieldType.NUMBER && right == TypedSqlFieldType.NUMBER {
+        return true;
+    }
+    if left == TypedSqlFieldType.STRING && right == TypedSqlFieldType.STRING {
+        return true;
+    }
+    return false;
+}
+
+fn typed_sql_assignment_ok(target: TypedSqlFieldType, value: TypedSqlFieldType) bool {
+    return typed_sql_types_match(target, value);
+}
+
+fn typed_sql_set_result(result: &TypedSqlValidationResult, code: TypedSqlValidationCode) void {
+    if result != null && result.code == TypedSqlValidationCode.OK {
+        result.code = code;
+    }
+}
+
+fn typed_sql_validate_expr(schema: &TypedSqlSchema, collection: &[const byte], stmt: &SqlStmt, expr_index: i16, result: &TypedSqlValidationResult) TypedSqlFieldType {
+    if result == null || result.code != TypedSqlValidationCode.OK {
+        return TypedSqlFieldType.UNKNOWN;
+    }
+    const node_union: !&SqlExprNode = sql_expr_node(stmt, expr_index);
+    if node_union.error_id != 0u32 {
+        typed_sql_set_result(result, TypedSqlValidationCode.SQL_PARSE_ERROR);
+        return TypedSqlFieldType.UNKNOWN;
+    }
+    const node: &SqlExprNode = node_union.value;
+    if node.kind == SqlExprKind.SYSTEM_ID {
+        return TypedSqlFieldType.NUMBER;
+    }
+    if node.kind == SqlExprKind.PATH {
+        const field_type: TypedSqlFieldType = typed_sql_lookup_field(schema, collection, sql_path_slice(&node.path));
+        if field_type == TypedSqlFieldType.UNKNOWN {
+            typed_sql_set_result(result, TypedSqlValidationCode.FIELD_NOT_FOUND);
+        }
+        return field_type;
+    }
+    if node.kind == SqlExprKind.LITERAL {
+        return typed_sql_literal_type(node);
+    }
+    if node.kind == SqlExprKind.UNARY {
+        const child_type: TypedSqlFieldType = typed_sql_validate_expr(schema, collection, stmt, node.left, result);
+        if result.code != TypedSqlValidationCode.OK {
+            return TypedSqlFieldType.UNKNOWN;
+        }
+        if node.unary_op == SqlUnaryOp.NEGATE {
+            if !typed_sql_type_is_numeric(child_type) {
+                typed_sql_set_result(result, TypedSqlValidationCode.TYPE_MISMATCH);
+                return TypedSqlFieldType.UNKNOWN;
+            }
+            return TypedSqlFieldType.NUMBER;
+        }
+        if !typed_sql_type_is_boolish(child_type) {
+            typed_sql_set_result(result, TypedSqlValidationCode.TYPE_MISMATCH);
+            return TypedSqlFieldType.UNKNOWN;
+        }
+        return TypedSqlFieldType.BOOL;
+    }
+    if node.kind == SqlExprKind.IS_NULL {
+        _ = typed_sql_validate_expr(schema, collection, stmt, node.left, result);
+        return TypedSqlFieldType.BOOL;
+    }
+    if node.kind == SqlExprKind.BINARY {
+        const left_type: TypedSqlFieldType = typed_sql_validate_expr(schema, collection, stmt, node.left, result);
+        const right_type: TypedSqlFieldType = typed_sql_validate_expr(schema, collection, stmt, node.right, result);
+        if result.code != TypedSqlValidationCode.OK {
+            return TypedSqlFieldType.UNKNOWN;
+        }
+        if node.binary_op == SqlBinaryOp.AND || node.binary_op == SqlBinaryOp.OR {
+            if !typed_sql_type_is_boolish(left_type) || !typed_sql_type_is_boolish(right_type) {
+                typed_sql_set_result(result, TypedSqlValidationCode.TYPE_MISMATCH);
+                return TypedSqlFieldType.UNKNOWN;
+            }
+            return TypedSqlFieldType.BOOL;
+        }
+        if !typed_sql_comparison_ok(node.binary_op, left_type, right_type) {
+            typed_sql_set_result(result, TypedSqlValidationCode.TYPE_MISMATCH);
+            return TypedSqlFieldType.UNKNOWN;
+        }
+        return TypedSqlFieldType.BOOL;
+    }
+    typed_sql_set_result(result, TypedSqlValidationCode.UNSUPPORTED_STMT);
+    return TypedSqlFieldType.UNKNOWN;
+}
+
+fn typed_sql_require_boolish_expr(schema: &TypedSqlSchema, collection: &[const byte], stmt: &SqlStmt, expr_index: i16, result: &TypedSqlValidationResult) void {
+    const field_type: TypedSqlFieldType = typed_sql_validate_expr(schema, collection, stmt, expr_index, result);
+    if result != null && result.code == TypedSqlValidationCode.OK && !typed_sql_type_is_boolish(field_type) {
+        typed_sql_set_result(result, TypedSqlValidationCode.TYPE_MISMATCH);
+    }
+}
+
+fn typed_sql_validate_select(schema: &TypedSqlSchema, stmt: &SqlStmt, result: &TypedSqlValidationResult) void {
+    const collection: &[const byte] = sql_identifier_slice(&stmt.select_stmt.collection_name);
+    if !typed_sql_collection_exists(schema, collection) {
+        typed_sql_set_result(result, TypedSqlValidationCode.COLLECTION_NOT_FOUND);
+        return;
+    }
+    var item_idx: u16 = 0u16;
+    while item_idx < stmt.select_stmt.item_count {
+        _ = typed_sql_validate_expr(schema, collection, stmt, stmt.select_stmt.items[item_idx as usize].expr_index, result);
+        if result.code != TypedSqlValidationCode.OK {
+            return;
+        }
+        item_idx = item_idx + 1u16;
+    }
+    if stmt.select_stmt.has_where {
+        typed_sql_require_boolish_expr(schema, collection, stmt, stmt.select_stmt.where_expr, result);
+    }
+    if result.code != TypedSqlValidationCode.OK {
+        return;
+    }
+    if stmt.select_stmt.has_order_by {
+        _ = typed_sql_validate_expr(schema, collection, stmt, stmt.select_stmt.order_expr, result);
+    }
+}
+
+fn typed_sql_validate_update(schema: &TypedSqlSchema, stmt: &SqlStmt, result: &TypedSqlValidationResult) void {
+    const collection: &[const byte] = sql_identifier_slice(&stmt.update_stmt.collection_name);
+    if !typed_sql_collection_exists(schema, collection) {
+        typed_sql_set_result(result, TypedSqlValidationCode.COLLECTION_NOT_FOUND);
+        return;
+    }
+    const target_type: TypedSqlFieldType = typed_sql_lookup_field(schema, collection, sql_path_slice(&stmt.update_stmt.target_path));
+    if target_type == TypedSqlFieldType.UNKNOWN {
+        typed_sql_set_result(result, TypedSqlValidationCode.FIELD_NOT_FOUND);
+        return;
+    }
+    const value_type: TypedSqlFieldType = typed_sql_validate_expr(schema, collection, stmt, stmt.update_stmt.value_expr, result);
+    if result.code == TypedSqlValidationCode.OK && !typed_sql_assignment_ok(target_type, value_type) {
+        typed_sql_set_result(result, TypedSqlValidationCode.TYPE_MISMATCH);
+        return;
+    }
+    if stmt.update_stmt.has_where {
+        typed_sql_require_boolish_expr(schema, collection, stmt, stmt.update_stmt.where_expr, result);
+    }
+}
+
+fn typed_sql_validate_delete(schema: &TypedSqlSchema, stmt: &SqlStmt, result: &TypedSqlValidationResult) void {
+    const collection: &[const byte] = sql_identifier_slice(&stmt.delete_stmt.collection_name);
+    if !typed_sql_collection_exists(schema, collection) {
+        typed_sql_set_result(result, TypedSqlValidationCode.COLLECTION_NOT_FOUND);
+        return;
+    }
+    if stmt.delete_stmt.has_where {
+        typed_sql_require_boolish_expr(schema, collection, stmt, stmt.delete_stmt.where_expr, result);
+    }
+}
+
+fn typed_sql_validate_create_index(schema: &TypedSqlSchema, stmt: &SqlStmt, result: &TypedSqlValidationResult) void {
+    const collection: &[const byte] = sql_identifier_slice(&stmt.create_index_stmt.collection_name);
+    if !typed_sql_collection_exists(schema, collection) {
+        typed_sql_set_result(result, TypedSqlValidationCode.COLLECTION_NOT_FOUND);
+        return;
+    }
+    if typed_sql_lookup_field(schema, collection, sql_path_slice(&stmt.create_index_stmt.target_path)) == TypedSqlFieldType.UNKNOWN {
+        typed_sql_set_result(result, TypedSqlValidationCode.FIELD_NOT_FOUND);
+    }
+}
+
+fn typed_sql_validate_insert(schema: &TypedSqlSchema, stmt: &SqlStmt, result: &TypedSqlValidationResult) void {
+    const collection: &[const byte] = sql_identifier_slice(&stmt.insert_stmt.collection_name);
+    if !typed_sql_collection_exists(schema, collection) {
+        typed_sql_set_result(result, TypedSqlValidationCode.COLLECTION_NOT_FOUND);
+    }
+}
+
+export fn typed_sql_validate(sql: &[const byte], schema_text: &[const byte]) TypedSqlValidationResult {
+    const schema: TypedSqlSchema = typed_sql_parse_schema(schema_text);
+    if !schema.valid {
+        return typed_sql_result(TypedSqlValidationCode.SCHEMA_PARSE_ERROR);
+    }
+    const stmt_union: !SqlStmt = sql_parse(sql);
+    if stmt_union.error_id != 0u32 {
+        return typed_sql_result(TypedSqlValidationCode.SQL_PARSE_ERROR);
+    }
+
+    const stmt: SqlStmt = stmt_union.value;
+    var result: TypedSqlValidationResult = typed_sql_result(TypedSqlValidationCode.OK);
+    if stmt.kind == SqlStmtKind.SELECT || stmt.kind == SqlStmtKind.EXPLAIN {
+        typed_sql_validate_select(&schema, &stmt, &result);
+        return result;
+    }
+    if stmt.kind == SqlStmtKind.UPDATE {
+        typed_sql_validate_update(&schema, &stmt, &result);
+        return result;
+    }
+    if stmt.kind == SqlStmtKind.DELETE {
+        typed_sql_validate_delete(&schema, &stmt, &result);
+        return result;
+    }
+    if stmt.kind == SqlStmtKind.CREATE_INDEX {
+        typed_sql_validate_create_index(&schema, &stmt, &result);
+        return result;
+    }
+    if stmt.kind == SqlStmtKind.INSERT {
+        typed_sql_validate_insert(&schema, &stmt, &result);
+        return result;
+    }
+    return result;
+}
+
+export mc typed_sql(sql: expr, schema: expr) expr {
+    // 当前 Uya 宏体不会在展开期执行条件控制流；先固定用户侧宏路径。
+    // 静态校验由 typed_sql_validate 承载，待条件化 @mc_error 可用后迁回宏期。
+    @mc_code(@mc_ast(${sql}));
+}

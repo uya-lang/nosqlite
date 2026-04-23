@@ -38,6 +38,15 @@ cursor_next(cursor: &QueryCursor) !bool
 cursor_row(cursor: &QueryCursor) !RowRef
 ```
 
+### Typed SQL 静态校验
+
+```text
+typed_sql_validate(sql: &[byte], schema: &[byte]) TypedSqlValidationResult
+typed_sql(sql, schema)
+```
+
+`typed_sql_validate` 使用 Phase 14 的静态 schema 描述格式提前检查字段存在性、collection/schema 不一致和字段-字面量类型不匹配。`typed_sql(sql, schema)` 是稳定的宏入口，当前返回原 SQL 字符串，不把静态 schema 当作运行时事实源。
+
 ### 执行非查询语句
 
 ```text

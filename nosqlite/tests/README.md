@@ -38,6 +38,7 @@
 - `nosqlite/test_docblob_codec.uya` -> `tests/doc/`
 - `nosqlite/test_docblob_path.uya` -> `tests/doc/`
 - `nosqlite/test_sql_parser.uya` -> `tests/sql/`
+- `nosqlite/test_phase14_typed_sql.uya` -> `tests/sql/`
 - `nosqlite/test_binder_planner.uya` -> `tests/plan/`
 - `nosqlite/test_exec_runtime.uya` -> `tests/exec/`
 - `nosqlite/test_phase12_async.uya` -> `tests/exec/`
@@ -49,3 +50,4 @@
 - `nosqlite/test_catalog_basics.uya` -> `tests/storage/`
 - `nosqlite/test_index_btree.uya` -> `tests/storage/`
 - `nosqlite/tests/verify_phase12_5_async_boundary.sh` -> Phase 12.5 async boundary verification
+- `nosqlite/tests/verify_phase14_typed_sql_errors.sh` -> Phase 14 typed SQL static-error verification

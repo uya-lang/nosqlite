@@ -1,0 +1,17 @@
+use lib.sql.typed.TypedSqlValidationCode;
+use lib.sql.typed.TypedSqlValidationResult;
+use lib.sql.typed.typed_sql_validate;
+
+extern "libc" fn printf(fmt: *byte, ...) i32;
+
+fn main() i32 {
+    const result: TypedSqlValidationResult = typed_sql_validate(
+        "SELECT $.name FROM users WHERE $.age = 'old';",
+        "users.name:string;users.age:number",
+    );
+    if result.code == TypedSqlValidationCode.TYPE_MISMATCH {
+        printf("typed_sql: expression type mismatch against static schema\n" as *byte);
+        return 1;
+    }
+    return 0;
+}
