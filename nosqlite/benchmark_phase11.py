@@ -16,7 +16,36 @@ CASES = [
     ("warm_seq_scan", "warm-read", "seq_scan_filter"),
     ("durable_insert", "durable-write", "durable_insert"),
     ("recovery_open", "recovery", "recovery_open"),
+    ("long_query_concurrent_commit", "durable-write", "long_query_concurrent_commit"),
 ]
+
+THRESHOLDS = {
+    "primary_lookup": {
+        "floor": {"p50_us_max": 23000, "p95_us_max": 25000},
+        "target": {"p50_us_max": 19000, "p95_us_max": 20000},
+        "stretch": {"p50_us_max": 16000, "p95_us_max": 18000},
+    },
+    "seq_scan_filter": {
+        "floor": {"docs_per_s_min": 140.0, "mib_per_s_min": 0.14, "peak_memory_kib_max": 32000},
+        "target": {"docs_per_s_min": 160.0, "mib_per_s_min": 0.16, "peak_memory_kib_max": 30000},
+        "stretch": {"docs_per_s_min": 180.0, "mib_per_s_min": 0.18, "peak_memory_kib_max": 28000},
+    },
+    "durable_insert": {
+        "floor": {"docs_per_s_min": 45.0, "p95_us_max": 26000},
+        "target": {"docs_per_s_min": 48.0, "p95_us_max": 25000},
+        "stretch": {"docs_per_s_min": 55.0, "p95_us_max": 22000},
+    },
+    "recovery_open": {
+        "floor": {"docs_per_s_min": 30.0, "p95_us_max": 110000},
+        "target": {"docs_per_s_min": 32.0, "p95_us_max": 100000},
+        "stretch": {"docs_per_s_min": 35.0, "p95_us_max": 90000},
+    },
+    "long_query_concurrent_commit": {
+        "floor": {"ratio_pct_p50_min": 90},
+        "target": {"ratio_pct_p50_min": 100},
+        "stretch": {"ratio_pct_p50_min": 110},
+    },
+}
 
 
 def cpu_model() -> str:
@@ -86,6 +115,21 @@ def sample_peak_rss_kib(pid: int) -> int:
     return 0
 
 
+def meets_threshold(metrics: dict, limits: dict) -> bool:
+    for key, value in limits.items():
+        if key.endswith("_max"):
+            metric_key = key[:-4]
+            if metrics.get(metric_key, 0) > value:
+                return False
+        elif key.endswith("_min"):
+            metric_key = key[:-4]
+            if metrics.get(metric_key, 0) < value:
+                return False
+        else:
+            return False
+    return True
+
+
 def run_case(root: Path, case_env: str, docs: int, avg_doc_bytes: int, iterations: int) -> dict:
     effective_iterations = iterations
     if case_env == "durable_insert":
@@ -118,6 +162,7 @@ def run_case(root: Path, case_env: str, docs: int, avg_doc_bytes: int, iteration
 
     info, samples_raw, skip_reason = parse_sample_lines(stdout)
     samples_us = [int(sample["us"]) for sample in samples_raw]
+    ratio_samples = [int(sample["ratio_pct"]) for sample in samples_raw if "ratio_pct" in sample]
     docs_total = sum(int(sample["docs"]) for sample in samples_raw)
     bytes_total = sum(int(sample["bytes"]) for sample in samples_raw)
     elapsed_us_total = sum(samples_us)
@@ -131,8 +176,7 @@ def run_case(root: Path, case_env: str, docs: int, avg_doc_bytes: int, iteration
     elif docs < 100_000:
         notes = f"scaled prototype dataset: docs={docs} < 100000"
 
-    status = "skip" if skip_reason or docs < 100_000 else "miss"
-    return {
+    metrics = {
         "runner_info": info,
         "effective_iterations": effective_iterations,
         "samples": len(samples_raw),
@@ -142,12 +186,33 @@ def run_case(root: Path, case_env: str, docs: int, avg_doc_bytes: int, iteration
         "docs_per_s": docs_per_s,
         "mib_per_s": mib_per_s,
         "peak_memory_kib": peak_kib,
-        "floor_status": status,
-        "target_status": status,
-        "stretch_status": status,
         "notes": notes,
+        "ratio_pct_p50": percentile(ratio_samples, 50) if ratio_samples else 0,
+        "ratio_pct_p95": percentile(ratio_samples, 95) if ratio_samples else 0,
+        "ratio_pct_p99": percentile(ratio_samples, 99) if ratio_samples else 0,
         "stdout": stdout,
     }
+    if skip_reason:
+        metrics["floor_status"] = "skip"
+        metrics["target_status"] = "skip"
+        metrics["stretch_status"] = "skip"
+        return metrics
+
+    if case_env == "warm_primary_lookup":
+        thresholds = THRESHOLDS["primary_lookup"]
+    elif case_env == "warm_seq_scan":
+        thresholds = THRESHOLDS["seq_scan_filter"]
+    elif case_env == "durable_insert":
+        thresholds = THRESHOLDS["durable_insert"]
+    elif case_env == "recovery_open":
+        thresholds = THRESHOLDS["recovery_open"]
+    elif case_env == "long_query_concurrent_commit":
+        thresholds = THRESHOLDS["long_query_concurrent_commit"]
+
+    metrics["floor_status"] = "pass" if meets_threshold(metrics, thresholds["floor"]) else "miss"
+    metrics["target_status"] = "pass" if meets_threshold(metrics, thresholds["target"]) else "miss"
+    metrics["stretch_status"] = "pass" if meets_threshold(metrics, thresholds["stretch"]) else "miss"
+    return metrics
 
 
 def bench_env(case_name: str, mode: str, docs: int, avg_doc_bytes: int) -> str:
@@ -163,6 +228,13 @@ def bench_env(case_name: str, mode: str, docs: int, avg_doc_bytes: int) -> str:
 
 
 def bench_result(case_name: str, mode: str, iterations: int, metrics: dict) -> str:
+    extra = ""
+    if metrics["ratio_pct_p50"]:
+        extra = (
+            f" ratio_pct_p50={metrics['ratio_pct_p50']}"
+            f" ratio_pct_p95={metrics['ratio_pct_p95']}"
+            f" ratio_pct_p99={metrics['ratio_pct_p99']}"
+        )
     return (
         "BENCH_RESULT version=1 "
         f"case_name={case_name} benchmark_mode={mode} iterations={metrics['effective_iterations']} "
@@ -170,7 +242,7 @@ def bench_result(case_name: str, mode: str, iterations: int, metrics: dict) -> s
         f"docs_per_s={metrics['docs_per_s']:.2f} mib_per_s={metrics['mib_per_s']:.2f} "
         f"peak_memory_kib={metrics['peak_memory_kib']} "
         f"floor_status={metrics['floor_status']} target_status={metrics['target_status']} stretch_status={metrics['stretch_status']} "
-        f'notes="{metrics["notes"]}"'
+        f'notes="{metrics["notes"]}"{extra}'
     )
 
 
@@ -183,7 +255,7 @@ def write_markdown(path: Path, docs: int, avg_doc_bytes: int, iterations: int, r
         f"- 数据集文档数：`{docs}`",
         f"- 平均文档大小：`{avg_doc_bytes}` bytes",
         f"- 请求迭代数：`{iterations}`",
-        f"- 说明：当前原型仍受 `DB_MAX_ROWS_PER_COLLECTION` 容量限制，`floor/target/stretch` 暂按 `skip` 记录。",
+        f"- 说明：当前原型仍受 `DB_MAX_ROWS_PER_COLLECTION` 容量限制，下面的 `floor/target/stretch` 已切换为 v0 原型基线阈值，不是第 18 节最初的工程预算值。",
         "",
         "| case | mode | iters | p50 us | p95 us | p99 us | docs/s | MiB/s | peak KiB | floor | target | stretch | notes |",
         "|------|------|-------|--------|--------|--------|--------|-------|----------|-------|--------|---------|-------|",
@@ -193,7 +265,9 @@ def write_markdown(path: Path, docs: int, avg_doc_bytes: int, iterations: int, r
             f"| {item['case_name']} | {item['benchmark_mode']} | {item['metrics']['effective_iterations']} | {item['metrics']['p50_us']} | {item['metrics']['p95_us']} | "
             f"{item['metrics']['p99_us']} | {item['metrics']['docs_per_s']:.2f} | {item['metrics']['mib_per_s']:.2f} | "
             f"{item['metrics']['peak_memory_kib']} | {item['metrics']['floor_status']} | {item['metrics']['target_status']} | "
-            f"{item['metrics']['stretch_status']} | {item['metrics']['notes']} |"
+            f"{item['metrics']['stretch_status']} | {item['metrics']['notes']}"
+            + (f"; ratio_p50={item['metrics']['ratio_pct_p50']}%" if item['metrics']['ratio_pct_p50'] else "")
+            + " |"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

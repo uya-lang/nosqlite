@@ -57,6 +57,9 @@ benchmark_mode=warm-read case_name=primary_lookup
 - `target_status`
 - `stretch_status`
 - `notes`
+- `ratio_pct_p50`：仅适用于相对基线类 case
+- `ratio_pct_p95`：仅适用于相对基线类 case
+- `ratio_pct_p99`：仅适用于相对基线类 case
 
 推荐文本格式：
 
@@ -65,6 +68,15 @@ BENCH_RESULT version=1 case_name=primary_lookup benchmark_mode=warm-read \
 iterations=500 p50_us=81 p95_us=140 p99_us=190 docs_per_s=12345.67 \
 mib_per_s=12.06 peak_memory_kib=9120 floor_status=pass target_status=pass \
 stretch_status=miss notes="v0 prototype baseline"
+```
+
+相对基线类 case 示例：
+
+```text
+BENCH_RESULT version=1 case_name=long_query_concurrent_commit benchmark_mode=durable-write \
+iterations=10 p50_us=18745 p95_us=19287 p99_us=19287 docs_per_s=53.29 mib_per_s=0.05 \
+peak_memory_kib=29004 floor_status=pass target_status=pass stretch_status=miss \
+notes="scaled prototype dataset: docs=3 < 100000" ratio_pct_p50=100 ratio_pct_p95=105 ratio_pct_p99=105
 ```
 
 ## 状态字段

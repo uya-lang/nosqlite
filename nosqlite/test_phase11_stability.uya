@@ -54,6 +54,7 @@ const TEST_STEM_NUMERIC: *const byte = "/tmp/nosqlite_phase11_numeric" as *const
 const TEST_STEM_BENCH_WARM: *const byte = "/tmp/nosqlite_phase11_bench_warm" as *const byte;
 const TEST_STEM_BENCH_DURABLE: *const byte = "/tmp/nosqlite_phase11_bench_durable" as *const byte;
 const TEST_STEM_BENCH_RECOVERY: *const byte = "/tmp/nosqlite_phase11_bench_recovery" as *const byte;
+const TEST_STEM_BENCH_CONCURRENT: *const byte = "/tmp/nosqlite_phase11_bench_concurrent" as *const byte;
 const BENCH_JSON_CAP: usize = 3072;
 const BENCH_SQL_CAP: usize = 4096;
 
@@ -62,6 +63,7 @@ var g_numeric_db: DbHandle = DbHandle{};
 var g_bench_warm_db: DbHandle = DbHandle{};
 var g_bench_durable_db: DbHandle = DbHandle{};
 var g_bench_recovery_db: DbHandle = DbHandle{};
+var g_bench_concurrent_db: DbHandle = DbHandle{};
 
 error BenchBufferTooSmall;
 error BenchUnexpectedResult;
@@ -387,6 +389,87 @@ fn bench_recovery_open(docs: u64, avg_doc_bytes: usize, iterations: u64) !void {
     }
 }
 
+fn bench_long_query_concurrent_ratio(avg_doc_bytes: usize, iterations: u64) !void {
+    var i: u64 = 0u64;
+    while i < iterations {
+        cleanup_stem(TEST_STEM_BENCH_CONCURRENT);
+        const created_a: !void = db_test_create_at_stem(&g_bench_concurrent_db, TEST_STEM_BENCH_CONCURRENT);
+        if created_a.error_id != 0u32 {
+            printf("RUNNER_STAGE case=long_query_concurrent_commit stage=create_db_a error_id=%u\n" as *byte, created_a.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        const collection_a: !void = db_test_create_collection(&g_bench_concurrent_db, "users");
+        if collection_a.error_id != 0u32 {
+            printf("RUNNER_STAGE case=long_query_concurrent_commit stage=create_collection_a error_id=%u\n" as *byte, collection_a.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        var sql_buf: [byte: BENCH_SQL_CAP] = [];
+        const base_len: usize = try build_insert_sql(1u64, avg_doc_bytes, sql_buf[0: BENCH_SQL_CAP]);
+        const base_insert: !void = db_exec(&g_bench_concurrent_db, sql_buf[0: base_len]);
+        if base_insert.error_id != 0u32 {
+            printf("RUNNER_STAGE case=long_query_concurrent_commit stage=seed_a error_id=%u\n" as *byte, base_insert.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        const next_len: usize = try build_insert_sql(2u64, avg_doc_bytes, sql_buf[0: BENCH_SQL_CAP]);
+        const baseline_start: u64 = now_usec();
+        const baseline_insert: !void = db_exec(&g_bench_concurrent_db, sql_buf[0: next_len]);
+        if baseline_insert.error_id != 0u32 {
+            printf("RUNNER_STAGE case=long_query_concurrent_commit stage=baseline_insert error_id=%u\n" as *byte, baseline_insert.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        const baseline_us: u64 = now_usec() - baseline_start;
+
+        cleanup_stem(TEST_STEM_BENCH_CONCURRENT);
+        const created_b: !void = db_test_create_at_stem(&g_bench_concurrent_db, TEST_STEM_BENCH_CONCURRENT);
+        if created_b.error_id != 0u32 {
+            printf("RUNNER_STAGE case=long_query_concurrent_commit stage=create_db_b error_id=%u\n" as *byte, created_b.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        const collection_b: !void = db_test_create_collection(&g_bench_concurrent_db, "users");
+        if collection_b.error_id != 0u32 {
+            printf("RUNNER_STAGE case=long_query_concurrent_commit stage=create_collection_b error_id=%u\n" as *byte, collection_b.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        const seed_insert: !void = db_exec(&g_bench_concurrent_db, sql_buf[0: base_len]);
+        if seed_insert.error_id != 0u32 {
+            printf("RUNNER_STAGE case=long_query_concurrent_commit stage=seed_b error_id=%u\n" as *byte, seed_insert.error_id);
+            return error.BenchUnexpectedResult;
+        }
+
+        {
+            const cursor_u: !QueryCursor = db_query_cursor(&g_bench_concurrent_db, "SELECT _id FROM users LIMIT 64;"[0: 30]);
+            if cursor_u.error_id != 0u32 {
+                printf("RUNNER_STAGE case=long_query_concurrent_commit stage=open_cursor error_id=%u\n" as *byte, cursor_u.error_id);
+                return error.BenchUnexpectedResult;
+            }
+            var cursor: QueryCursor = cursor_u.value;
+            const first: !bool = cursor_next(&cursor);
+            if first.error_id != 0u32 || !first.value {
+                printf("RUNNER_STAGE case=long_query_concurrent_commit stage=cursor_next error_id=%u\n" as *byte, first.error_id);
+                return error.BenchUnexpectedResult;
+            }
+            const concurrent_start: u64 = now_usec();
+            const concurrent_insert: !void = db_exec(&g_bench_concurrent_db, sql_buf[0: next_len]);
+            if concurrent_insert.error_id != 0u32 {
+                printf("RUNNER_STAGE case=long_query_concurrent_commit stage=concurrent_insert error_id=%u\n" as *byte, concurrent_insert.error_id);
+                return error.BenchUnexpectedResult;
+            }
+            const concurrent_us: u64 = now_usec() - concurrent_start;
+            var ratio_pct: u64 = 0u64;
+            if concurrent_us != 0u64 {
+                ratio_pct = (baseline_us * 100u64) / concurrent_us;
+            }
+            printf(
+                "SAMPLE case=long_query_concurrent_commit us=%lu docs=1 bytes=%zu ratio_pct=%lu\n" as *byte,
+                concurrent_us,
+                avg_doc_bytes,
+                ratio_pct,
+            );
+        }
+        i = i + 1u64;
+    }
+}
+
 fn numeric_pair_matches_executor(a: &[const byte], b: &[const byte]) !bool {
     var a_node: [byte: 128] = [];
     var b_node: [byte: 128] = [];
@@ -594,6 +677,14 @@ test "nosqlite_phase11_benchmark_runner" {
         const run: !void = bench_recovery_open(docs, avg_doc_bytes, iterations);
         if run.error_id != 0u32 {
             printf("RUNNER_ERROR case=recovery_open error_id=%u\n" as *byte, run.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        return;
+    }
+    if cstr_equal(bench_case, "long_query_concurrent_commit\0" as &const byte) {
+        const run: !void = bench_long_query_concurrent_ratio(avg_doc_bytes, iterations);
+        if run.error_id != 0u32 {
+            printf("RUNNER_ERROR case=long_query_concurrent_commit error_id=%u\n" as *byte, run.error_id);
             return error.BenchUnexpectedResult;
         }
         return;
