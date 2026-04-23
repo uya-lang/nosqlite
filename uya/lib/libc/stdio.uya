@@ -1800,7 +1800,7 @@ export extern "libc" fn fputs(s: &const byte, stream: &FILE) i32 {
         return 0;
     }
     
-    const written: usize = fwrite(s, 1, len, stream);
+    const written: usize = fwrite(s as &const byte, 1, len, stream);
     
     if written == len {
         return 0;
@@ -2135,7 +2135,7 @@ extern fn strerror(errnum: i32) &byte;
 
 export extern "libc" fn perror(s: &const byte) void {
     if s != null && s[0] != 0 {
-        fputs(s, stderr);
+        fputs(s as &const byte, stderr);
         fputc(58 as i32, stderr);  // ':'
         fputc(32 as i32, stderr);  // ' '
     }

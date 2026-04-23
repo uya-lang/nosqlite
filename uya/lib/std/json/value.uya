@@ -12,7 +12,6 @@ export union JsonValue {
     bool_val: bool,
     int_val: i64,
     float_val: f64,
-    num_text: JsonStrView,
     str: JsonStrView,
     arr: JsonArray,
     obj: JsonObject,
@@ -32,3 +31,4 @@ export struct JsonObject {
     pairs: &JsonKeyValue,
     len: usize,
 }
+

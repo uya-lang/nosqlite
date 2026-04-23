@@ -1,0 +1,9 @@
+export struct Header {
+    value: i32,
+}
+
+export fn make_header() Header {
+    return Header{
+        value: 7,
+    };
+}

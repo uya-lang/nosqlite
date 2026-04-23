@@ -1,0 +1,7 @@
+use lib.storage.Header;
+use lib.storage.make_header;
+
+export fn page_value() i32 {
+    const header: Header = make_header();
+    return header.value;
+}

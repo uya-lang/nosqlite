@@ -33,9 +33,6 @@ export const SYS_rmdir: i64 = 84;
 export const SYS_unlink: i64 = 87;
 export const SYS_rename: i64 = 82;
 export const SYS_readlink: i64 = 89;
-export const SYS_fsync: i64 = 74;
-export const SYS_fdatasync: i64 = 75;
-export const SYS_ftruncate: i64 = 77;
 export const SYS_getdents64: i64 = 217;
 export const SYS_setrlimit: i64 = 160;
 export const SYS_getrlimit: i64 = 97;
@@ -190,18 +187,6 @@ export fn sys_getppid() !i64 {
 
 export fn sys_lseek(fd: i32, offset: i64, whence: i32) !i64 {
     return @syscall(SYS_lseek, fd as i64, offset, whence as i64) as! i64;
-}
-
-export fn sys_fsync(fd: i32) !i32 {
-    return @syscall(SYS_fsync, fd as i64) as! i32;
-}
-
-export fn sys_fdatasync(fd: i32) !i32 {
-    return @syscall(SYS_fdatasync, fd as i64) as! i32;
-}
-
-export fn sys_ftruncate(fd: i32, length: i64) !i32 {
-    return @syscall(SYS_ftruncate, fd as i64, length) as! i32;
 }
 
 export fn sys_access(pathname: &const byte, mode: i32) !i32 {

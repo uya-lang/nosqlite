@@ -6,9 +6,6 @@ use syscall.sys_close;
 use syscall.sys_read;
 use syscall.sys_write;
 use syscall.sys_lseek;
-use syscall.sys_fsync;
-use syscall.sys_fdatasync;
-use syscall.sys_ftruncate;
 use syscall.sys_dup;
 use syscall.sys_dup2;
 use syscall.sys_fcntl;
@@ -190,27 +187,6 @@ export fn os_write(f: &File, buf: &const byte, count: usize) !usize {
 export fn os_seek(f: &File, offset: i64, whence: i32) !i64 {
     const val: i64 = try sys_lseek(f.fd, offset, whence);
     return val;
-}
-
-export fn os_fsync(f: &File) !void {
-    if f == null || f.fd < 0 {
-        return error.InvalidInput;
-    }
-    _ = try sys_fsync(f.fd);
-}
-
-export fn os_fdatasync(f: &File) !void {
-    if f == null || f.fd < 0 {
-        return error.InvalidInput;
-    }
-    _ = try sys_fdatasync(f.fd);
-}
-
-export fn os_ftruncate(f: &File, length: i64) !void {
-    if f == null || f.fd < 0 || length < 0 {
-        return error.InvalidInput;
-    }
-    _ = try sys_ftruncate(f.fd, length);
 }
 
 // ============================================================

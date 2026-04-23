@@ -2,7 +2,6 @@
 // 模块路径：lib/std/json/encoder.uya → use std.json.encoder;
 // 对外只保留 to_json(arena, obj) !&[byte]、from_json(arena, buffer) !T；内部用宏/内联实现。
 
-use libc.strtod;
 use std.json.value.JsonValue;
 use std.json.value.JsonStrView;
 use std.json.value.JsonObject;
@@ -130,14 +129,6 @@ export fn json_write_i64(w: &JsonWriter, v: i64) void {
     json_write_i64_impl(w, v);
 }
 
-fn json_write_number_text(w: &JsonWriter, s: JsonStrView) void {
-    if s.ptr == null || s.len == 0 {
-        json_write_null(w);
-        return;
-    }
-    json_buf_write_bytes(w, s.ptr, s.len);
-}
-
 fn json_write_f64_impl(w: &JsonWriter, v: f64) void {
     if v != v {
         json_write_null(w);
@@ -208,7 +199,6 @@ fn json_encode_value_inner(w: &JsonWriter, v: &JsonValue) void {
         .bool_val(x) => { json_write_bool(w, x); },
         .int_val(x) => { json_write_i64(w, x); },
         .float_val(x) => { json_write_f64(w, x); },
-        .num_text(s) => { json_write_number_text(w, s); },
         .str(s) => { json_write_str_view(w, s); },
         .arr(a) => {
             write_byte(w, _J_LBRACK);
@@ -334,19 +324,6 @@ export fn json_expect_f64(v: &JsonValue) !f64 {
     match v[0] {
         .float_val(x) => { return x; },
         .int_val(x) => { return x as f64; },
-        .num_text(s) => {
-            if s.len == 0 || s.len >= 255usize {
-                return error.WrongType;
-            }
-            var buf: [byte: 256] = [];
-            var i: usize = 0usize;
-            while i < s.len {
-                buf[i] = s.ptr[i];
-                i = i + 1usize;
-            }
-            buf[s.len] = 0 as byte;
-            return strtod(&buf[0], null);
-        },
         else => { return error.WrongType; },
     }
 }

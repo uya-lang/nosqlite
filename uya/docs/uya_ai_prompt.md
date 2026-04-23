@@ -36,7 +36,7 @@
 
 **类型名**（非上表关键字，出现在类型位置）：`bool` `byte` `void` `i8`…`i64` `u8`…`u64` `usize` `f32` `f64`；以及自定义 `struct`/`enum`/`union`/`interface` 名、泛型实参等。勿把「类型名」误记成可当作普通变量名的关键字。
 
-**模块**：目录即模块；同目录下所有 `.uya` 同属一个模块名（由目录路径决定，不含文件名）。导入：`use std.io;`、`use std.io.read_file;`、`use std.io as io;`。调用可用完整模块前缀（如 **`std.io.printf(...)`**），或依赖已导入的单项简名（**`read_file(...)`**）。**`use std.async;` 之后**应写 **`block_on(...)`** 等**已导入的简单名**，**不要**臆造 **`async.block_on`**（没有名为 `async` 的默认模块值）。
+**模块**：目录和单文件都可作为模块；同目录下所有 `.uya` 仍同属一个目录模块名（由目录路径决定，不含文件名），每个 `.uya` 文件也有包含文件名的文件模块别名。导入：`use std.io;`、`use std.io.read_file;`、`use std.io.file.read_file;`、`use std.io as io;`。调用可用完整模块前缀（如 **`std.io.printf(...)`**），或依赖已导入的单项简名（**`read_file(...)`**）。**`use std.async;` 之后**应写 **`block_on(...)`** 等**已导入的简单名**，**不要**臆造 **`async.block_on`**（没有名为 `async` 的默认模块值）。
 
 ---
 

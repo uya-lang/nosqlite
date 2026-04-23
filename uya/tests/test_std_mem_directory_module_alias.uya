@@ -1,0 +1,13 @@
+use std.testing.assert_eq_i32;
+use std.mem.mem_copy;
+
+test "std mem directory module import remains compatible" {
+    var src: [byte: 4] = [ 5, 6, 7, 8 ];
+    var dst: [byte: 4] = [];
+
+    const copied: usize = mem_copy(&dst[0], &src[0], 4);
+
+    try assert_eq_i32(copied as i32, 4);
+    try assert_eq_i32(dst[0] as i32, 5);
+    try assert_eq_i32(dst[3] as i32, 8);
+}

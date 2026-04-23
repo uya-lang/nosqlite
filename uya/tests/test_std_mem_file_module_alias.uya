@@ -1,0 +1,13 @@
+use std.testing.assert_eq_i32;
+use std.mem.mem.mem_copy;
+
+test "std mem file module import works" {
+    var src: [byte: 4] = [ 1, 2, 3, 4 ];
+    var dst: [byte: 4] = [];
+
+    const copied: usize = mem_copy(&dst[0], &src[0], 4);
+
+    try assert_eq_i32(copied as i32, 4);
+    try assert_eq_i32(dst[2] as i32, 3);
+    try assert_eq_i32(dst[3] as i32, 4);
+}

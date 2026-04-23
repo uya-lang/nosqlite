@@ -37,6 +37,7 @@ struct EntryRLimit {
 }
 
 const ENTRY_RLIMIT_STACK: i32 = 3;
+const ENTRY_DEFAULT_STACK_LIMIT_BYTES: u64 = 65536u64 * 1024u64;
 
 // 将主线程 RLIMIT_STACK 软/硬上限设为 limit_bytes。应在 main_main 开头尽早调用；设置失败时忽略。
 // Linux：仅用 @syscall，syscall 号按 arch 与 lib/libc/syscall.uya 一致；不 use libc（避免 entry 与种子/依赖环）；非 Linux 暂不设置。
@@ -90,6 +91,10 @@ export extern fn main(argc: i32, argv: & &byte) i32 {
             saved_envp = null;
         }
     })
+
+    // 直接执行 split-C 产物时没有 `uya test` 的 shell `ulimit` 包装。
+    // 这里对齐编译器现有默认值，尽早把主线程栈抬到 64MB，避免集成 runner 在默认栈下崩溃。
+    set_process_stack_limit_bytes(ENTRY_DEFAULT_STACK_LIMIT_BYTES);
 
     // 调用应用程序主程序（export fn main() → main_main()）
     return main_main();

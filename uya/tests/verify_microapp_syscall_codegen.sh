@@ -97,6 +97,10 @@ if ! grep -q 'uya_microapp_bridge_dispatch2(MICROAPP_SYS_TIME,' "$STD_TIME_OUT";
 fi
 
 for path in "$MICRO_OUT" "$STD_MICRO_OUT" "$STD_ALLOC_YIELD_OUT" "$STD_TIME_OUT"; do
+    if grep -F -q 'uya_microapp_syscall' "$path"; then
+        echo "✗ microapp 生成代码不应回退到历史 uya_microapp_syscall helper: $path"
+        exit 1
+    fi
     if grep -F -q 'UYA_HOST_SYS_write' "$path"; then
         echo "✗ microapp 生成代码不应直接内嵌宿主 SYS_write shim: $path"
         exit 1
@@ -115,6 +119,26 @@ for path in "$MICRO_OUT" "$STD_MICRO_OUT" "$STD_ALLOC_YIELD_OUT" "$STD_TIME_OUT"
     fi
     if grep -F -q 'gettimeofday(' "$path"; then
         echo "✗ microapp 生成代码不应直接依赖宿主 gettimeofday: $path"
+        exit 1
+    fi
+    if grep -F -q 'malloc(' "$path"; then
+        echo "✗ microapp 生成代码不应直接依赖宿主 malloc: $path"
+        exit 1
+    fi
+    if grep -F -q 'free(' "$path"; then
+        echo "✗ microapp 生成代码不应直接依赖宿主 free: $path"
+        exit 1
+    fi
+    if grep -F -q 'fprintf(' "$path"; then
+        echo "✗ microapp 生成代码不应直接依赖宿主 fprintf: $path"
+        exit 1
+    fi
+    if grep -F -q 'getenv(' "$path"; then
+        echo "✗ microapp 生成代码不应直接依赖宿主 getenv: $path"
+        exit 1
+    fi
+    if grep -F -q 'abort(' "$path"; then
+        echo "✗ microapp 生成代码不应直接依赖宿主 abort: $path"
         exit 1
     fi
 done
