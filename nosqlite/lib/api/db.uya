@@ -7,6 +7,7 @@ use std.mem.arena.Arena;
 use std.mem.arena.arena_init;
 use std.mem.allocator.IAllocator;
 use std.mem.allocator.g_allocator;
+use std.mem.allocator.get_allocator;
 use std.string.strlen;
 use std.json.value.JsonValue;
 use std.json.parser.parse;
@@ -17,12 +18,14 @@ use lib.storage.pager.CursorLease;
 use lib.storage.pager.PagerOpenInfo;
 use lib.storage.pager.WalCommit;
 use lib.storage.pager.WalBatch;
+use lib.storage.pager.WalCheckReport;
 use lib.storage.pager.catalog_cleanup_stem;
 use lib.storage.pager.catalog_create_db_at_stem;
 use lib.storage.pager.catalog_create_collection_at_stem;
 use lib.storage.pager.catalog_load_at_stem;
 use lib.storage.pager.cursor_lease_start;
 use lib.storage.pager.cursor_lease_validate;
+use lib.storage.pager.pager_check_wal_at_stem;
 use lib.storage.pager.pager_open_at_stem;
 use lib.storage.pager.pager_read_page_at_stem;
 use lib.storage.pager.pager_commit_batch_at_stem;
@@ -85,6 +88,7 @@ use lib.api.result.OWNED_ROW_MAX_BLOB;
 use lib.api.result.RESULT_BLOB_HEADER_SIZE;
 use lib.api.result.RESULT_CELL_HEADER_SIZE;
 use lib.storage.header.PageType;
+use lib.storage.meta_page.MetaPage;
 use lib.storage.page.page_header_from_buf;
 use lib.storage.page.page_body_offset;
 use lib.storage.page.page_buffer_size_matches;
@@ -241,6 +245,16 @@ export struct QueryCursor {
     },
 }
 
+export struct DbCheckReport {
+    page_count: u32,
+    checked_pages: u32,
+    collection_count: u32,
+    row_count: u32,
+    wal_bytes: u64,
+    wal_records: u32,
+    committed_wal_txns: u32,
+}
+
 enum ExecValueKind {
     NULL,
     BOOL,
@@ -324,6 +338,26 @@ fn db_stem_ptr(db: &DbHandle) &const byte {
         return null;
     }
     return &db.stem[0] as &const byte;
+}
+
+fn db_collection_reset(collection: &DbCollection) void {
+    if collection == null {
+        return;
+    }
+    collection.present = false;
+    collection.collection_id = 0u32;
+    collection.name_len = 0u16;
+    collection.next_doc_id = 0u64;
+    collection.primary_root_page = 0u32;
+    collection.row_count = 0u16;
+    var row_idx: usize = 0usize;
+    while row_idx < DB_MAX_ROWS_PER_COLLECTION {
+        collection.rows[row_idx].present = false;
+        collection.rows[row_idx].doc_id = 0u64;
+        collection.rows[row_idx].record_ptr = record_pointer_make(0u32, 0u16);
+        collection.rows[row_idx].doc_len = 0u16;
+        row_idx = row_idx + 1usize;
+    }
 }
 
 fn db_default_snapshot_policy() SnapshotPressurePolicy {
@@ -524,16 +558,11 @@ fn db_reload_from_disk(db: &DbHandle) !void {
         if slot >= DB_MAX_COLLECTIONS {
             return error.DbCollectionFull;
         }
-        current.collections[slot] = DbCollection{
-            present: true,
-            collection_id: entry.meta.collection_id,
-            name_len: 0u16,
-            name: [],
-            next_doc_id: entry.meta.next_doc_id,
-            primary_root_page: entry.meta.primary_root_page,
-            row_count: 0u16,
-            rows: [],
-        };
+        db_collection_reset(&current.collections[slot]);
+        current.collections[slot].present = true;
+        current.collections[slot].collection_id = entry.meta.collection_id;
+        current.collections[slot].next_doc_id = entry.meta.next_doc_id;
+        current.collections[slot].primary_root_page = entry.meta.primary_root_page;
         try db_copy_name(entry.name, current.collections[slot].name[0: 64], &current.collections[slot].name_len);
         const page_id: u32 = db_collection_data_page_id(&current.collections[slot]);
         if page_id >= 2u32 && page_id < info.meta.page_count {
@@ -558,6 +587,81 @@ fn db_reload_from_disk(db: &DbHandle) !void {
     db_refresh_snapshot_status(db);
 }
 
+fn db_check_meta_state_valid(meta: &MetaPage) bool {
+    return meta != null &&
+        meta.page_count >= 3u32 &&
+        meta.catalog_root >= 2u32 &&
+        meta.catalog_root < meta.page_count &&
+        meta.checkpoint_lsn <= meta.commit_lsn;
+}
+
+fn db_check_validate_collection_rows(collection: &DbCollection, expected_next_doc_id: u64, row_count_out: &u32) !void {
+    if collection == null || row_count_out == null {
+        return error.DbPageCorrupt;
+    }
+    var tree: PrimaryBTree = primary_btree_init(256u32) catch {
+        return error.DbPageCorrupt;
+    };
+    var expected_doc_id: u64 = 1u64;
+    var row_idx: u16 = 0u16;
+    while row_idx < collection.row_count {
+        const row: &DbStoredRow = &collection.rows[row_idx as usize];
+        if !row.present ||
+            row.doc_id != expected_doc_id ||
+            row.record_ptr.page_id != db_collection_data_page_id(collection) ||
+            row.record_ptr.slot_id != row_idx {
+            return error.DbPageCorrupt;
+        }
+        const blob: &[byte] = db_row_blob(row) catch {
+            return error.DbPageCorrupt;
+        };
+        _ = doc_node_tag(blob) catch {
+            return error.DbPageCorrupt;
+        };
+        _ = primary_btree_insert(&tree, row.doc_id, &row.record_ptr) catch {
+            return error.DbPageCorrupt;
+        };
+        const found: RecordPointer = primary_btree_lookup(&tree, row.doc_id) catch {
+            return error.DbPageCorrupt;
+        };
+        if found.page_id != row.record_ptr.page_id || found.slot_id != row.record_ptr.slot_id {
+            return error.DbPageCorrupt;
+        }
+        row_count_out[0] = row_count_out[0] + 1u32;
+        expected_doc_id = expected_doc_id + 1u64;
+        row_idx = row_idx + 1u16;
+    }
+    if expected_next_doc_id != expected_doc_id {
+        return error.DbPageCorrupt;
+    }
+}
+
+fn db_check_collection_at_stem(stem: &const byte, page_size: u32, entry: &CatalogCollectionView, row_count_out: &u32) !void {
+    if stem == null || entry == null || row_count_out == null {
+        return error.DbPageCorrupt;
+    }
+    if entry.meta.primary_root_page < 2u32 {
+        return error.DbCollectionPageMissing;
+    }
+    var raw_page: [byte: 8192] = [];
+    const page_buf: &[byte] = raw_page[0: page_size as usize];
+    try pager_read_page_at_stem(stem, entry.meta.primary_root_page, page_buf);
+
+    var collection: DbCollection = DbCollection{
+        present: true,
+        collection_id: entry.meta.collection_id,
+        name_len: 0u16,
+        name: [],
+        next_doc_id: entry.meta.next_doc_id,
+        primary_root_page: entry.meta.primary_root_page,
+        row_count: 0u16,
+        rows: [],
+    };
+    try db_copy_name(entry.name, collection.name[0: 64], &collection.name_len);
+    try db_collection_load_page(&collection, entry.meta.primary_root_page, page_buf);
+    try db_check_validate_collection_rows(&collection, entry.meta.next_doc_id, row_count_out);
+}
+
 fn db_zero_commit_view() CommitView {
     return CommitView{
         generation: 0u64,
@@ -573,15 +677,17 @@ fn db_clear_commit_view_state(state: &CommitViewState) void {
     if state == null {
         return;
     }
-    state[0] = CommitViewState{
-        present: false,
-        retired: false,
-        reader_pins: 0u32,
-        retained_bytes: 0u64,
-        view: db_zero_commit_view(),
-        collection_count: 0u16,
-        collections: [],
-    };
+    state.present = false;
+    state.retired = false;
+    state.reader_pins = 0u32;
+    state.retained_bytes = 0u64;
+    state.view = db_zero_commit_view();
+    state.collection_count = 0u16;
+    var collection_idx: usize = 0usize;
+    while collection_idx < DB_MAX_COLLECTIONS {
+        db_collection_reset(&state.collections[collection_idx]);
+        collection_idx = collection_idx + 1usize;
+    }
 }
 
 fn db_commit_view_state(db: &DbHandle, view_slot: u16) !&CommitViewState {
@@ -1610,28 +1716,23 @@ export fn db_test_init_at_stem(db: &DbHandle, stem: &const byte) !void {
     if db == null || stem == null {
         return error.DbHandleInvalid;
     }
-    db[0] = DbHandle{
-        stem_len: 0u16,
-        stem: [],
-        snapshot_policy: db_default_snapshot_policy(),
-        snapshot_status: SnapshotPressureStatus{
-            retired_bytes: 0u64,
-            retired_views: 0u32,
-        },
-        snapshot_status_override_enabled: false,
-        snapshot_status_override: SnapshotPressureStatus{
-            retired_bytes: 0u64,
-            retired_views: 0u32,
-        },
-        now_ms: 0u64,
-        current_view_slot: 0u16,
-        next_view_generation: 2u64,
-        next_page_table_gen: 2u64,
-        commit_views: [],
-        primary_indexes: [],
-        cursor_release_counter: null,
-        pin_release_counter: null,
+    db.stem_len = 0u16;
+    db.snapshot_policy = db_default_snapshot_policy();
+    db.snapshot_status = SnapshotPressureStatus{
+        retired_bytes: 0u64,
+        retired_views: 0u32,
     };
+    db.snapshot_status_override_enabled = false;
+    db.snapshot_status_override = SnapshotPressureStatus{
+        retired_bytes: 0u64,
+        retired_views: 0u32,
+    };
+    db.now_ms = 0u64;
+    db.current_view_slot = 0u16;
+    db.next_view_generation = 2u64;
+    db.next_page_table_gen = 2u64;
+    db.cursor_release_counter = null;
+    db.pin_release_counter = null;
     var index_slot: usize = 0usize;
     while index_slot < DB_MAX_COLLECTIONS {
         db.primary_indexes[index_slot] = try primary_btree_init(256u32);
@@ -1677,6 +1778,42 @@ export fn db_test_create_at_stem(db: &DbHandle, stem: &const byte) !void {
 export fn db_test_open_at_stem(db: &DbHandle, stem: &const byte) !void {
     try db_test_init_at_stem(db, stem);
     try db_reload_from_disk(db);
+}
+
+export fn db_check_at_stem(stem: &const byte) !DbCheckReport {
+    const wal_report: WalCheckReport = try pager_check_wal_at_stem(stem);
+    const info: PagerOpenInfo = try pager_open_at_stem(stem);
+    if !db_check_meta_state_valid(&info.meta) {
+        return error.DbPageCorrupt;
+    }
+
+    const snapshot: CatalogSnapshot = try catalog_load_at_stem(stem);
+    const view: CatalogView = try catalog_view_from_page(snapshot.page[0: snapshot.page_size as usize]);
+    var report: DbCheckReport = DbCheckReport{
+        page_count: info.meta.page_count,
+        checked_pages: 3u32,
+        collection_count: view.root.collection_count,
+        row_count: 0u32,
+        wal_bytes: wal_report.wal_bytes,
+        wal_records: wal_report.record_count,
+        committed_wal_txns: wal_report.committed_txns,
+    };
+
+    var collection_idx: u32 = 0u32;
+    while collection_idx < view.root.collection_count {
+        const entry: CatalogCollectionView = try catalog_collection_at(&view, collection_idx);
+        try db_check_collection_at_stem(stem, info.meta.page_size, &entry, &report.row_count);
+        report.checked_pages = report.checked_pages + 1u32;
+        collection_idx = collection_idx + 1u32;
+    }
+    return report;
+}
+
+export fn db_check(db: &DbHandle) !DbCheckReport {
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    return try db_check_at_stem(db_stem_ptr(db));
 }
 
 export fn db_test_track_drops(db: &DbHandle, cursor_counter: &i32, pin_counter: &i32) void {
@@ -1752,16 +1889,11 @@ export fn db_test_create_collection(db: &DbHandle, name: &[const byte]) !void {
     if slot >= DB_MAX_COLLECTIONS {
         return error.DbCollectionFull;
     }
-    state.collections[slot] = DbCollection{
-        present: true,
-        collection_id: created.collection_id,
-        name_len: 0u16,
-        name: [],
-        next_doc_id: created.next_doc_id,
-        primary_root_page: created.primary_root_page,
-        row_count: 0u16,
-        rows: [],
-    };
+    db_collection_reset(&state.collections[slot]);
+    state.collections[slot].present = true;
+    state.collections[slot].collection_id = created.collection_id;
+    state.collections[slot].next_doc_id = created.next_doc_id;
+    state.collections[slot].primary_root_page = created.primary_root_page;
     try db_copy_name(name, state.collections[slot].name[0: 64], &state.collections[slot].name_len);
     db.primary_indexes[slot] = try primary_btree_init(256u32);
     state.collection_count = state.collection_count + 1u16;
@@ -2011,6 +2143,6 @@ export fn db_query_with_allocator(db: &DbHandle, sql: &[const byte], allocator: 
 }
 
 export fn db_query(db: &DbHandle, sql: &[const byte]) !QueryResult {
-    const allocator: IAllocator = g_allocator;
+    const allocator: IAllocator = get_allocator()[0];
     return try db_query_with_allocator(db, sql, allocator);
 }

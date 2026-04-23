@@ -1,0 +1,603 @@
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_u64;
+
+use libc.getenv;
+use libc.atoll;
+use libc.printf;
+use libc.snprintf;
+
+use osal.TimeVal;
+use osal.os_gettimeofday;
+
+use lib.core.types;
+use lib.foundation.status;
+use lib.storage.wal_header.wal_header_encoded_size;
+use lib.storage.header.PageHeader;
+use lib.storage.header.PageType;
+use lib.storage.header.page_header_size;
+use lib.storage.header.slot_size;
+use lib.storage.page.page_header_from_buf;
+use lib.storage.checksum.page_checksum_finalize;
+use lib.storage.slotted_page.record_cell_header_size;
+use lib.storage.slotted_page.slotted_page_init;
+use lib.storage.slotted_page.slotted_page_insert_copy;
+use lib.storage.pager.WalCommit;
+use lib.storage.pager.WalCheckReport;
+use lib.storage.pager.catalog_cleanup_stem;
+use lib.storage.pager.pager_create_at_stem;
+use lib.storage.pager.pager_commit_page_at_stem;
+use lib.storage.pager.pager_check_wal_at_stem;
+use lib.storage.pager.pager_xor_db_byte_at_stem;
+use lib.storage.pager.pager_xor_wal_byte_at_stem;
+use lib.index.key.numeric_index_key_encode;
+use lib.doc.format.doc_encode_number_text_node;
+use lib.doc.compare.doc_compare_scalar_nodes;
+use lib.api.db.DB_MAX_ROWS_PER_COLLECTION;
+use lib.api.db.DbHandle;
+use lib.api.db.DbCheckReport;
+use lib.api.db.db_exec;
+use lib.api.db.db_query;
+use lib.api.db.db_check_at_stem;
+use lib.api.db.db_test_create_at_stem;
+use lib.api.db.db_test_create_collection;
+use lib.api.error_text.nosqlite_error_code_from_runtime_error_id;
+use lib.api.error_text.nosqlite_error_message_from_runtime_error_id;
+use lib.api.result.QueryResult;
+use lib.api.result.OwnedRow;
+use lib.api.result.query_result_row;
+use lib.api.result.owned_row_cell_text;
+
+const TEST_STEM_DB_CHECK: *const byte = "/tmp/nosqlite_phase11_db_check" as *const byte;
+const TEST_STEM_WAL_CHECK: *const byte = "/tmp/nosqlite_phase11_wal_check" as *const byte;
+const TEST_STEM_NUMERIC: *const byte = "/tmp/nosqlite_phase11_numeric" as *const byte;
+const TEST_STEM_BENCH_WARM: *const byte = "/tmp/nosqlite_phase11_bench_warm" as *const byte;
+const TEST_STEM_BENCH_DURABLE: *const byte = "/tmp/nosqlite_phase11_bench_durable" as *const byte;
+const TEST_STEM_BENCH_RECOVERY: *const byte = "/tmp/nosqlite_phase11_bench_recovery" as *const byte;
+const BENCH_JSON_CAP: usize = 3072;
+const BENCH_SQL_CAP: usize = 4096;
+
+var g_db_check_db: DbHandle = DbHandle{};
+var g_numeric_db: DbHandle = DbHandle{};
+var g_bench_warm_db: DbHandle = DbHandle{};
+var g_bench_durable_db: DbHandle = DbHandle{};
+var g_bench_recovery_db: DbHandle = DbHandle{};
+
+error BenchBufferTooSmall;
+error BenchUnexpectedResult;
+
+fn cleanup_stem(stem: &const byte) void {
+    _ = catalog_cleanup_stem(stem) catch {};
+}
+
+fn env_bytes(name: &const byte) &byte {
+    return getenv(name);
+}
+
+fn env_u64(name: &const byte, fallback: u64) u64 {
+    const raw: &byte = env_bytes(name);
+    if raw == null || raw[0] == 0 as byte {
+        return fallback;
+    }
+    const parsed: i64 = atoll(raw as &const byte);
+    if parsed <= 0i64 {
+        return fallback;
+    }
+    return parsed as u64;
+}
+
+fn bench_mode_enabled() bool {
+    const raw: &byte = env_bytes("NOSQLITE_BENCH_CASE" as &const byte);
+    return raw != null && raw[0] != 0 as byte;
+}
+
+fn cstr_equal(a: &byte, b: &const byte) bool {
+    if a == null || b == null {
+        return false;
+    }
+    var i: usize = 0usize;
+    while true {
+        if a[i] != b[i] {
+            return false;
+        }
+        if a[i] == 0 as byte {
+            return true;
+        }
+        i = i + 1usize;
+    }
+    return false;
+}
+
+fn now_usec() u64 {
+    var tv: TimeVal = TimeVal{ tv_sec: 0i64, tv_usec: 0i64 };
+    _ = os_gettimeofday(&tv, null) catch {
+        return 0u64;
+    };
+    return (tv.tv_sec as u64) * 1000000u64 + (tv.tv_usec as u64);
+}
+
+fn bench_collection_page_capacity(avg_doc_bytes: usize) usize {
+    const page_bytes: usize = NOSQLITE_PAGE_SIZE_DEFAULT as usize;
+    const usable: usize = page_bytes - page_header_size();
+    const per_row: usize = avg_doc_bytes + record_cell_header_size() + slot_size();
+    if per_row == 0usize {
+        return 0usize;
+    }
+    return usable / per_row;
+}
+
+fn byte_slices_equal(a: &[byte], b: &[const byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn byte_slices_compare(a: &[byte], b: &[byte]) i32 {
+    var i: usize = 0usize;
+    var min_len: usize = a.len;
+    if b.len < min_len {
+        min_len = b.len;
+    }
+    while i < min_len {
+        if a.ptr[i] < b.ptr[i] {
+            return 0 - 1;
+        }
+        if a.ptr[i] > b.ptr[i] {
+            return 1;
+        }
+        i = i + 1usize;
+    }
+    if a.len < b.len {
+        return 0 - 1;
+    }
+    if a.len > b.len {
+        return 1;
+    }
+    return 0;
+}
+
+fn make_commit(txn_id: u64, commit_lsn: u64) WalCommit {
+    return WalCommit{
+        txn_id: txn_id,
+        commit_lsn: commit_lsn,
+        catalog_root: 2u32,
+        page_count: 3u32,
+        freelist_head: 0u32,
+    };
+}
+
+fn init_page(page_buf: &[byte], payload: &[byte], page_lsn: u64) !void {
+    try slotted_page_init(page_buf, PageType.DATA);
+    _ = try slotted_page_insert_copy(page_buf, payload);
+    const hdr: &PageHeader = page_header_from_buf(page_buf);
+    hdr.page_lsn = page_lsn;
+    _ = try page_checksum_finalize(page_buf);
+}
+
+fn prepare_users_db(db: &DbHandle, stem: &const byte) !void {
+    try db_test_create_at_stem(db, stem);
+    try db_test_create_collection(db, "users");
+    _ = try db_exec(db, "INSERT INTO users JSON '{\"name\":\"ann\",\"age\":25,\"active\":true}';");
+    _ = try db_exec(db, "INSERT INTO users JSON '{\"name\":\"bob\",\"age\":18,\"active\":false}';");
+}
+
+fn build_json_doc(doc_id: u64, target_bytes: usize, out: &[byte]) !usize {
+    if out.ptr == null || out.len < 64usize {
+        return error.BenchBufferTooSmall;
+    }
+    const age: i32 = 12 + ((doc_id * 11u64) % 15u64) as i32;
+    const prefix_len_i32: i32 = snprintf(
+        out.ptr,
+        out.len,
+        "{\"name\":\"user-%lu\",\"age\":%d,\"active\":true,\"address\":{\"city\":\"bench-city\"},\"tags\":[\"warm\",\"bench\"],\"bio\":\"\0" as &const byte,
+        doc_id,
+        age,
+    );
+    if prefix_len_i32 < 0 {
+        return error.BenchBufferTooSmall;
+    }
+    const prefix_len: usize = (prefix_len_i32 as! usize) catch {
+        return error.BenchBufferTooSmall;
+    };
+    const suffix_len: usize = 2usize;
+    var payload_target: usize = target_bytes;
+    if payload_target < prefix_len + suffix_len {
+        payload_target = prefix_len + suffix_len;
+    }
+    if payload_target + 1usize > out.len {
+        return error.BenchBufferTooSmall;
+    }
+    const pad_len: usize = payload_target - prefix_len - suffix_len;
+    var i: usize = 0usize;
+    while i < pad_len {
+        out.ptr[prefix_len + i] = (97 + (doc_id as usize + i) % 26usize) as byte;
+        i = i + 1usize;
+    }
+    out.ptr[prefix_len + pad_len] = 34 as byte;
+    out.ptr[prefix_len + pad_len + 1usize] = 125 as byte;
+    out.ptr[prefix_len + pad_len + suffix_len] = 0 as byte;
+    return payload_target;
+}
+
+fn build_insert_sql(doc_id: u64, target_bytes: usize, out: &[byte]) !usize {
+    if out.ptr == null || out.len < 64usize {
+        return error.BenchBufferTooSmall;
+    }
+    var json_buf: [byte: BENCH_JSON_CAP] = [];
+    const json_len: usize = try build_json_doc(doc_id, target_bytes, json_buf[0: BENCH_JSON_CAP]);
+    const prefix: &[const byte] = "INSERT INTO users JSON '"[0: 24];
+    const suffix: &[const byte] = "';"[0: 2];
+    const total: usize = prefix.len + json_len + suffix.len;
+    if total + 1usize > out.len {
+        return error.BenchBufferTooSmall;
+    }
+    var cursor: usize = 0usize;
+    while cursor < prefix.len {
+        out.ptr[cursor] = prefix.ptr[cursor];
+        cursor = cursor + 1usize;
+    }
+    var i: usize = 0usize;
+    while i < json_len {
+        out.ptr[cursor + i] = json_buf[i];
+        i = i + 1usize;
+    }
+    cursor = cursor + json_len;
+    i = 0usize;
+    while i < suffix.len {
+        out.ptr[cursor + i] = suffix.ptr[i];
+        i = i + 1usize;
+    }
+    out.ptr[total] = 0 as byte;
+    return total;
+}
+
+fn prepare_bench_db(db: &DbHandle, stem: &const byte, docs: u64, avg_doc_bytes: usize) !void {
+    cleanup_stem(stem);
+    try db_test_create_at_stem(db, stem);
+    try db_test_create_collection(db, "users");
+    var doc_id: u64 = 1u64;
+    while doc_id <= docs {
+        var sql_buf: [byte: BENCH_SQL_CAP] = [];
+        const sql_len: usize = try build_insert_sql(doc_id, avg_doc_bytes, sql_buf[0: BENCH_SQL_CAP]);
+        _ = try db_exec(db, sql_buf[0: sql_len]);
+        doc_id = doc_id + 1u64;
+    }
+}
+
+fn bench_lookup(docs: u64, avg_doc_bytes: usize, iterations: u64) !void {
+    const prep: !void = prepare_bench_db(&g_bench_warm_db, TEST_STEM_BENCH_WARM, docs, avg_doc_bytes);
+    if prep.error_id != 0u32 {
+        printf("RUNNER_STAGE case=warm_primary_lookup stage=prepare error_id=%u\n" as *byte, prep.error_id);
+        return error.BenchUnexpectedResult;
+    }
+    var i: u64 = 0u64;
+    while i < iterations {
+        var sql_buf: [byte: 128] = [];
+        const target_id: u64 = (i % docs) + 1u64;
+        const sql_len_i32: i32 = snprintf(
+            &sql_buf[0],
+            128usize,
+            "SELECT _id, $.name FROM users WHERE _id = %lu LIMIT 1;\0" as &const byte,
+            target_id,
+        );
+        if sql_len_i32 <= 0 {
+            return error.BenchBufferTooSmall;
+        }
+        const start_us: u64 = now_usec();
+        const result_u: !QueryResult = db_query(&g_bench_warm_db, sql_buf[0: sql_len_i32 as usize]);
+        if result_u.error_id != 0u32 {
+            printf("RUNNER_STAGE case=warm_primary_lookup stage=query error_id=%u\n" as *byte, result_u.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        const result: QueryResult = result_u.value;
+        const elapsed_us: u64 = now_usec() - start_us;
+        if result.row_count != 1u32 {
+            return error.BenchUnexpectedResult;
+        }
+        printf("SAMPLE case=warm_primary_lookup us=%lu docs=1 bytes=%zu\n" as *byte, elapsed_us, avg_doc_bytes);
+        i = i + 1u64;
+    }
+}
+
+fn bench_seq_scan(docs: u64, avg_doc_bytes: usize, iterations: u64) !void {
+    const prep: !void = prepare_bench_db(&g_bench_warm_db, TEST_STEM_BENCH_WARM, docs, avg_doc_bytes);
+    if prep.error_id != 0u32 {
+        printf("RUNNER_STAGE case=warm_seq_scan stage=prepare error_id=%u\n" as *byte, prep.error_id);
+        return error.BenchUnexpectedResult;
+    }
+    var i: u64 = 0u64;
+    while i < iterations {
+        const start_us: u64 = now_usec();
+        const result_u: !QueryResult = db_query(&g_bench_warm_db, "SELECT _id FROM users WHERE $.age >= 18 LIMIT 64;"[0: 47]);
+        if result_u.error_id != 0u32 {
+            printf("RUNNER_STAGE case=warm_seq_scan stage=query error_id=%u\n" as *byte, result_u.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        const result: QueryResult = result_u.value;
+        const elapsed_us: u64 = now_usec() - start_us;
+        printf(
+            "SAMPLE case=warm_seq_scan us=%lu docs=%u bytes=%zu\n" as *byte,
+            elapsed_us,
+            docs as u32,
+            docs as usize * avg_doc_bytes,
+        );
+        i = i + 1u64;
+    }
+    _ = docs;
+}
+
+fn bench_durable_insert(avg_doc_bytes: usize, iterations: u64) !void {
+    cleanup_stem(TEST_STEM_BENCH_DURABLE);
+    const created: !void = db_test_create_at_stem(&g_bench_durable_db, TEST_STEM_BENCH_DURABLE);
+    if created.error_id != 0u32 {
+        printf("RUNNER_STAGE case=durable_insert stage=create_db error_id=%u\n" as *byte, created.error_id);
+        return error.BenchUnexpectedResult;
+    }
+    const collection_created: !void = db_test_create_collection(&g_bench_durable_db, "users");
+    if collection_created.error_id != 0u32 {
+        printf("RUNNER_STAGE case=durable_insert stage=create_collection error_id=%u\n" as *byte, collection_created.error_id);
+        return error.BenchUnexpectedResult;
+    }
+    var i: u64 = 0u64;
+    while i < iterations {
+        var sql_buf: [byte: BENCH_SQL_CAP] = [];
+        const sql_len: usize = try build_insert_sql(i + 1u64, avg_doc_bytes, sql_buf[0: BENCH_SQL_CAP]);
+        const start_us: u64 = now_usec();
+        const inserted: !void = db_exec(&g_bench_durable_db, sql_buf[0: sql_len]);
+        if inserted.error_id != 0u32 {
+            printf("RUNNER_STAGE case=durable_insert stage=insert error_id=%u\n" as *byte, inserted.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        const elapsed_us: u64 = now_usec() - start_us;
+        printf("SAMPLE case=durable_insert us=%lu docs=1 bytes=%zu\n" as *byte, elapsed_us, avg_doc_bytes);
+        i = i + 1u64;
+    }
+}
+
+fn bench_recovery_open(docs: u64, avg_doc_bytes: usize, iterations: u64) !void {
+    const prep: !void = prepare_bench_db(&g_bench_recovery_db, TEST_STEM_BENCH_RECOVERY, docs, avg_doc_bytes);
+    if prep.error_id != 0u32 {
+        printf("RUNNER_STAGE case=recovery_open stage=prepare error_id=%u\n" as *byte, prep.error_id);
+        return error.BenchUnexpectedResult;
+    }
+    var i: u64 = 0u64;
+    while i < iterations {
+        const start_us: u64 = now_usec();
+        const reopened: !void = db_test_open_at_stem(&g_bench_recovery_db, TEST_STEM_BENCH_RECOVERY);
+        if reopened.error_id != 0u32 {
+            printf("RUNNER_STAGE case=recovery_open stage=open error_id=%u\n" as *byte, reopened.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        const elapsed_us: u64 = now_usec() - start_us;
+        printf(
+            "SAMPLE case=recovery_open us=%lu docs=%lu bytes=%zu\n" as *byte,
+            elapsed_us,
+            docs,
+            docs as usize * avg_doc_bytes,
+        );
+        i = i + 1u64;
+    }
+}
+
+fn numeric_pair_matches_executor(a: &[const byte], b: &[const byte]) !bool {
+    var a_node: [byte: 128] = [];
+    var b_node: [byte: 128] = [];
+    var a_key: [byte: 128] = [];
+    var b_key: [byte: 128] = [];
+    const a_node_len: usize = try doc_encode_number_text_node(a, a_node[0: 128]);
+    const b_node_len: usize = try doc_encode_number_text_node(b, b_node[0: 128]);
+    const a_key_len: usize = try numeric_index_key_encode(a, a_key[0: 128]);
+    const b_key_len: usize = try numeric_index_key_encode(b, b_key[0: 128]);
+    const expected: i32 = try doc_compare_scalar_nodes(a_node[0: a_node_len], b_node[0: b_node_len]);
+    const actual: i32 = byte_slices_compare(a_key[0: a_key_len], b_key[0: b_key_len]);
+    if expected < 0 {
+        return actual < 0;
+    }
+    if expected > 0 {
+        return actual > 0;
+    }
+    return actual == 0;
+}
+
+test "nosqlite_phase11_db_check_reports_clean_store" {
+    if bench_mode_enabled() {
+        return;
+    }
+    cleanup_stem(TEST_STEM_DB_CHECK);
+    defer {
+        cleanup_stem(TEST_STEM_DB_CHECK);
+    }
+
+    try prepare_users_db(&g_db_check_db, TEST_STEM_DB_CHECK);
+    const report: DbCheckReport = try db_check_at_stem(TEST_STEM_DB_CHECK);
+    try assert_eq_i32(report.collection_count as i32, 1);
+    try assert_eq_i32(report.row_count as i32, 2);
+    try assert_eq_bool(report.checked_pages >= 4u32, true);
+    try assert_eq_bool(report.wal_records >= 3u32, true);
+}
+
+test "nosqlite_phase11_db_check_detects_data_page_corruption" {
+    if bench_mode_enabled() {
+        return;
+    }
+    cleanup_stem(TEST_STEM_DB_CHECK);
+    defer {
+        cleanup_stem(TEST_STEM_DB_CHECK);
+    }
+
+    try prepare_users_db(&g_db_check_db, TEST_STEM_DB_CHECK);
+    try pager_xor_db_byte_at_stem(TEST_STEM_DB_CHECK, 3u32, page_header_size() - 1usize, 1 as byte);
+    const report: !DbCheckReport = db_check_at_stem(TEST_STEM_DB_CHECK);
+    try assert_eq_bool(report.error_id != 0u32, true);
+}
+
+test "nosqlite_phase11_wal_check_detects_corrupt_record" {
+    if bench_mode_enabled() {
+        return;
+    }
+    cleanup_stem(TEST_STEM_WAL_CHECK);
+    defer {
+        cleanup_stem(TEST_STEM_WAL_CHECK);
+    }
+
+    _ = try pager_create_at_stem(TEST_STEM_WAL_CHECK, NOSQLITE_PAGE_SIZE_DEFAULT);
+    var raw_page: [byte: 4096] = [];
+    const page_buf: &[byte] = raw_page[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try init_page(page_buf, &"wal"[0: 3], 7u64);
+    const commit: WalCommit = make_commit(7u64, 7u64);
+    _ = try pager_commit_page_at_stem(TEST_STEM_WAL_CHECK, 2u32, page_buf, &commit, null);
+
+    const ok: WalCheckReport = try pager_check_wal_at_stem(TEST_STEM_WAL_CHECK);
+    try assert_eq_bool(ok.record_count >= 3u32, true);
+
+    try pager_xor_wal_byte_at_stem(TEST_STEM_WAL_CHECK, wal_header_encoded_size() as u64 + 1u64, 1 as byte);
+    const bad: !WalCheckReport = pager_check_wal_at_stem(TEST_STEM_WAL_CHECK);
+    try assert_eq_bool(bad.error_id != 0u32, true);
+}
+
+test "nosqlite_phase11_wal_header_corruption_fails_fast" {
+    if bench_mode_enabled() {
+        return;
+    }
+    cleanup_stem(TEST_STEM_WAL_CHECK);
+    defer {
+        cleanup_stem(TEST_STEM_WAL_CHECK);
+    }
+
+    _ = try pager_create_at_stem(TEST_STEM_WAL_CHECK, NOSQLITE_PAGE_SIZE_DEFAULT);
+    try pager_xor_wal_byte_at_stem(TEST_STEM_WAL_CHECK, 0u64, 1 as byte);
+    const bad: !WalCheckReport = pager_check_wal_at_stem(TEST_STEM_WAL_CHECK);
+    try assert_eq_bool(bad.error_id != 0u32, true);
+}
+
+test "nosqlite_phase11_runtime_error_mapping_contract" {
+    if bench_mode_enabled() {
+        return;
+    }
+    try assert_eq_i32(
+        nosqlite_error_code_from_runtime_error_id(@error_id(error.PagerInvalidWalRecord)) as i32,
+        NOSQLITE_ERR_FORMAT_WAL_RECORD_INVALID as i32,
+    );
+    try assert_eq_i32(
+        nosqlite_error_code_from_runtime_error_id(@error_id(error.DbPageCorrupt)) as i32,
+        NOSQLITE_ERR_FORMAT_PAGE_BOUNDS_INVALID as i32,
+    );
+    try assert_eq_bool(nosqlite_error_message_from_runtime_error_id(@error_id(error.DbPageCorrupt)).len > 0usize, true);
+}
+
+test "nosqlite_phase11_numeric_precision_and_order_contract" {
+    if bench_mode_enabled() {
+        return;
+    }
+    cleanup_stem(TEST_STEM_NUMERIC);
+    defer {
+        cleanup_stem(TEST_STEM_NUMERIC);
+    }
+
+    const created: !void = db_test_create_at_stem(&g_numeric_db, TEST_STEM_NUMERIC);
+    try assert_eq_bool(created.error_id == 0u32, true);
+    const collection_created: !void = db_test_create_collection(&g_numeric_db, "users");
+    try assert_eq_bool(collection_created.error_id == 0u32, true);
+    const insert_big: !void = db_exec(&g_numeric_db, "INSERT INTO users JSON '{\"n\":9223372036854775808,\"name\":\"big\"}';");
+    try assert_eq_bool(insert_big.error_id == 0u32, true);
+    const insert_dec: !void = db_exec(&g_numeric_db, "INSERT INTO users JSON '{\"n\":12.3400,\"name\":\"dec\"}';");
+    try assert_eq_bool(insert_dec.error_id == 0u32, true);
+
+    const big_result_u: !QueryResult = db_query(&g_numeric_db, "SELECT $.n FROM users WHERE $.n = 9223372036854775808 LIMIT 1;");
+    try assert_eq_bool(big_result_u.error_id == 0u32, true);
+    const big_result: QueryResult = big_result_u.value;
+    try assert_eq_i32(big_result.row_count as i32, 1);
+    const big_row: &OwnedRow = try query_result_row(&big_result, 0u32);
+    try assert_eq_bool(byte_slices_equal(try owned_row_cell_text(big_row, 0u16), "9223372036854775808"), true);
+
+    const dec_result_u: !QueryResult = db_query(&g_numeric_db, "SELECT $.n FROM users WHERE $.n = 12.34 LIMIT 1;");
+    try assert_eq_bool(dec_result_u.error_id == 0u32, true);
+    const dec_result: QueryResult = dec_result_u.value;
+    try assert_eq_i32(dec_result.row_count as i32, 1);
+    const dec_row: &OwnedRow = try query_result_row(&dec_result, 0u32);
+    try assert_eq_bool(byte_slices_equal(try owned_row_cell_text(dec_row, 0u16), "12.3400"), true);
+
+    try assert_eq_bool(try numeric_pair_matches_executor(&"-0.125"[0: 6], &"0"[0: 1]), true);
+    try assert_eq_bool(try numeric_pair_matches_executor(&"12.3400"[0: 7], &"12.34"[0: 5]), true);
+    try assert_eq_bool(try numeric_pair_matches_executor(&"9223372036854775808"[0: 19], &"18446744073709551616"[0: 20]), true);
+}
+
+test "nosqlite_phase11_benchmark_runner" {
+    const bench_case: &byte = env_bytes("NOSQLITE_BENCH_CASE" as &const byte);
+    if bench_case == null || bench_case[0] == 0 as byte {
+        return;
+    }
+
+    const docs: u64 = env_u64("NOSQLITE_BENCH_DOCS" as &const byte, 32u64);
+    const avg_doc_bytes: usize = env_u64("NOSQLITE_BENCH_AVG_DOC_BYTES" as &const byte, 1024u64) as usize;
+    const iterations: u64 = env_u64("NOSQLITE_BENCH_ITERATIONS" as &const byte, 20u64);
+    const current_capacity: u64 = DB_MAX_ROWS_PER_COLLECTION as u64;
+    printf(
+        "RUNNER_INFO docs=%lu avg_doc_bytes=%zu iterations=%lu current_capacity=%lu\n" as *byte,
+        docs,
+        avg_doc_bytes,
+        iterations,
+        current_capacity,
+    );
+    const page_capacity: usize = bench_collection_page_capacity(avg_doc_bytes);
+    if docs > current_capacity {
+        printf(
+            "RUNNER_SKIP reason=dataset_exceeds_current_capacity requested_docs=%lu current_capacity=%lu\n" as *byte,
+            docs,
+            current_capacity,
+        );
+        return;
+    }
+    if docs > page_capacity as u64 {
+        printf(
+            "RUNNER_SKIP reason=collection_page_capacity requested_docs=%lu page_capacity=%zu avg_doc_bytes=%zu\n" as *byte,
+            docs,
+            page_capacity,
+            avg_doc_bytes,
+        );
+        return;
+    }
+
+    if cstr_equal(bench_case, "warm_primary_lookup\0" as &const byte) {
+        const run: !void = bench_lookup(docs, avg_doc_bytes, iterations);
+        if run.error_id != 0u32 {
+            printf("RUNNER_ERROR case=warm_primary_lookup error_id=%u\n" as *byte, run.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        return;
+    }
+    if cstr_equal(bench_case, "warm_seq_scan\0" as &const byte) {
+        const run: !void = bench_seq_scan(docs, avg_doc_bytes, iterations);
+        if run.error_id != 0u32 {
+            printf("RUNNER_ERROR case=warm_seq_scan error_id=%u\n" as *byte, run.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        return;
+    }
+    if cstr_equal(bench_case, "durable_insert\0" as &const byte) {
+        const run: !void = bench_durable_insert(avg_doc_bytes, iterations);
+        if run.error_id != 0u32 {
+            printf("RUNNER_ERROR case=durable_insert error_id=%u\n" as *byte, run.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        return;
+    }
+    if cstr_equal(bench_case, "recovery_open\0" as &const byte) {
+        const run: !void = bench_recovery_open(docs, avg_doc_bytes, iterations);
+        if run.error_id != 0u32 {
+            printf("RUNNER_ERROR case=recovery_open error_id=%u\n" as *byte, run.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        return;
+    }
+
+    printf("RUNNER_SKIP reason=unknown_case case=%s\n" as *byte, bench_case);
+}

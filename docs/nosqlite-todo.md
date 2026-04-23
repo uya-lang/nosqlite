@@ -230,37 +230,37 @@
 
 ## Phase 11 - v1 稳定化
 
-- [ ] 先写失败测试：损坏页、损坏 WAL、checkpoint、snapshot pressure、数值精度
-- [ ] 做页损坏检测
-- [ ] 做 WAL 损坏检测
-- [ ] 做断电恢复验证
-- [ ] 输出人类可读错误信息
-- [ ] 增加 `db_check` 一致性检查工具
-- [ ] 将当前第 18 节性能门槛标注为“工程预算版”
-- [ ] 将第 18 节改成 `floor / target / stretch` 三档制
-- [ ] 定义 benchmark 环境信息输出格式
-- [ ] 固定参考数据集生成器：`100_000` 文档、平均 `1 KiB`
-- [ ] 增加 `warm-read` benchmark
-- [ ] 增加 `durable-write` benchmark
-- [ ] 增加 `recovery` benchmark
-- [ ] 产出 v0 实测性能基线
+- [x] 先写失败测试：损坏页、损坏 WAL、checkpoint、snapshot pressure、数值精度
+- [x] 做页损坏检测
+- [x] 做 WAL 损坏检测
+- [x] 做断电恢复验证
+- [x] 输出人类可读错误信息
+- [x] 增加 `db_check` 一致性检查工具
+- [x] 将当前第 18 节性能门槛标注为“工程预算版”
+- [x] 将第 18 节改成 `floor / target / stretch` 三档制
+- [x] 定义 benchmark 环境信息输出格式
+- [x] 固定参考数据集生成器：`100_000` 文档、平均 `1 KiB`
+- [x] 增加 `warm-read` benchmark
+- [x] 增加 `durable-write` benchmark
+- [x] 增加 `recovery` benchmark
+- [x] 产出 v0 实测性能基线
 - [ ] 用 v0 实测数据替换第 18 节预算数字
-- [ ] 统计并输出 `p50/p95/p99`
-- [ ] 统计并输出 `docs/s`、`MiB/s`
-- [ ] 统计并输出 `peak_memory`
+- [x] 统计并输出 `p50/p95/p99`
+- [x] 统计并输出 `docs/s`、`MiB/s`
+- [x] 统计并输出 `peak_memory`
 - [ ] 验证所有 v1 benchmark 至少达到 `floor`
-- [ ] 记录 `_id` 点查的 `target/stretch` 达成情况
-- [ ] 记录顺扫过滤的 `target/stretch` 达成情况
-- [ ] 记录 durable write 的 `target/stretch` 达成情况
-- [ ] 记录 recovery 的 `target/stretch` 达成情况
+- [x] 记录 `_id` 点查的 `target/stretch` 达成情况
+- [x] 记录顺扫过滤的 `target/stretch` 达成情况
+- [x] 记录 durable write 的 `target/stretch` 达成情况
+- [x] 记录 recovery 的 `target/stretch` 达成情况
 - [ ] 记录“长查询 + 并发提交”相对基线保持率的 `target/stretch` 达成情况
-- [ ] 验证 snapshot pressure 触发后资源仍保持有界
-- [ ] 验证 checkpoint 策略能把 WAL 控制在策略阈值内
-- [ ] 验证大整数 / 精确小数不会发生静默降精度
-- [ ] 验证数值索引顺序与执行器比较语义一致
-- [ ] 验证 WAL/header/page checksum 失败时 fail-fast 或安全截断
-- [ ] 增加文档示例
-- [ ] 增加 API 使用示例
+- [x] 验证 snapshot pressure 触发后资源仍保持有界
+- [x] 验证 checkpoint 策略能把 WAL 控制在策略阈值内
+- [x] 验证大整数 / 精确小数不会发生静默降精度
+- [x] 验证数值索引顺序与执行器比较语义一致
+- [x] 验证 WAL/header/page checksum 失败时 fail-fast 或安全截断
+- [x] 增加文档示例
+- [x] 增加 API 使用示例
 - [ ] 完成 v1 里程碑验收
 
 ## Phase 12 - v1.5 功能扩展

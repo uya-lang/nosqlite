@@ -9,6 +9,7 @@ use lib.foundation.config;
 
 test "nosqlite_core_error_code_contract" {
     try assert_eq_bool(nosqlite_error_code_valid(NOSQLITE_ERR_OK), true);
+    try assert_eq_bool(nosqlite_error_code_valid(NOSQLITE_ERR_IO_GENERIC), true);
     try assert_eq_bool(nosqlite_error_code_valid(NOSQLITE_ERR_IO_OPEN), true);
     try assert_eq_bool(nosqlite_error_code_valid(123456u32), false);
 
@@ -24,6 +25,9 @@ test "nosqlite_core_error_code_contract" {
     const fatal: NosqliteErrorInfo = nosqlite_error_info(NOSQLITE_ERR_FORMAT_META_INVALID);
     try assert_eq_bool(fatal.retryable, false);
     try assert_eq_bool(fatal.fatal, true);
+
+    try assert_eq_bool(nosqlite_error_name(NOSQLITE_ERR_FORMAT_WAL_RECORD_INVALID).len > 0usize, true);
+    try assert_eq_bool(nosqlite_error_message(NOSQLITE_ERR_FORMAT_WAL_RECORD_INVALID).len > 0usize, true);
 }
 
 test "nosqlite_core_resource_model_contract" {

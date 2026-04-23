@@ -1,0 +1,91 @@
+// lib.api - 运行时错误到 NoSQLite 标准错误码/文本的映射
+// 模块路径：lib/api/error_text.uya → use lib.api.error_text;
+
+use lib.foundation.status;
+use lib.storage.pager;
+use lib.catalog.schema;
+use lib.sql.parser;
+use lib.sql.binder;
+use lib.api.db;
+use lib.api.result;
+
+export fn nosqlite_error_code_from_runtime_error_id(error_id: u32) u32 {
+    if error_id == 0u32 {
+        return NOSQLITE_ERR_OK;
+    }
+    if error_id == @error_id(error.PagerIoError) {
+        return NOSQLITE_ERR_IO_GENERIC;
+    }
+    if error_id == @error_id(error.PagerNoValidMeta) {
+        return NOSQLITE_ERR_FORMAT_META_INVALID;
+    }
+    if error_id == @error_id(error.PagerInvalidWalHeader) {
+        return NOSQLITE_ERR_FORMAT_WAL_HEADER_INVALID;
+    }
+    if error_id == @error_id(error.PagerInvalidPageChecksum) {
+        return NOSQLITE_ERR_FORMAT_PAGE_CHECKSUM_INVALID;
+    }
+    if error_id == @error_id(error.PagerInvalidPageBuffer) ||
+        error_id == @error_id(error.DbPageCorrupt) ||
+        error_id == @error_id(error.DbCollectionPageMissing) {
+        return NOSQLITE_ERR_FORMAT_PAGE_BOUNDS_INVALID;
+    }
+    if error_id == @error_id(error.PagerInvalidWalRecord) ||
+        error_id == @error_id(error.WalInvalidRecord) ||
+        error_id == @error_id(error.WalInvalidChecksum) {
+        return NOSQLITE_ERR_FORMAT_WAL_RECORD_INVALID;
+    }
+    if error_id == @error_id(error.SnapshotPressure) {
+        return NOSQLITE_ERR_SNAPSHOT_PRESSURE;
+    }
+    if error_id == @error_id(error.CursorExpired) {
+        return NOSQLITE_ERR_CURSOR_EXPIRED;
+    }
+    if error_id == @error_id(error.CatalogCorrupt) ||
+        error_id == @error_id(error.CatalogInvalidChecksum) ||
+        error_id == @error_id(error.CatalogInvalidPage) {
+        return NOSQLITE_ERR_CATALOG_CORRUPT;
+    }
+    if error_id == @error_id(error.CatalogCollectionNotFound) ||
+        error_id == @error_id(error.BindCollectionNotFound) ||
+        error_id == @error_id(error.DbCollectionNotFound) {
+        return NOSQLITE_ERR_CATALOG_NOT_FOUND;
+    }
+    if error_id == @error_id(error.SqlParseUnexpectedToken) ||
+        error_id == @error_id(error.SqlParseInvalidPath) {
+        return NOSQLITE_ERR_SQL_SYNTAX;
+    }
+    if error_id == @error_id(error.BindUnsupportedStmt) ||
+        error_id == @error_id(error.BindTooManyExprNodes) ||
+        error_id == @error_id(error.BindLiteralTooLong) ||
+        error_id == @error_id(error.BindInvalidLiteral) ||
+        error_id == @error_id(error.BindInvalidExpr) ||
+        error_id == @error_id(error.BindPathCompileFailed) {
+        return NOSQLITE_ERR_SQL_BIND;
+    }
+    if error_id == @error_id(error.DbRowTooLarge) ||
+        error_id == @error_id(error.DbRowFull) ||
+        error_id == @error_id(error.DbCollectionFull) ||
+        error_id == @error_id(error.DbResultTooLarge) ||
+        error_id == @error_id(error.QueryResultInvalidBuffer) {
+        return NOSQLITE_ERR_EXEC_CONSTRAINT;
+    }
+    if error_id == @error_id(error.DbPathError) ||
+        error_id == @error_id(error.QueryResultInvalidCell) ||
+        error_id == @error_id(error.QueryResultWrongType) {
+        return NOSQLITE_ERR_EXEC_PATH;
+    }
+    return NOSQLITE_ERR_INTERNAL_INVARIANT_BROKEN;
+}
+
+export fn nosqlite_error_info_from_runtime_error_id(error_id: u32) NosqliteErrorInfo {
+    return nosqlite_error_info(nosqlite_error_code_from_runtime_error_id(error_id));
+}
+
+export fn nosqlite_error_name_from_runtime_error_id(error_id: u32) &[byte] {
+    return nosqlite_error_name(nosqlite_error_code_from_runtime_error_id(error_id));
+}
+
+export fn nosqlite_error_message_from_runtime_error_id(error_id: u32) &[byte] {
+    return nosqlite_error_message(nosqlite_error_code_from_runtime_error_id(error_id));
+}

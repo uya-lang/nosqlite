@@ -86,6 +86,14 @@ export struct PagerStats {
     wal_bytes: u64,
 }
 
+export struct WalCheckReport {
+    wal_bytes: u64,
+    record_count: u32,
+    committed_txns: u32,
+    committed_pages: u32,
+    checkpoint_records: u32,
+}
+
 export struct PagerOpenInfo {
     meta: MetaPage,
     wal_header: WalHeader,
@@ -838,6 +846,14 @@ fn pager_meta_valid_for_slot(page: &MetaPage, slot: u32) bool {
         meta_page_slot_matches_physical(page, slot);
 }
 
+fn pager_meta_state_valid(page: &MetaPage) bool {
+    return page != null &&
+        page.page_count >= 3u32 &&
+        page.catalog_root >= 2u32 &&
+        page.catalog_root < page.page_count &&
+        page.checkpoint_lsn <= page.commit_lsn;
+}
+
 fn pager_probe_meta_b_only(db: &File) !MetaPage {
     const meta_b_4k: MetaPage = pager_read_meta_at(db, NOSQLITE_PAGE_SIZE_DEFAULT as i64) catch {
         const meta_b_8k: MetaPage = pager_read_meta_at(db, 8192) catch {
@@ -1297,6 +1313,197 @@ export fn pager_wal_size_at_stem(stem: &const byte) !u64 {
     return size;
 }
 
+fn pager_xor_path_byte(path: &const byte, offset: u64, xor_mask: byte) !void {
+    var file: File = try pager_open_file(path, O_RDWR, 0u32);
+    errdefer {
+        _ = os_close(&file) catch {};
+    }
+
+    var b: [byte: 1] = [];
+    try pager_seek_exact(&file, offset as i64);
+    try pager_read_exact(&file, b[0: 1]);
+    b[0] = b[0] ^ xor_mask;
+    try pager_seek_exact(&file, offset as i64);
+    try pager_write_all(&file, b[0: 1]);
+    try pager_sync_wal(&file);
+    try os_close(&file);
+}
+
+export fn pager_xor_db_byte_at_stem(stem: &const byte, page_id: u32, rel_off: usize, xor_mask: byte) !void {
+    const info: PagerOpenInfo = try pager_open_at_stem(stem);
+    if page_id >= info.meta.page_count || rel_off >= info.meta.page_size as usize {
+        return error.PagerInvalidPageId;
+    }
+    var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
+    const offset: u64 = pager_page_offset(info.meta.page_size, page_id) + rel_off as u64;
+    try pager_xor_path_byte(&db_path[0], offset, xor_mask);
+}
+
+export fn pager_xor_wal_byte_at_stem(stem: &const byte, rel_off: u64, xor_mask: byte) !void {
+    var wal_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    try pager_build_wal_path(stem, wal_path[0: NOSQLITE_PATH_BUF_SIZE]);
+    try pager_xor_path_byte(&wal_path[0], rel_off, xor_mask);
+}
+
+export fn pager_check_wal_at_stem(stem: &const byte) !WalCheckReport {
+    var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    var wal_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
+    try pager_build_wal_path(stem, wal_path[0: NOSQLITE_PATH_BUF_SIZE]);
+
+    var db: File = try pager_open_file(&db_path[0], O_RDWR, 0);
+    errdefer {
+        _ = os_close(&db) catch {};
+    }
+    var wal: File = try pager_open_file(&wal_path[0], O_RDWR, 0);
+    errdefer {
+        _ = os_close(&wal) catch {};
+    }
+
+    const selected_meta: MetaPage = try pager_probe_selected_meta(&db);
+    if !pager_meta_state_valid(&selected_meta) {
+        return error.PagerNoValidMeta;
+    }
+    const wal_header: WalHeader = try pager_read_wal_header(&wal);
+    if !wal_header_supported(&wal_header) ||
+        !wal_header_checksum_valid(&wal_header) ||
+        !wal_header_page_size_matches(&wal_header, selected_meta.page_size) ||
+        wal_header.feature_flags != selected_meta.feature_flags {
+        return error.PagerInvalidWalHeader;
+    }
+
+    const wal_size: u64 = try pager_file_size(&wal);
+    var report: WalCheckReport = WalCheckReport{
+        wal_bytes: wal_size,
+        record_count: 0u32,
+        committed_txns: 0u32,
+        committed_pages: 0u32,
+        checkpoint_records: 0u32,
+    };
+    const header_bytes: u64 = wal_header_encoded_size() as u64;
+    if wal_size <= header_bytes {
+        try os_close(&wal);
+        try os_close(&db);
+        return report;
+    }
+
+    var offset: u64 = header_bytes;
+    var txn_active: bool = false;
+    var txn_id: u64 = 0u64;
+    var pending_pages: u16 = 0u16;
+    var last_commit_lsn: u64 = 0u64;
+    var header_buf: [byte: WAL_RECORD_HEADER_SIZE] = [];
+    var record_buf: [byte: WAL_RECORD_MAX_ENCODED_SIZE] = [];
+    while offset < wal_size {
+        if offset + WAL_RECORD_HEADER_SIZE as u64 > wal_size {
+            return error.PagerInvalidWalRecord;
+        }
+        try pager_seek_exact(&wal, offset as i64);
+        try pager_read_exact(&wal, header_buf[0: WAL_RECORD_HEADER_SIZE]);
+        const header: WalRecordHeader = wal_record_header_decode(header_buf[0: WAL_RECORD_HEADER_SIZE]) catch {
+            return error.PagerInvalidWalRecord;
+        };
+        const total: usize = header.record_len as usize;
+        if offset + total as u64 > wal_size {
+            return error.PagerInvalidWalRecord;
+        }
+        try pager_seek_exact(&wal, offset as i64);
+        try pager_read_exact(&wal, record_buf[0: total]);
+        const record: &[byte] = record_buf[0: total];
+        if !wal_record_checksum_valid(record) {
+            return error.PagerInvalidWalRecord;
+        }
+        const kind: WalRecordType = wal_record_type(&header) catch {
+            return error.PagerInvalidWalRecord;
+        };
+        report.record_count = report.record_count + 1u32;
+
+        if kind == WalRecordType.BEGIN {
+            if txn_active {
+                return error.PagerInvalidWalRecord;
+            }
+            const begin: WalBegin = wal_decode_begin(record) catch {
+                return error.PagerInvalidWalRecord;
+            };
+            if begin.txn_id == 0u64 {
+                return error.PagerInvalidWalRecord;
+            }
+            txn_active = true;
+            txn_id = begin.txn_id;
+            pending_pages = 0u16;
+            offset = offset + total as u64;
+            continue;
+        }
+
+        if kind == WalRecordType.PAGE_WRITE {
+            if !txn_active {
+                return error.PagerInvalidWalRecord;
+            }
+            const page_write: WalPageWriteView = wal_decode_page_write(record) catch {
+                return error.PagerInvalidWalRecord;
+            };
+            if page_write.txn_id != txn_id ||
+                page_write.page_id < 2u32 ||
+                page_write.page_size != wal_header.page_size {
+                return error.PagerInvalidWalRecord;
+            }
+            pending_pages = pending_pages + 1u16;
+            offset = offset + total as u64;
+            continue;
+        }
+
+        if kind == WalRecordType.COMMIT {
+            if !txn_active {
+                return error.PagerInvalidWalRecord;
+            }
+            const commit: WalCommit = wal_decode_commit(record) catch {
+                return error.PagerInvalidWalRecord;
+            };
+            if commit.txn_id != txn_id ||
+                commit.commit_lsn == 0u64 ||
+                commit.page_count < 3u32 ||
+                commit.catalog_root < 2u32 ||
+                commit.catalog_root >= commit.page_count ||
+                commit.commit_lsn <= last_commit_lsn {
+                return error.PagerInvalidWalRecord;
+            }
+            report.committed_txns = report.committed_txns + 1u32;
+            report.committed_pages = report.committed_pages + pending_pages as u32;
+            last_commit_lsn = commit.commit_lsn;
+            txn_active = false;
+            txn_id = 0u64;
+            pending_pages = 0u16;
+            offset = offset + total as u64;
+            continue;
+        }
+
+        if txn_active {
+            return error.PagerInvalidWalRecord;
+        }
+        const checkpoint: WalCheckpoint = wal_decode_checkpoint(record) catch {
+            return error.PagerInvalidWalRecord;
+        };
+        if checkpoint.page_count < 3u32 ||
+            checkpoint.catalog_root < 2u32 ||
+            checkpoint.catalog_root >= checkpoint.page_count ||
+            checkpoint.checkpoint_lsn > checkpoint.commit_lsn ||
+            checkpoint.commit_lsn < last_commit_lsn {
+            return error.PagerInvalidWalRecord;
+        }
+        report.checkpoint_records = report.checkpoint_records + 1u32;
+        offset = offset + total as u64;
+    }
+
+    if txn_active {
+        return error.PagerInvalidWalRecord;
+    }
+
+    try os_close(&wal);
+    try os_close(&db);
+    return report;
+}
+
 export fn pager_wal_append_batch_at_stem(stem: &const byte, batch: &WalBatch, sync_wal: bool) !u64 {
     var wal_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
     try pager_build_wal_path(stem, wal_path[0: NOSQLITE_PATH_BUF_SIZE]);
@@ -1464,7 +1671,7 @@ export const WAL_BEGIN_PAYLOAD_SIZE: usize = 8;
 export const WAL_PAGE_WRITE_META_SIZE: usize = 28;
 export const WAL_COMMIT_PAYLOAD_SIZE: usize = 28;
 export const WAL_CHECKPOINT_PAYLOAD_SIZE: usize = 36;
-export const WAL_RECORD_MAX_ENCODED_SIZE: usize = WAL_RECORD_HEADER_SIZE + WAL_PAGE_WRITE_META_SIZE + NOSQLITE_PAGE_SIZE_MAX_V1 as usize;
+export const WAL_RECORD_MAX_ENCODED_SIZE: usize = WAL_RECORD_HEADER_SIZE + WAL_PAGE_WRITE_META_SIZE + 8192usize;
 export const WAL_BATCH_MAX_RECORDS: usize = 18;
 export const WAL_BATCH_MAX_BYTES: usize = 147456;
 

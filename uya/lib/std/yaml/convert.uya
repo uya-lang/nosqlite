@@ -12,6 +12,7 @@ use std.json.value.JsonStrView;
 use std.json.value.JsonArray;
 use std.json.value.JsonObject;
 use std.json.value.JsonKeyValue;
+use std.json.encoder.json_expect_f64;
 use std.mem.arena.Arena;
 use std.mem.arena.arena_alloc;
 
@@ -63,6 +64,7 @@ export fn json_value_to_yaml_value(ar: &Arena, v: &JsonValue) !YamlValue {
         .bool_val(x) => { return YamlValue.bool_val(x); },
         .int_val(x) => { return YamlValue.int_val(x); },
         .float_val(x) => { return YamlValue.float_val(x); },
+        .num_text(_) => { return YamlValue.float_val(try json_expect_f64(v)); },
         .str(s) => { return YamlValue.y_str(YamlStrView{ ptr: s.ptr, len: s.len }); },
         .arr(a) => {
             if a.len == 0 {

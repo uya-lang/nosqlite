@@ -2,6 +2,7 @@
 use std.runtime.entry;
 use std.json.value.JsonValue;
 use std.json.parser.parse;
+use std.json.encoder.json_expect_f64;
 use std.mem.arena.Arena;
 use std.mem.arena.arena_init;
 
@@ -47,8 +48,15 @@ export fn main() i32 {
     buf[2] = 48;
     const vf: JsonValue = parse(&a, &buf[0], 3) catch { return 9; };
     match vf {
-        .float_val(x) => { if x != 3.0 { return 10; } },
-        else => { return 11; },
+        .num_text(s) => {
+            if s.len != 3 || s.ptr[0] != 51 as byte || s.ptr[1] != 46 as byte || s.ptr[2] != 48 as byte {
+                return 10;
+            }
+            if (json_expect_f64(&vf) catch { return 11; }) != 3.0 {
+                return 12;
+            }
+        },
+        else => { return 13; },
     }
 
     return 0;

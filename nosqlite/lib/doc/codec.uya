@@ -194,6 +194,9 @@ fn doc_measure_json_value_depth(value: &JsonValue, depth: usize) !usize {
             const lexeme: &[byte] = try doc_format_float_lexeme(v, buf[0: DOC_FLOAT_LEXEME_BUF]);
             return doc_blob_align_up(number_text_prefix_size() + lexeme.len);
         },
+        .num_text(s) => {
+            return doc_blob_align_up(number_text_prefix_size() + s.len);
+        },
         .str(s) => {
             return doc_blob_align_up(string_node_prefix_size() + s.len);
         },
@@ -282,6 +285,9 @@ fn doc_encode_json_value_depth(value: &JsonValue, out: &[byte], depth: usize) !u
             var buf: [byte: DOC_FLOAT_LEXEME_BUF] = [];
             const lexeme: &[byte] = try doc_format_float_lexeme(v, buf[0: DOC_FLOAT_LEXEME_BUF]);
             return doc_encode_number_text_node(lexeme, out);
+        },
+        .num_text(s) => {
+            return doc_encode_number_text_node(doc_json_str_view_as_slice(s), out);
         },
         .str(s) => {
             return doc_encode_string_node(doc_json_str_view_as_slice(s), out);

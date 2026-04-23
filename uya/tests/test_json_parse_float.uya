@@ -2,6 +2,7 @@
 use std.runtime.entry;
 use std.json.value.JsonValue;
 use std.json.parser.parse;
+use std.json.encoder.json_expect_f64;
 use std.mem.arena.Arena;
 use std.mem.arena.arena_init;
 
@@ -19,8 +20,12 @@ export fn main() i32 {
     buf[3] = 52;
     const v1: JsonValue = parse(&a, &buf[0], 4) catch { return 1; };
     match v1 {
-        .float_val(x) => { if x < 3.13 || x > 3.15 { return 2; } },
-        else => { return 3; },
+        .num_text(s) => {
+            if s.len != 4 { return 2; }
+            const x: f64 = json_expect_f64(&v1) catch { return 3; };
+            if x < 3.13 || x > 3.15 { return 4; }
+        },
+        else => { return 5; },
     }
 
     // -1.5  "-1.5" -> 45,49,46,53
@@ -30,8 +35,12 @@ export fn main() i32 {
     buf[3] = 53;
     const v2: JsonValue = parse(&a, &buf[0], 4) catch { return 4; };
     match v2 {
-        .float_val(x) => { if x < -1.6 || x > -1.4 { return 5; } },
-        else => { return 6; },
+        .num_text(s) => {
+            if s.len != 4 { return 6; }
+            const x: f64 = json_expect_f64(&v2) catch { return 7; };
+            if x < -1.6 || x > -1.4 { return 8; }
+        },
+        else => { return 9; },
     }
 
     // 1e2 = 100  "1e2" -> 49,101,50
@@ -40,8 +49,12 @@ export fn main() i32 {
     buf[2] = 50;
     const v3: JsonValue = parse(&a, &buf[0], 3) catch { return 7; };
     match v3 {
-        .float_val(x) => { if x < 99.0 || x > 101.0 { return 8; } },
-        else => { return 9; },
+        .num_text(s) => {
+            if s.len != 3 { return 10; }
+            const x: f64 = json_expect_f64(&v3) catch { return 11; };
+            if x < 99.0 || x > 101.0 { return 12; }
+        },
+        else => { return 13; },
     }
 
     return 0;
