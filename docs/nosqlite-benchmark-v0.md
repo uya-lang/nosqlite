@@ -9,8 +9,8 @@
 
 | case | mode | iters | p50 us | p95 us | p99 us | docs/s | MiB/s | peak KiB | floor | target | stretch | notes |
 |------|------|-------|--------|--------|--------|--------|-------|----------|-------|--------|---------|-------|
-| primary_lookup | warm-read | 10 | 18583 | 19668 | 19668 | 53.53 | 0.05 | 29388 | pass | pass | miss | scaled prototype dataset: docs=3 < 100000 |
-| seq_scan_filter | warm-read | 10 | 18251 | 22201 | 22201 | 159.69 | 0.16 | 29352 | pass | miss | miss | scaled prototype dataset: docs=3 < 100000 |
-| durable_insert | durable-write | 3 | 18918 | 23079 | 23079 | 50.03 | 0.05 | 28168 | pass | pass | miss | scaled prototype dataset: docs=3 < 100000 |
-| recovery_open | recovery | 10 | 96121 | 100922 | 100922 | 30.97 | 0.03 | 31400 | pass | miss | miss | scaled prototype dataset: docs=3 < 100000 |
-| long_query_concurrent_commit | durable-write | 10 | 19452 | 20217 | 20217 | 51.35 | 0.05 | 29128 | pass | miss | miss | scaled prototype dataset: docs=3 < 100000; ratio_p50=98% |
+| primary_lookup | warm-read | 10 | 4629 | 5055 | 5055 | 214.18 | 0.21 | 28232 | pass | pass | pass | scaled prototype dataset: docs=3 < 100000 |
+| seq_scan_filter | warm-read | 10 | 4708 | 5042 | 5042 | 628.40 | 0.61 | 28240 | pass | pass | miss | scaled prototype dataset: docs=3 < 100000 |
+| durable_insert | durable-write | 3 | 14887 | 16404 | 16404 | 65.17 | 0.06 | 28300 | pass | pass | pass | scaled prototype dataset: docs=3 < 100000 |
+| recovery_open | recovery | 10 | 79252 | 84257 | 84257 | 37.53 | 0.04 | 31528 | pass | pass | pass | scaled prototype dataset: docs=3 < 100000 |
+| long_query_concurrent_commit | durable-write | 10 | 15158 | 15338 | 15338 | 65.90 | 0.06 | 29804 | pass | pass | miss | scaled prototype dataset: docs=3 < 100000; ratio_p50=100% |

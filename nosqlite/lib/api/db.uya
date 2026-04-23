@@ -30,13 +30,16 @@ use lib.storage.pager.catalog_cleanup_stem;
 use lib.storage.pager.catalog_create_db_at_stem;
 use lib.storage.pager.catalog_create_collection_at_stem;
 use lib.storage.pager.catalog_load_at_stem;
+use lib.storage.pager.catalog_load_with_info_at_stem;
 use lib.storage.pager.cursor_lease_start;
 use lib.storage.pager.cursor_lease_validate;
 use lib.storage.pager.pager_check_wal_at_stem;
 use lib.storage.pager.pager_checkpoint_at_stem;
 use lib.storage.pager.pager_open_at_stem;
 use lib.storage.pager.pager_read_page_at_stem;
+use lib.storage.pager.pager_read_page_with_info_at_stem;
 use lib.storage.pager.pager_commit_batch_at_stem;
+use lib.storage.pager.pager_commit_batch_with_info_at_stem;
 use lib.storage.pager.pager_upgrade_at_stem;
 use lib.storage.pager.snapshot_pressure_cursor_can_open;
 use lib.storage.pager.snapshot_pressure_require_write_ok;
@@ -77,11 +80,12 @@ use lib.sql.binder.BoundExprNode;
 use lib.sql.binder.BoundExprKind;
 use lib.sql.binder.BoundLiteralKind;
 use lib.sql.binder.bind_select_at_stem;
+use lib.sql.binder.bind_select_with_collection_metadata;
 use lib.sql.binder.bound_expr_node;
 use lib.plan.planner.QueryPlan;
 use lib.plan.planner.PlanNode;
 use lib.plan.planner.PlanNodeKind;
-use lib.plan.planner.plan_select;
+use lib.plan.planner.plan_select_into;
 use lib.plan.planner.plan_node;
 use lib.plan.planner.plan_explain;
 use lib.doc.codec.doc_encode_json_value;
@@ -826,7 +830,7 @@ fn db_reload_from_disk(db: &DbHandle) !void {
         return error.DbHandleInvalid;
     }
     const info: PagerOpenInfo = try pager_open_at_stem(db_stem_ptr(db));
-    const snapshot: CatalogSnapshot = try catalog_load_at_stem(db_stem_ptr(db));
+    const snapshot: CatalogSnapshot = try catalog_load_with_info_at_stem(db_stem_ptr(db), &info);
     var i: usize = 0usize;
     while i < DB_MAX_COMMIT_VIEWS {
         db_clear_commit_view_state(&db.commit_views[i]);
@@ -892,7 +896,7 @@ fn db_reload_from_disk(db: &DbHandle) !void {
         if page_id >= 2u32 && page_id < info.meta.page_count {
             var raw_page: [byte: 8192] = [];
             const page_buf: &[byte] = raw_page[0: info.meta.page_size as usize];
-            try pager_read_page_at_stem(db_stem_ptr(db), page_id, page_buf);
+            try pager_read_page_with_info_at_stem(db_stem_ptr(db), &info, page_id, page_buf);
             try db_collection_load_page(&current.collections[slot], page_id, page_buf);
         }
         collection_idx = collection_idx + 1u32;
@@ -1804,8 +1808,8 @@ fn db_build_single_text_result_with_allocator(text: &[const byte], allocator: IA
         return error.DbResultTooLarge;
     }
     const mem: &byte = row_mem.value;
-    _ = mem_set(mem, 0 as byte, row_bytes);
     const row: &OwnedRow = mem as &OwnedRow;
+    row.result_len = 0u16;
     var cursor: usize = RESULT_BLOB_HEADER_SIZE;
     db_store_u16_le(row.result_blob[0: OWNED_ROW_MAX_BLOB], 0usize, 1u16);
     try db_result_cell_append(row, &cursor, ResultCellKind.STRING, text as &[byte]);
@@ -1895,7 +1899,7 @@ fn db_project_row(bound: &BoundSelect, rowref: &RowRef, out_row: &OwnedRow) !voi
     if bound == null || rowref == null || out_row == null {
         return error.DbInvalidProjection;
     }
-    _ = mem_set(&out_row.result_blob[0], 0 as byte, OWNED_ROW_MAX_BLOB);
+    out_row.result_len = 0u16;
     var cursor: usize = RESULT_BLOB_HEADER_SIZE;
     db_store_u16_le(out_row.result_blob[0: OWNED_ROW_MAX_BLOB], 0usize, bound.projection_count);
     var i: usize = 0usize;
@@ -2212,7 +2216,8 @@ fn db_txn_stage_update_stmt(txn: &Txn, stmt: &SqlStmt) !void {
         1u16,
     );
     const bound: BoundSelect = try bind_select_at_stem(db_stem_ptr(txn.db), &query_stmt);
-    const plan: QueryPlan = try plan_select(&bound);
+    var plan: QueryPlan = QueryPlan{};
+    try plan_select_into(&bound, &plan);
     const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(txn.db, txn.view_slot, try db_identifier_bytes(&stmt.update_stmt.collection_name));
     var match_rows: [u16: DB_MAX_CURSOR_ROWS] = [];
     var match_count: u16 = 0u16;
@@ -2246,7 +2251,8 @@ fn db_txn_stage_delete_stmt(txn: &Txn, stmt: &SqlStmt) !void {
         0u16,
     );
     const bound: BoundSelect = try bind_select_at_stem(db_stem_ptr(txn.db), &query_stmt);
-    const plan: QueryPlan = try plan_select(&bound);
+    var plan: QueryPlan = QueryPlan{};
+    try plan_select_into(&bound, &plan);
     const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(txn.db, txn.view_slot, try db_identifier_bytes(&stmt.delete_stmt.collection_name));
     var match_rows: [u16: DB_MAX_CURSOR_ROWS] = [];
     var match_count: u16 = 0u16;
@@ -2388,7 +2394,7 @@ fn db_txn_commit_persist(txn: &Txn) !WalCommit {
     var max_page_count: u32 = info.meta.page_count;
     var catalog_raw: [byte: 8192] = [];
     const catalog_page: &[byte] = catalog_raw[0: info.meta.page_size as usize];
-    try pager_read_page_at_stem(db_stem_ptr(txn.db), info.meta.catalog_root, catalog_page);
+    try pager_read_page_with_info_at_stem(db_stem_ptr(txn.db), &info, info.meta.catalog_root, catalog_page);
     var batch: WalBatch = wal_batch_init(next_lsn, next_lsn);
     try wal_batch_append_begin(&batch);
     var collection_idx: u16 = 0u16;
@@ -2461,7 +2467,7 @@ fn db_txn_commit_persist(txn: &Txn) !WalCommit {
         freelist_head: info.meta.freelist_head,
     };
     try wal_batch_append_commit(&batch, &commit);
-    _ = try pager_commit_batch_at_stem(db_stem_ptr(txn.db), &batch, null);
+    _ = try pager_commit_batch_with_info_at_stem(db_stem_ptr(txn.db), &info, &batch, null);
     return commit;
 }
 
@@ -2971,7 +2977,25 @@ export fn db_exec(db: &DbHandle, sql: &[const byte]) !void {
     return error.DbUnsupportedStmt;
 }
 
-export fn db_query_cursor(db: &DbHandle, sql: &[const byte]) !QueryCursor {
+fn db_select_plan_collect_in_view(db: &DbHandle, stmt: &SqlStmt, view_slot: u16, plan_out: &QueryPlan, collection_slot_out: &u16, out_rows: &[u16], count_out: &u16) !void {
+    if db == null || stmt == null || stmt.kind != SqlStmtKind.SELECT || plan_out == null || collection_slot_out == null {
+        return error.DbUnsupportedStmt;
+    }
+    const view_state: &CommitViewState = try db_commit_view_state(db, view_slot);
+    const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(db, view_slot, try db_identifier_bytes(&stmt.select_stmt.collection_name));
+    const collection: &DbCollection = try db_collection_at_in_state(view_state, collection_slot);
+    var bound: BoundSelect = BoundSelect{};
+    if collection.secondary_index_count == 0u16 {
+        bound = try bind_select_with_collection_metadata(stmt, collection.collection_id, collection.primary_root_page);
+    } else {
+        bound = try bind_select_at_stem(db_stem_ptr(db), stmt);
+    }
+    try plan_select_into(&bound, plan_out);
+    collection_slot_out[0] = collection_slot;
+    try db_plan_collect(db, view_slot, plan_out, collection_slot, plan_out.root_node, out_rows, count_out);
+}
+
+fn db_query_cursor_from_select_stmt(db: &DbHandle, stmt: &SqlStmt) !QueryCursor {
     if db == null {
         return error.DbHandleInvalid;
     }
@@ -2980,21 +3004,19 @@ export fn db_query_cursor(db: &DbHandle, sql: &[const byte]) !QueryCursor {
     if !snapshot_pressure_cursor_can_open(&db.snapshot_policy, &effective_status) {
         return error.SnapshotPressure;
     }
-    const stmt: SqlStmt = try sql_parse(sql);
-    if stmt.kind != SqlStmtKind.SELECT {
+    if stmt == null || stmt.kind != SqlStmtKind.SELECT {
         return error.DbUnsupportedStmt;
     }
-    const bound: BoundSelect = try bind_select_at_stem(db_stem_ptr(db), &stmt);
-    const plan: QueryPlan = try plan_select(&bound);
     const view_slot: u16 = try db_pin_current_view_slot(db);
     errdefer {
         db_unpin_view_slot(db, view_slot);
     }
     const view_state: &CommitViewState = try db_commit_view_state(db, view_slot);
-    const collection_slot: u16 = try db_find_collection_slot_by_id_in_view(db, view_slot, bound.collection_id);
+    var plan: QueryPlan = QueryPlan{};
     var match_rows: [u16: DB_MAX_CURSOR_ROWS] = [];
     var match_count: u16 = 0u16;
-    try db_plan_collect(db, view_slot, &plan, collection_slot, plan.root_node, match_rows[0: DB_MAX_CURSOR_ROWS], &match_count);
+    var collection_slot: u16 = 0u16;
+    try db_select_plan_collect_in_view(db, stmt, view_slot, &plan, &collection_slot, match_rows[0: DB_MAX_CURSOR_ROWS], &match_count);
     return QueryCursor{
         db: db,
         pin: CommitViewPin{
@@ -3018,6 +3040,11 @@ export fn db_query_cursor(db: &DbHandle, sql: &[const byte]) !QueryCursor {
         },
         release_counter: db.cursor_release_counter,
     };
+}
+
+export fn db_query_cursor(db: &DbHandle, sql: &[const byte]) !QueryCursor {
+    const stmt: SqlStmt = try sql_parse(sql);
+    return try db_query_cursor_from_select_stmt(db, &stmt);
 }
 
 export fn cursor_next(cursor: &QueryCursor) !bool {
@@ -3050,18 +3077,44 @@ export fn cursor_row(cursor: &QueryCursor) !RowRef {
 }
 
 export fn db_query_with_allocator(db: &DbHandle, sql: &[const byte], allocator: IAllocator) !QueryResult {
-    const stmt: SqlStmt = try sql_parse(sql);
+    var stmt: SqlStmt = try sql_parse(sql);
     if stmt.kind == SqlStmtKind.EXPLAIN {
-        var select_stmt: SqlStmt = stmt;
-        select_stmt.kind = SqlStmtKind.SELECT;
-        const bound: BoundSelect = try bind_select_at_stem(db_stem_ptr(db), &select_stmt);
-        const plan: QueryPlan = try plan_select(&bound);
+        stmt.kind = SqlStmtKind.SELECT;
+        const bound: BoundSelect = try bind_select_at_stem(db_stem_ptr(db), &stmt);
+        var plan: QueryPlan = QueryPlan{};
+        try plan_select_into(&bound, &plan);
         var explain_buf: [byte: 1024] = [];
         const explain_len: usize = try plan_explain(&plan, explain_buf[0: 1024]);
         return try db_build_single_text_result_with_allocator(explain_buf[0: explain_len], allocator);
     }
-    var cursor: QueryCursor = try db_query_cursor(db, sql);
-    const storage_size: usize = QUERY_RESULT_MAX_ROWS * (@size_of(OwnedRow) as usize);
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    db_cleanup_retired_views(db);
+    const effective_status: SnapshotPressureStatus = db_effective_snapshot_status(db);
+    if !snapshot_pressure_cursor_can_open(&db.snapshot_policy, &effective_status) {
+        return error.SnapshotPressure;
+    }
+    if stmt.kind != SqlStmtKind.SELECT {
+        return error.DbUnsupportedStmt;
+    }
+    const view_slot: u16 = try db_pin_current_view_slot(db);
+    defer {
+        db_unpin_view_slot(db, view_slot);
+    }
+    var plan: QueryPlan = QueryPlan{};
+    var match_rows: [u16: DB_MAX_CURSOR_ROWS] = [];
+    var match_count: u16 = 0u16;
+    var collection_slot: u16 = 0u16;
+    try db_select_plan_collect_in_view(db, &stmt, view_slot, &plan, &collection_slot, match_rows[0: DB_MAX_CURSOR_ROWS], &match_count);
+    var row_capacity: usize = match_count as usize;
+    if row_capacity > QUERY_RESULT_MAX_ROWS {
+        return error.DbResultTooLarge;
+    }
+    if row_capacity == 0usize {
+        row_capacity = 1usize;
+    }
+    const storage_size: usize = row_capacity * (@size_of(OwnedRow) as usize);
     const rows_alloc: !&byte = allocator.alloc(storage_size);
     if rows_alloc.error_id != 0u32 {
         return error.DbResultTooLarge;
@@ -3070,39 +3123,32 @@ export fn db_query_with_allocator(db: &DbHandle, sql: &[const byte], allocator: 
     errdefer {
         allocator.dealloc(rows_mem);
     }
-    _ = mem_set(rows_mem, 0 as byte, storage_size);
     const rows_ptr: &OwnedRow = rows_mem as &OwnedRow;
-    var query_result: QueryResult = QueryResult{
-        allocator: allocator,
-        column_count: cursor.plan.bound.projection_count,
-        row_count: 0u32,
-        rows: rows_ptr,
-    };
-    while try cursor_next(&cursor) {
-        if query_result.row_count as usize >= QUERY_RESULT_MAX_ROWS {
+    const column_count: u16 = plan.bound.projection_count;
+    var row_count: u32 = 0u32;
+    var match_index: u16 = 0u16;
+    while match_index < match_count {
+        if row_count as usize >= QUERY_RESULT_MAX_ROWS {
             return error.DbResultTooLarge;
         }
-        const rowref: RowRef = try cursor_row(&cursor);
-        const row_idx: usize = (query_result.row_count as! usize) catch {
+        const rowref: RowRef = try db_collection_row_ref(db, view_slot, collection_slot, match_rows[match_index as usize]);
+        const row_idx: usize = (row_count as! usize) catch {
             return error.DbResultTooLarge;
         };
         if row_idx >= QUERY_RESULT_MAX_ROWS {
             return error.DbResultTooLarge;
         }
-        const row_addr: usize = @usize_from_ptr(query_result.rows as &void) + row_idx * (@size_of(OwnedRow) as usize);
+        const row_addr: usize = @usize_from_ptr(rows_ptr as &void) + row_idx * (@size_of(OwnedRow) as usize);
         const out_row: &OwnedRow = @ptr_from_usize(row_addr) as &OwnedRow;
-        try db_project_row(&cursor.plan.bound, &rowref, out_row);
-        query_result.row_count = query_result.row_count + 1u32;
+        try db_project_row(&plan.bound, &rowref, out_row);
+        row_count = row_count + 1u32;
+        match_index = match_index + 1u16;
     }
-    const out_rows: &OwnedRow = query_result.rows;
-    const out_row_count: u32 = query_result.row_count;
-    const out_column_count: u16 = query_result.column_count;
-    query_result.rows = null;
     return QueryResult{
-        allocator: query_result.allocator,
-        column_count: out_column_count,
-        row_count: out_row_count,
-        rows: out_rows,
+        allocator: allocator,
+        column_count: column_count,
+        row_count: row_count,
+        rows: rows_ptr,
     };
 }
 

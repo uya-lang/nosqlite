@@ -22,26 +22,26 @@
 
 | case | mode | NoSQLite p50 us | SQLite p50 us | p50 对比 | NoSQLite p95 us | SQLite p95 us |
 | --- | --- | ---: | ---: | --- | ---: | ---: |
-| primary_lookup | warm-read | 19883 | 3 | SQLite faster x6627.67 | 20667 | 16 |
-| seq_scan_filter | warm-read | 19122 | 4 | SQLite faster x4780.50 | 20131 | 22 |
-| durable_insert | durable-write | 18736 | 56 | SQLite faster x334.57 | 22488 | 91 |
-| recovery_open | recovery | 92960 | 79 | SQLite faster x1176.71 | 97602 | 117 |
-| long_query_concurrent_commit | durable-write | 19263 | 65 | SQLite faster x296.35 | 19513 | 94 |
+| primary_lookup | warm-read | 4465 | 3 | SQLite faster x1488.33 | 4807 | 16 |
+| seq_scan_filter | warm-read | 4566 | 4 | SQLite faster x1141.50 | 5015 | 23 |
+| durable_insert | durable-write | 14978 | 55 | SQLite faster x272.33 | 15995 | 77 |
+| recovery_open | recovery | 79728 | 84 | SQLite faster x949.14 | 84135 | 143 |
+| long_query_concurrent_commit | durable-write | 15145 | 63 | SQLite faster x240.40 | 15479 | 74 |
 
 ## 原始指标
 
 | engine | case | mode | iters | p50 us | p95 us | p99 us | docs/s | MiB/s | peak KiB | notes |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| nosqlite | primary_lookup | warm-read | 10 | 19883 | 20667 | 20667 | 50.11 | 0.05 | 29940 | scaled prototype dataset: docs=3 < 100000 |
-| nosqlite | seq_scan_filter | warm-read | 10 | 19122 | 20131 | 20131 | 157.13 | 0.15 | 29900 | scaled prototype dataset: docs=3 < 100000 |
-| nosqlite | durable_insert | durable-write | 3 | 18736 | 22488 | 22488 | 52.26 | 0.05 | 28152 | scaled prototype dataset: docs=3 < 100000 |
-| nosqlite | recovery_open | recovery | 10 | 92960 | 97602 | 97602 | 32.02 | 0.03 | 31564 | scaled prototype dataset: docs=3 < 100000 |
-| nosqlite | long_query_concurrent_commit | durable-write | 10 | 19263 | 19513 | 19513 | 51.94 | 0.05 | 29388 | scaled prototype dataset: docs=3 < 100000 |
-| sqlite | primary_lookup | warm-read | 10 | 3 | 16 | 16 | 222222.22 | 217.01 | 19700 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL |
-| sqlite | seq_scan_filter | warm-read | 10 | 4 | 22 | 22 | 491803.28 | 480.28 | 19368 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL |
-| sqlite | durable_insert | durable-write | 3 | 56 | 91 | 91 | 15228.43 | 14.87 | 19752 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL |
-| sqlite | recovery_open | recovery | 10 | 79 | 117 | 117 | 34762.46 | 33.95 | 19648 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL; open includes schema/count read |
-| sqlite | long_query_concurrent_commit | durable-write | 10 | 65 | 94 | 94 | 14556.04 | 14.21 | 19732 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL; writer measured while a read transaction is pinned |
+| nosqlite | primary_lookup | warm-read | 10 | 4465 | 4807 | 4807 | 222.04 | 0.22 | 28248 | scaled prototype dataset: docs=3 < 100000 |
+| nosqlite | seq_scan_filter | warm-read | 10 | 4566 | 5015 | 5015 | 651.75 | 0.64 | 28284 | scaled prototype dataset: docs=3 < 100000 |
+| nosqlite | durable_insert | durable-write | 3 | 14978 | 15995 | 15995 | 66.02 | 0.06 | 28216 | scaled prototype dataset: docs=3 < 100000 |
+| nosqlite | recovery_open | recovery | 10 | 79728 | 84135 | 84135 | 37.47 | 0.04 | 31448 | scaled prototype dataset: docs=3 < 100000 |
+| nosqlite | long_query_concurrent_commit | durable-write | 10 | 15145 | 15479 | 15479 | 65.92 | 0.06 | 29744 | scaled prototype dataset: docs=3 < 100000 |
+| sqlite | primary_lookup | warm-read | 10 | 3 | 16 | 16 | 222222.22 | 217.01 | 19812 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL |
+| sqlite | seq_scan_filter | warm-read | 10 | 4 | 23 | 23 | 483870.97 | 472.53 | 19616 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL |
+| sqlite | durable_insert | durable-write | 3 | 55 | 77 | 77 | 16393.44 | 16.01 | 19768 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL |
+| sqlite | recovery_open | recovery | 10 | 84 | 143 | 143 | 32608.70 | 31.84 | 18896 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL; open includes schema/count read |
+| sqlite | long_query_concurrent_commit | durable-write | 10 | 63 | 74 | 74 | 15243.90 | 14.89 | 19788 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL; writer measured while a read transaction is pinned |
 
 ## 解释边界
 

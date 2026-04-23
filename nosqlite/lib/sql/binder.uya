@@ -697,6 +697,44 @@ export fn bind_select_with_snapshot(snapshot: &CatalogSnapshot, stmt: &SqlStmt) 
     return bound;
 }
 
+export fn bind_select_with_collection_metadata(stmt: &SqlStmt, collection_id: u32, primary_root_page: u32) !BoundSelect {
+    if stmt == null || (stmt.kind != SqlStmtKind.SELECT && stmt.kind != SqlStmtKind.EXPLAIN) {
+        return error.BindUnsupportedStmt;
+    }
+
+    var bound: BoundSelect = BoundSelect{
+        collection_id: collection_id,
+        primary_root_page: primary_root_page,
+        collection_name: stmt.select_stmt.collection_name,
+        secondary_index_count: 0u16,
+        secondary_indexes: [],
+        projection_count: stmt.select_stmt.item_count,
+        projection_exprs: [],
+        has_where: stmt.select_stmt.has_where,
+        where_expr: -1,
+        has_order_by: stmt.select_stmt.has_order_by,
+        order_expr: -1,
+        order_desc: stmt.select_stmt.order_desc,
+        has_limit: stmt.select_stmt.has_limit,
+        limit_value: stmt.select_stmt.limit_value,
+        expr_count: 0u16,
+        expr_nodes: [],
+    };
+
+    var i: usize = 0usize;
+    while i < stmt.select_stmt.item_count as usize {
+        bound.projection_exprs[i] = try bind_expr(stmt, stmt.select_stmt.items[i].expr_index, &bound);
+        i = i + 1usize;
+    }
+    if stmt.select_stmt.has_where {
+        bound.where_expr = try bind_expr(stmt, stmt.select_stmt.where_expr, &bound);
+    }
+    if stmt.select_stmt.has_order_by {
+        bound.order_expr = try bind_expr(stmt, stmt.select_stmt.order_expr, &bound);
+    }
+    return bound;
+}
+
 export fn bind_select_at_stem(stem: &const byte, stmt: &SqlStmt) !BoundSelect {
     const snapshot: CatalogSnapshot = try catalog_load_at_stem(stem);
     return try bind_select_with_snapshot(&snapshot, stmt);
