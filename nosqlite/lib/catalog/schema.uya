@@ -71,7 +71,7 @@ export struct CatalogIndexView {
     path: &[byte],
 }
 
-struct CatalogScratchIndex {
+export struct CatalogScratchIndex {
     present: bool,
     meta: IndexMeta,
     name_len: u16,
@@ -80,7 +80,7 @@ struct CatalogScratchIndex {
     path: [byte: CATALOG_MAX_INLINE_PATH],
 }
 
-struct CatalogScratchCollection {
+export struct CatalogScratchCollection {
     present: bool,
     meta: CollectionMeta,
     name_len: u16,
@@ -773,6 +773,10 @@ fn catalog_rewrite_from_scratch(page_buf: &[byte], entries: &[CatalogScratchColl
     try catalog_blob_finalize_checksum(blob);
     _ = try page_checksum_finalize(scratch_buf);
     _ = mem_copy(page_buf.ptr, scratch_buf.ptr, scratch_buf.len);
+}
+
+export fn catalog_page_rewrite_from_entries(page_buf: &[byte], entries: &[CatalogScratchCollection], collection_count: u16) !void {
+    try catalog_rewrite_from_scratch(page_buf, entries, collection_count);
 }
 
 export fn catalog_page_append_collection(page_buf: &[byte], name: &[byte]) !CollectionMeta {

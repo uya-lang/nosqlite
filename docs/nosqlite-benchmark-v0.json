@@ -1,7 +1,7 @@
 {
-  "docs": 3,
+  "docs": 64,
   "avg_doc_bytes": 1024,
-  "iterations": 10,
+  "iterations": 200,
   "results": [
     {
       "runner_case": "warm_primary_lookup",
@@ -9,27 +9,27 @@
       "case_name": "primary_lookup",
       "metrics": {
         "runner_info": {
-          "docs": "3",
+          "docs": "64",
           "avg_doc_bytes": "1024",
-          "iterations": "10",
+          "iterations": "200",
           "current_capacity": "64"
         },
-        "effective_iterations": 10,
-        "samples": 10,
-        "p50_us": 1,
-        "p95_us": 5,
-        "p99_us": 5,
-        "docs_per_s": 588235.2941176471,
-        "mib_per_s": 574.4485294117648,
-        "peak_memory_kib": 17392,
-        "notes": "scaled prototype dataset: docs=3 < 100000",
+        "effective_iterations": 200,
+        "samples": 0,
+        "p50_us": 0,
+        "p95_us": 0,
+        "p99_us": 0,
+        "docs_per_s": 0.0,
+        "mib_per_s": 0.0,
+        "peak_memory_kib": 536,
+        "notes": "skip: reason=collection_page_capacity requested_docs=64 page_capacity=3 avg_doc_bytes=1024",
         "ratio_pct_p50": 0,
         "ratio_pct_p95": 0,
         "ratio_pct_p99": 0,
-        "stdout": "\n=== Running 7 tests ===\n  TEST: nosqlite_phase11_db_check_reports_clean_store ... OK\n  TEST: nosqlite_phase11_db_check_detects_data_page_corruption ... OK\n  TEST: nosqlite_phase11_wal_check_detects_corrupt_record ... OK\n  TEST: nosqlite_phase11_wal_header_corruption_fails_fast ... OK\n  TEST: nosqlite_phase11_runtime_error_mapping_contract ... OK\n  TEST: nosqlite_phase11_numeric_precision_and_order_contract ... OK\n  TEST: nosqlite_phase11_benchmark_runner ... RUNNER_INFO docs=3 avg_doc_bytes=1024 iterations=10 current_capacity=64\nSAMPLE case=warm_primary_lookup us=5 docs=1 bytes=1024\nSAMPLE case=warm_primary_lookup us=2 docs=1 bytes=1024\nSAMPLE case=warm_primary_lookup us=2 docs=1 bytes=1024\nSAMPLE case=warm_primary_lookup us=1 docs=1 bytes=1024\nSAMPLE case=warm_primary_lookup us=1 docs=1 bytes=1024\nSAMPLE case=warm_primary_lookup us=2 docs=1 bytes=1024\nSAMPLE case=warm_primary_lookup us=1 docs=1 bytes=1024\nSAMPLE case=warm_primary_lookup us=1 docs=1 bytes=1024\nSAMPLE case=warm_primary_lookup us=1 docs=1 bytes=1024\nSAMPLE case=warm_primary_lookup us=1 docs=1 bytes=1024\nOK\n\n=== Results ===\n  Tests Passed:       7\n  Tests Failed:       0\n  Assertions Passed:  0\n",
-        "floor_status": "pass",
-        "target_status": "pass",
-        "stretch_status": "pass"
+        "stdout": "\n=== Running 7 tests ===\n  TEST: nosqlite_phase11_db_check_reports_clean_store ... OK\n  TEST: nosqlite_phase11_db_check_detects_data_page_corruption ... OK\n  TEST: nosqlite_phase11_wal_check_detects_corrupt_record ... OK\n  TEST: nosqlite_phase11_wal_header_corruption_fails_fast ... OK\n  TEST: nosqlite_phase11_runtime_error_mapping_contract ... OK\n  TEST: nosqlite_phase11_numeric_precision_and_order_contract ... OK\n  TEST: nosqlite_phase11_benchmark_runner ... RUNNER_INFO docs=64 avg_doc_bytes=1024 iterations=200 current_capacity=64\nRUNNER_SKIP reason=collection_page_capacity requested_docs=64 page_capacity=3 avg_doc_bytes=1024\nOK\n\n=== Results ===\n  Tests Passed:       7\n  Tests Failed:       0\n  Assertions Passed:  0\n",
+        "floor_status": "skip",
+        "target_status": "skip",
+        "stretch_status": "skip"
       }
     },
     {
@@ -38,27 +38,27 @@
       "case_name": "seq_scan_filter",
       "metrics": {
         "runner_info": {
-          "docs": "3",
+          "docs": "64",
           "avg_doc_bytes": "1024",
-          "iterations": "10",
+          "iterations": "200",
           "current_capacity": "64"
         },
-        "effective_iterations": 10,
-        "samples": 10,
-        "p50_us": 3,
-        "p95_us": 14,
-        "p99_us": 14,
-        "docs_per_s": 731707.3170731707,
-        "mib_per_s": 714.5579268292682,
-        "peak_memory_kib": 16564,
-        "notes": "scaled prototype dataset: docs=3 < 100000",
+        "effective_iterations": 200,
+        "samples": 0,
+        "p50_us": 0,
+        "p95_us": 0,
+        "p99_us": 0,
+        "docs_per_s": 0.0,
+        "mib_per_s": 0.0,
+        "peak_memory_kib": 104,
+        "notes": "skip: reason=collection_page_capacity requested_docs=64 page_capacity=3 avg_doc_bytes=1024",
         "ratio_pct_p50": 0,
         "ratio_pct_p95": 0,
         "ratio_pct_p99": 0,
-        "stdout": "\n=== Running 7 tests ===\n  TEST: nosqlite_phase11_db_check_reports_clean_store ... OK\n  TEST: nosqlite_phase11_db_check_detects_data_page_corruption ... OK\n  TEST: nosqlite_phase11_wal_check_detects_corrupt_record ... OK\n  TEST: nosqlite_phase11_wal_header_corruption_fails_fast ... OK\n  TEST: nosqlite_phase11_runtime_error_mapping_contract ... OK\n  TEST: nosqlite_phase11_numeric_precision_and_order_contract ... OK\n  TEST: nosqlite_phase11_benchmark_runner ... RUNNER_INFO docs=3 avg_doc_bytes=1024 iterations=10 current_capacity=64\nSAMPLE case=warm_seq_scan us=14 docs=3 bytes=3072\nSAMPLE case=warm_seq_scan us=3 docs=3 bytes=3072\nSAMPLE case=warm_seq_scan us=3 docs=3 bytes=3072\nSAMPLE case=warm_seq_scan us=3 docs=3 bytes=3072\nSAMPLE case=warm_seq_scan us=3 docs=3 bytes=3072\nSAMPLE case=warm_seq_scan us=3 docs=3 bytes=3072\nSAMPLE case=warm_seq_scan us=3 docs=3 bytes=3072\nSAMPLE case=warm_seq_scan us=3 docs=3 bytes=3072\nSAMPLE case=warm_seq_scan us=3 docs=3 bytes=3072\nSAMPLE case=warm_seq_scan us=3 docs=3 bytes=3072\nOK\n\n=== Results ===\n  Tests Passed:       7\n  Tests Failed:       0\n  Assertions Passed:  0\n",
-        "floor_status": "pass",
-        "target_status": "pass",
-        "stretch_status": "pass"
+        "stdout": "\n=== Running 7 tests ===\n  TEST: nosqlite_phase11_db_check_reports_clean_store ... OK\n  TEST: nosqlite_phase11_db_check_detects_data_page_corruption ... OK\n  TEST: nosqlite_phase11_wal_check_detects_corrupt_record ... OK\n  TEST: nosqlite_phase11_wal_header_corruption_fails_fast ... OK\n  TEST: nosqlite_phase11_runtime_error_mapping_contract ... OK\n  TEST: nosqlite_phase11_numeric_precision_and_order_contract ... OK\n  TEST: nosqlite_phase11_benchmark_runner ... RUNNER_INFO docs=64 avg_doc_bytes=1024 iterations=200 current_capacity=64\nRUNNER_SKIP reason=collection_page_capacity requested_docs=64 page_capacity=3 avg_doc_bytes=1024\nOK\n\n=== Results ===\n  Tests Passed:       7\n  Tests Failed:       0\n  Assertions Passed:  0\n",
+        "floor_status": "skip",
+        "target_status": "skip",
+        "stretch_status": "skip"
       }
     },
     {
@@ -67,27 +67,27 @@
       "case_name": "durable_insert",
       "metrics": {
         "runner_info": {
-          "docs": "3",
+          "docs": "64",
           "avg_doc_bytes": "1024",
-          "iterations": "3",
+          "iterations": "64",
           "current_capacity": "64"
         },
-        "effective_iterations": 3,
-        "samples": 3,
-        "p50_us": 8646,
-        "p95_us": 9804,
-        "p99_us": 9804,
-        "docs_per_s": 112.29646266142616,
-        "mib_per_s": 0.10966451431779899,
-        "peak_memory_kib": 14360,
-        "notes": "scaled prototype dataset: docs=3 < 100000",
+        "effective_iterations": 64,
+        "samples": 0,
+        "p50_us": 0,
+        "p95_us": 0,
+        "p99_us": 0,
+        "docs_per_s": 0.0,
+        "mib_per_s": 0.0,
+        "peak_memory_kib": 88,
+        "notes": "skip: reason=collection_page_capacity requested_docs=64 page_capacity=3 avg_doc_bytes=1024",
         "ratio_pct_p50": 0,
         "ratio_pct_p95": 0,
         "ratio_pct_p99": 0,
-        "stdout": "\n=== Running 7 tests ===\n  TEST: nosqlite_phase11_db_check_reports_clean_store ... OK\n  TEST: nosqlite_phase11_db_check_detects_data_page_corruption ... OK\n  TEST: nosqlite_phase11_wal_check_detects_corrupt_record ... OK\n  TEST: nosqlite_phase11_wal_header_corruption_fails_fast ... OK\n  TEST: nosqlite_phase11_runtime_error_mapping_contract ... OK\n  TEST: nosqlite_phase11_numeric_precision_and_order_contract ... OK\n  TEST: nosqlite_phase11_benchmark_runner ... RUNNER_INFO docs=3 avg_doc_bytes=1024 iterations=3 current_capacity=64\nSAMPLE case=durable_insert us=8265 docs=1 bytes=1024\nSAMPLE case=durable_insert us=8646 docs=1 bytes=1024\nSAMPLE case=durable_insert us=9804 docs=1 bytes=1024\nOK\n\n=== Results ===\n  Tests Passed:       7\n  Tests Failed:       0\n  Assertions Passed:  0\n",
-        "floor_status": "pass",
-        "target_status": "pass",
-        "stretch_status": "pass"
+        "stdout": "\n=== Running 7 tests ===\n  TEST: nosqlite_phase11_db_check_reports_clean_store ... OK\n  TEST: nosqlite_phase11_db_check_detects_data_page_corruption ... OK\n  TEST: nosqlite_phase11_wal_check_detects_corrupt_record ... OK\n  TEST: nosqlite_phase11_wal_header_corruption_fails_fast ... OK\n  TEST: nosqlite_phase11_runtime_error_mapping_contract ... OK\n  TEST: nosqlite_phase11_numeric_precision_and_order_contract ... OK\n  TEST: nosqlite_phase11_benchmark_runner ... RUNNER_INFO docs=64 avg_doc_bytes=1024 iterations=64 current_capacity=64\nRUNNER_SKIP reason=collection_page_capacity requested_docs=64 page_capacity=3 avg_doc_bytes=1024\nOK\n\n=== Results ===\n  Tests Passed:       7\n  Tests Failed:       0\n  Assertions Passed:  0\n",
+        "floor_status": "skip",
+        "target_status": "skip",
+        "stretch_status": "skip"
       }
     },
     {
@@ -96,27 +96,27 @@
       "case_name": "recovery_open",
       "metrics": {
         "runner_info": {
-          "docs": "3",
+          "docs": "64",
           "avg_doc_bytes": "1024",
-          "iterations": "10",
+          "iterations": "200",
           "current_capacity": "64"
         },
-        "effective_iterations": 10,
-        "samples": 10,
-        "p50_us": 7464,
-        "p95_us": 7989,
-        "p99_us": 7989,
-        "docs_per_s": 400.1013590109494,
-        "mib_per_s": 0.3907239834091303,
-        "peak_memory_kib": 14392,
-        "notes": "scaled prototype dataset: docs=3 < 100000",
+        "effective_iterations": 200,
+        "samples": 0,
+        "p50_us": 0,
+        "p95_us": 0,
+        "p99_us": 0,
+        "docs_per_s": 0.0,
+        "mib_per_s": 0.0,
+        "peak_memory_kib": 96,
+        "notes": "skip: reason=collection_page_capacity requested_docs=64 page_capacity=3 avg_doc_bytes=1024",
         "ratio_pct_p50": 0,
         "ratio_pct_p95": 0,
         "ratio_pct_p99": 0,
-        "stdout": "\n=== Running 7 tests ===\n  TEST: nosqlite_phase11_db_check_reports_clean_store ... OK\n  TEST: nosqlite_phase11_db_check_detects_data_page_corruption ... OK\n  TEST: nosqlite_phase11_wal_check_detects_corrupt_record ... OK\n  TEST: nosqlite_phase11_wal_header_corruption_fails_fast ... OK\n  TEST: nosqlite_phase11_runtime_error_mapping_contract ... OK\n  TEST: nosqlite_phase11_numeric_precision_and_order_contract ... OK\n  TEST: nosqlite_phase11_benchmark_runner ... RUNNER_INFO docs=3 avg_doc_bytes=1024 iterations=10 current_capacity=64\nSAMPLE case=recovery_open us=7404 docs=3 bytes=3072\nSAMPLE case=recovery_open us=7132 docs=3 bytes=3072\nSAMPLE case=recovery_open us=7626 docs=3 bytes=3072\nSAMPLE case=recovery_open us=7265 docs=3 bytes=3072\nSAMPLE case=recovery_open us=7334 docs=3 bytes=3072\nSAMPLE case=recovery_open us=7989 docs=3 bytes=3072\nSAMPLE case=recovery_open us=7570 docs=3 bytes=3072\nSAMPLE case=recovery_open us=7543 docs=3 bytes=3072\nSAMPLE case=recovery_open us=7654 docs=3 bytes=3072\nSAMPLE case=recovery_open us=7464 docs=3 bytes=3072\nOK\n\n=== Results ===\n  Tests Passed:       7\n  Tests Failed:       0\n  Assertions Passed:  0\n",
-        "floor_status": "pass",
-        "target_status": "pass",
-        "stretch_status": "pass"
+        "stdout": "\n=== Running 7 tests ===\n  TEST: nosqlite_phase11_db_check_reports_clean_store ... OK\n  TEST: nosqlite_phase11_db_check_detects_data_page_corruption ... OK\n  TEST: nosqlite_phase11_wal_check_detects_corrupt_record ... OK\n  TEST: nosqlite_phase11_wal_header_corruption_fails_fast ... OK\n  TEST: nosqlite_phase11_runtime_error_mapping_contract ... OK\n  TEST: nosqlite_phase11_numeric_precision_and_order_contract ... OK\n  TEST: nosqlite_phase11_benchmark_runner ... RUNNER_INFO docs=64 avg_doc_bytes=1024 iterations=200 current_capacity=64\nRUNNER_SKIP reason=collection_page_capacity requested_docs=64 page_capacity=3 avg_doc_bytes=1024\nOK\n\n=== Results ===\n  Tests Passed:       7\n  Tests Failed:       0\n  Assertions Passed:  0\n",
+        "floor_status": "skip",
+        "target_status": "skip",
+        "stretch_status": "skip"
       }
     },
     {
@@ -125,27 +125,27 @@
       "case_name": "long_query_concurrent_commit",
       "metrics": {
         "runner_info": {
-          "docs": "3",
+          "docs": "64",
           "avg_doc_bytes": "1024",
-          "iterations": "10",
+          "iterations": "200",
           "current_capacity": "64"
         },
-        "effective_iterations": 10,
-        "samples": 10,
-        "p50_us": 8300,
-        "p95_us": 8711,
-        "p99_us": 8711,
-        "docs_per_s": 120.38474965991308,
-        "mib_per_s": 0.11756323208975887,
-        "peak_memory_kib": 19856,
-        "notes": "scaled prototype dataset: docs=3 < 100000",
-        "ratio_pct_p50": 98,
-        "ratio_pct_p95": 107,
-        "ratio_pct_p99": 107,
-        "stdout": "\n=== Running 7 tests ===\n  TEST: nosqlite_phase11_db_check_reports_clean_store ... OK\n  TEST: nosqlite_phase11_db_check_detects_data_page_corruption ... OK\n  TEST: nosqlite_phase11_wal_check_detects_corrupt_record ... OK\n  TEST: nosqlite_phase11_wal_header_corruption_fails_fast ... OK\n  TEST: nosqlite_phase11_runtime_error_mapping_contract ... OK\n  TEST: nosqlite_phase11_numeric_precision_and_order_contract ... OK\n  TEST: nosqlite_phase11_benchmark_runner ... RUNNER_INFO docs=3 avg_doc_bytes=1024 iterations=10 current_capacity=64\nSAMPLE case=long_query_concurrent_commit us=8427 docs=1 bytes=1024 ratio_pct=107\nSAMPLE case=long_query_concurrent_commit us=8300 docs=1 bytes=1024 ratio_pct=99\nSAMPLE case=long_query_concurrent_commit us=8100 docs=1 bytes=1024 ratio_pct=98\nSAMPLE case=long_query_concurrent_commit us=8200 docs=1 bytes=1024 ratio_pct=99\nSAMPLE case=long_query_concurrent_commit us=8054 docs=1 bytes=1024 ratio_pct=98\nSAMPLE case=long_query_concurrent_commit us=8414 docs=1 bytes=1024 ratio_pct=98\nSAMPLE case=long_query_concurrent_commit us=8442 docs=1 bytes=1024 ratio_pct=99\nSAMPLE case=long_query_concurrent_commit us=8711 docs=1 bytes=1024 ratio_pct=95\nSAMPLE case=long_query_concurrent_commit us=8083 docs=1 bytes=1024 ratio_pct=97\nSAMPLE case=long_query_concurrent_commit us=8336 docs=1 bytes=1024 ratio_pct=97\nOK\n\n=== Results ===\n  Tests Passed:       7\n  Tests Failed:       0\n  Assertions Passed:  0\n",
-        "floor_status": "pass",
-        "target_status": "miss",
-        "stretch_status": "miss"
+        "effective_iterations": 200,
+        "samples": 0,
+        "p50_us": 0,
+        "p95_us": 0,
+        "p99_us": 0,
+        "docs_per_s": 0.0,
+        "mib_per_s": 0.0,
+        "peak_memory_kib": 16,
+        "notes": "skip: reason=collection_page_capacity requested_docs=64 page_capacity=3 avg_doc_bytes=1024",
+        "ratio_pct_p50": 0,
+        "ratio_pct_p95": 0,
+        "ratio_pct_p99": 0,
+        "stdout": "\n=== Running 7 tests ===\n  TEST: nosqlite_phase11_db_check_reports_clean_store ... OK\n  TEST: nosqlite_phase11_db_check_detects_data_page_corruption ... OK\n  TEST: nosqlite_phase11_wal_check_detects_corrupt_record ... OK\n  TEST: nosqlite_phase11_wal_header_corruption_fails_fast ... OK\n  TEST: nosqlite_phase11_runtime_error_mapping_contract ... OK\n  TEST: nosqlite_phase11_numeric_precision_and_order_contract ... OK\n  TEST: nosqlite_phase11_benchmark_runner ... RUNNER_INFO docs=64 avg_doc_bytes=1024 iterations=200 current_capacity=64\nRUNNER_SKIP reason=collection_page_capacity requested_docs=64 page_capacity=3 avg_doc_bytes=1024\nOK\n\n=== Results ===\n  Tests Passed:       7\n  Tests Failed:       0\n  Assertions Passed:  0\n",
+        "floor_status": "skip",
+        "target_status": "skip",
+        "stretch_status": "skip"
       }
     }
   ]

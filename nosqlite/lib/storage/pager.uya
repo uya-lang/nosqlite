@@ -109,6 +109,13 @@ export struct PagerOpenInfo {
     wal_header: WalHeader,
 }
 
+export struct PagerSession {
+    db: File,
+    wal: File,
+    info: PagerOpenInfo,
+    active: bool,
+}
+
 export struct PagerUpgradePlan {
     target_format_version: u32,
     target_min_reader_version: u32,
@@ -866,6 +873,16 @@ fn pager_apply_page_write_record(db: &File, page_size: u32, page_limit: u32, rec
     try pager_write_page_to_db(db, page_size, page_write.page_id, page_write.payload);
 }
 
+fn pager_apply_page_write_record_unchecked(db: &File, page_size: u32, page_limit: u32, record: &[byte]) !void {
+    const page_write: WalPageWriteView = wal_decode_page_write(record) catch {
+        return error.PagerInvalidWalRecord;
+    };
+    if page_write.page_id < 2u32 || page_write.page_id >= page_limit || page_write.page_size != page_size {
+        return error.PagerInvalidWalRecord;
+    }
+    try pager_write_page_to_db(db, page_size, page_write.page_id, page_write.payload);
+}
+
 fn pager_apply_batch_page_writes(db: &File, page_size: u32, page_limit: u32, batch: &WalBatch) !void {
     if batch == null {
         return error.PagerInvalidWalRecord;
@@ -887,6 +904,32 @@ fn pager_apply_batch_page_writes(db: &File, page_size: u32, page_limit: u32, bat
             return error.PagerInvalidWalRecord;
         }) == WalRecordType.PAGE_WRITE {
             try pager_apply_page_write_record(db, page_size, page_limit, record);
+        }
+        off = off + total;
+    }
+}
+
+fn pager_apply_batch_page_writes_unchecked(db: &File, page_size: u32, page_limit: u32, batch: &WalBatch) !void {
+    if batch == null {
+        return error.PagerInvalidWalRecord;
+    }
+    var off: usize = 0usize;
+    while off < batch.used_bytes {
+        const header: WalRecordHeader = wal_record_header_decode(batch.bytes[off: batch.used_bytes - off]) catch {
+            return error.PagerInvalidWalRecord;
+        };
+        const total: usize = header.record_len as usize;
+        if off + total > batch.used_bytes {
+            return error.PagerInvalidWalRecord;
+        }
+        const record: &[byte] = batch.bytes[off: total];
+        if !wal_record_checksum_valid(record) {
+            return error.PagerInvalidWalRecord;
+        }
+        if (wal_record_type(&header) catch {
+            return error.PagerInvalidWalRecord;
+        }) == WalRecordType.PAGE_WRITE {
+            try pager_apply_page_write_record_unchecked(db, page_size, page_limit, record);
         }
         off = off + total;
     }
@@ -1218,7 +1261,7 @@ export fn pager_create_at_stem(stem: &const byte, page_size: u32) !PagerOpenInfo
     };
 }
 
-export fn pager_open_at_stem(stem: &const byte) !PagerOpenInfo {
+export fn pager_open_session_at_stem(stem: &const byte) !PagerSession {
     var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
     var wal_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
     try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
@@ -1239,12 +1282,34 @@ export fn pager_open_at_stem(stem: &const byte) !PagerOpenInfo {
     try pager_validate_wal_header_for_meta(&wal_header, &selected_meta);
     const meta: MetaPage = try pager_recover_wal(&db, &wal, &selected_meta);
 
-    try os_close(&wal);
-    try os_close(&db);
+    return PagerSession{
+        db: db,
+        wal: wal,
+        info: PagerOpenInfo{
+            meta: meta,
+            wal_header: wal_header,
+        },
+        active: true,
+    };
+}
 
+export fn pager_close_session(session: &PagerSession) void {
+    if session == null || !session.active {
+        return;
+    }
+    _ = os_close(&session.wal) catch {};
+    _ = os_close(&session.db) catch {};
+    session.active = false;
+}
+
+export fn pager_open_at_stem(stem: &const byte) !PagerOpenInfo {
+    var session: PagerSession = try pager_open_session_at_stem(stem);
+    defer {
+        pager_close_session(&session);
+    }
     return PagerOpenInfo{
-        meta: meta,
-        wal_header: wal_header,
+        meta: session.info.meta,
+        wal_header: session.info.wal_header,
     };
 }
 
@@ -1261,23 +1326,13 @@ export fn catalog_create_db_at_stem(stem: &const byte, page_size: u32) !void {
     _ = try pager_create_at_stem(stem, page_size);
 }
 
-export fn pager_read_page_with_info_at_stem(stem: &const byte, info: &PagerOpenInfo, page_id: u32, page_buf: &[byte]) !void {
-    if info == null {
+export fn pager_read_page_with_file(db: &File, info: &PagerOpenInfo, page_id: u32, page_buf: &[byte]) !void {
+    if db == null || info == null {
         return error.PagerInvalidPageBuffer;
     }
     try pager_validate_page_access(&info.meta, page_id, page_buf);
-
-    var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
-    try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
-
-    var db: File = try pager_open_file(&db_path[0], O_RDONLY, 0);
-    errdefer {
-        _ = os_close(&db) catch {};
-    }
-
-    try pager_seek_exact(&db, pager_page_offset(info.meta.page_size, page_id) as i64);
-    try pager_read_exact(&db, page_buf);
-    try os_close(&db);
+    try pager_seek_exact(db, pager_page_offset(info.meta.page_size, page_id) as i64);
+    try pager_read_exact(db, page_buf);
 
     const header: &PageHeader = page_header_from_buf(page_buf);
     if header == null || !page_bounds_valid(header, info.meta.page_size) {
@@ -1288,8 +1343,24 @@ export fn pager_read_page_with_info_at_stem(stem: &const byte, info: &PagerOpenI
     }
 }
 
-export fn catalog_load_with_info_at_stem(stem: &const byte, info: &PagerOpenInfo) !CatalogSnapshot {
+export fn pager_read_page_with_info_at_stem(stem: &const byte, info: &PagerOpenInfo, page_id: u32, page_buf: &[byte]) !void {
     if info == null {
+        return error.PagerInvalidPageBuffer;
+    }
+    var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
+
+    var db: File = try pager_open_file(&db_path[0], O_RDONLY, 0);
+    errdefer {
+        _ = os_close(&db) catch {};
+    }
+
+    try pager_read_page_with_file(&db, info, page_id, page_buf);
+    try os_close(&db);
+}
+
+export fn catalog_load_with_file(db: &File, info: &PagerOpenInfo) !CatalogSnapshot {
+    if db == null || info == null {
         return error.PagerInvalidPageBuffer;
     }
     if info.meta.catalog_root < 2u32 || info.meta.catalog_root >= info.meta.page_count {
@@ -1303,9 +1374,25 @@ export fn catalog_load_with_info_at_stem(stem: &const byte, info: &PagerOpenInfo
         page: [],
     };
     const page_buf: &[byte] = try catalog_snapshot_page(&snapshot);
-    try pager_read_page_with_info_at_stem(stem, info, info.meta.catalog_root, page_buf);
+    try pager_read_page_with_file(db, info, info.meta.catalog_root, page_buf);
     const view: CatalogView = try catalog_view_from_page(page_buf);
     snapshot.root = view.root;
+    return snapshot;
+}
+
+export fn catalog_load_with_info_at_stem(stem: &const byte, info: &PagerOpenInfo) !CatalogSnapshot {
+    if info == null {
+        return error.PagerInvalidPageBuffer;
+    }
+    var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
+
+    var db: File = try pager_open_file(&db_path[0], O_RDONLY, 0);
+    errdefer {
+        _ = os_close(&db) catch {};
+    }
+    const snapshot: CatalogSnapshot = try catalog_load_with_file(&db, info);
+    try os_close(&db);
     return snapshot;
 }
 
@@ -1652,8 +1739,8 @@ export fn checkpoint_should_trigger_interval(policy: &CheckpointPolicy, elapsed_
     return policy != null && has_pending_writes && elapsed_ms >= policy.max_checkpoint_interval_ms;
 }
 
-export fn pager_commit_batch_with_info_at_stem(stem: &const byte, info: &PagerOpenInfo, batch: &WalBatch, checkpoint_policy: &CheckpointPolicy) !PagerOpenInfo {
-    if info == null {
+export fn pager_commit_batch_with_open_files_at_stem(stem: &const byte, info: &PagerOpenInfo, db: &File, wal_file: &File, batch: &WalBatch, checkpoint_policy: &CheckpointPolicy) !PagerOpenInfo {
+    if info == null || db == null || wal_file == null {
         return error.PagerInvalidWalRecord;
     }
     const commit: WalCommit = wal_batch_extract_commit(batch) catch {
@@ -1663,31 +1750,16 @@ export fn pager_commit_batch_with_info_at_stem(stem: &const byte, info: &PagerOp
         return error.PagerInvalidWalRecord;
     }
 
-    var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
-    var wal_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
-    try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
-    try pager_build_wal_path(stem, wal_path[0: NOSQLITE_PATH_BUF_SIZE]);
-
-    var db: File = try pager_open_file(&db_path[0], O_RDWR, 0);
-    errdefer {
-        _ = os_close(&db) catch {};
-    }
-    var wal_file: File = try pager_open_file(&wal_path[0], O_RDWR, 0);
-    errdefer {
-        _ = os_close(&wal_file) catch {};
-    }
-
-    const wal_bytes: u64 = try pager_append_batch_to_wal(&wal_file, batch, true);
-    try pager_apply_batch_page_writes(&db, info.meta.page_size, commit.page_count, batch);
-    try pager_sync_db(&db);
-
+    const wal_bytes: u64 = try pager_append_batch_to_wal(wal_file, batch, true);
+    // Live commit always publishes strictly newer pages for the single writer, so
+    // we can skip the old-page LSN re-read used by WAL recovery replay.
+    try pager_apply_batch_page_writes_unchecked(db, info.meta.page_size, commit.page_count, batch);
+    try pager_sync_db(db);
     const next_meta: MetaPage = try pager_make_commit_meta(&info.meta, &commit);
-    try pager_write_meta_page(&db, &next_meta);
-    try pager_sync_db(&db);
+    try pager_write_meta_page(db, &next_meta);
+    try pager_sync_db(db);
 
-    const db_bytes: u64 = try pager_file_size(&db);
-    try os_close(&wal_file);
-    try os_close(&db);
+    const db_bytes: u64 = try pager_file_size(db);
 
     if checkpoint_should_trigger_soft(checkpoint_policy, wal_bytes) ||
         checkpoint_should_trigger_hard(checkpoint_policy, wal_bytes) ||
@@ -1699,6 +1771,29 @@ export fn pager_commit_batch_with_info_at_stem(stem: &const byte, info: &PagerOp
         meta: next_meta,
         wal_header: info.wal_header,
     };
+}
+
+export fn pager_commit_batch_with_info_at_stem(stem: &const byte, info: &PagerOpenInfo, batch: &WalBatch, checkpoint_policy: &CheckpointPolicy) !PagerOpenInfo {
+    var db_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    var wal_path: [byte: NOSQLITE_PATH_BUF_SIZE] = [];
+    try pager_build_db_path(stem, db_path[0: NOSQLITE_PATH_BUF_SIZE]);
+    try pager_build_wal_path(stem, wal_path[0: NOSQLITE_PATH_BUF_SIZE]);
+
+    var db: File = try pager_open_file(&db_path[0], O_RDWR, 0);
+    errdefer {
+        _ = os_close(&db) catch {};
+    }
+    defer {
+        _ = os_close(&db) catch {};
+    }
+    var wal_file: File = try pager_open_file(&wal_path[0], O_RDWR, 0);
+    errdefer {
+        _ = os_close(&wal_file) catch {};
+    }
+    defer {
+        _ = os_close(&wal_file) catch {};
+    }
+    return try pager_commit_batch_with_open_files_at_stem(stem, info, &db, &wal_file, batch, checkpoint_policy);
 }
 
 export fn pager_commit_batch_at_stem(stem: &const byte, batch: &WalBatch, checkpoint_policy: &CheckpointPolicy) !PagerOpenInfo {
