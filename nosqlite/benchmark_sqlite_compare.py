@@ -378,7 +378,7 @@ def write_markdown(path: Path, docs: int, avg_doc_bytes: int, iterations: int, r
         "",
         f"日期：{time.strftime('%Y-%m-%d')}",
         "",
-        "本报告用于把 NoSQLite v1.5.0 的 v0 原型 benchmark 与 SQLite JSON1 做同机横向校准。",
+        "本报告用于把 NoSQLite v1.7.0 的 v0 原型 benchmark 与 SQLite JSON1 做同机横向校准。",
         "",
         "## 运行口径",
         "",

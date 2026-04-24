@@ -2,7 +2,7 @@
 
 日期：2026-04-24
 
-本报告用于把 NoSQLite v1.5.0 的 v0 原型 benchmark 与 SQLite JSON1 做同机横向校准。
+本报告用于把 NoSQLite v1.7.0 的 v0 原型 benchmark 与 SQLite JSON1 做同机横向校准。
 
 ## 运行口径
 
@@ -24,27 +24,27 @@
 
 | case | mode | NoSQLite p50 us | SQLite p50 us | p50 对比 | NoSQLite p95 us | SQLite p95 us |
 | --- | --- | ---: | ---: | --- | ---: | ---: |
-| primary_lookup | warm-read | 1 | 3 | NoSQLite faster x3.00 | 1 | 4 |
-| seq_scan_filter | warm-read | 2 | 4 | NoSQLite faster x2.00 | 2 | 6 |
-| durable_insert | durable-write | 65 | 60 | SQLite faster x1.08 | 89 | 83 |
-| dirty_wal_recovery_open | recovery | 74 | 71 | SQLite faster x1.04 | 95 | 111 |
-| long_query_concurrent_commit | durable-write | 77 | 67 | SQLite faster x1.15 | 90 | 73 |
+| primary_lookup | warm-read | 1 | 3 | NoSQLite faster x3.00 | 2 | 4 |
+| seq_scan_filter | warm-read | 1 | 4 | NoSQLite faster x4.00 | 2 | 6 |
+| durable_insert | durable-write | 74 | 77 | NoSQLite faster x1.04 | 116 | 116 |
+| dirty_wal_recovery_open | recovery | 83 | 148 | NoSQLite faster x1.78 | 106 | 205 |
+| long_query_concurrent_commit | durable-write | 82 | 68 | SQLite faster x1.21 | 94 | 88 |
 
 ## 原始指标
 
 | engine | case | mode | iters | p50 us | p95 us | p99 us | docs/s | MiB/s | peak KiB | notes |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| nosqlite | primary_lookup | warm-read | 10 | 1 | 1 | 1 | 1000000.00 | 976.56 | 8308 | scaled prototype dataset: docs=3 < 100000 |
-| nosqlite | seq_scan_filter | warm-read | 10 | 2 | 2 | 2 | 1250000.00 | 1220.70 | 12576 | scaled prototype dataset: docs=3 < 100000 |
-| nosqlite | durable_insert | durable-write | 3 | 65 | 89 | 89 | 13761.47 | 13.44 | 12020 | scaled prototype dataset: docs=3 < 100000 |
-| nosqlite | recovery_open_with_auto_checkpoint | recovery | 10 | 14 | 126 | 126 | 119047.62 | 116.26 | 13704 | prepare once; first sample includes recovery+checkpoint, later samples reopen the checkpointed store; scaled prototype dataset: docs=3 < 100000 |
-| nosqlite | dirty_wal_recovery_open | recovery | 10 | 74 | 95 | 95 | 38560.41 | 37.66 | 21888 | each sample checkpoints the base store, then recreates one dirty WAL txn before measuring the first reopen; scaled prototype dataset: docs=3 < 100000 |
-| nosqlite | long_query_concurrent_commit | durable-write | 10 | 77 | 90 | 90 | 12820.51 | 12.52 | 22740 | scaled prototype dataset: docs=3 < 100000 |
-| sqlite | primary_lookup | warm-read | 10 | 3 | 4 | 4 | 312500.00 | 305.18 | 19508 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL |
-| sqlite | seq_scan_filter | warm-read | 10 | 4 | 6 | 6 | 681818.18 | 665.84 | 19600 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL |
-| sqlite | durable_insert | durable-write | 3 | 60 | 83 | 83 | 15384.62 | 15.02 | 19764 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL |
-| sqlite | dirty_wal_recovery_open | recovery | 10 | 71 | 111 | 111 | 39735.10 | 38.80 | 19892 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL; each sample checkpoints the base store, then keeps the writer connection open with one dirty WAL txn until the measured reopen |
-| sqlite | long_query_concurrent_commit | durable-write | 10 | 67 | 73 | 73 | 14880.95 | 14.53 | 19924 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL; writer measured while a read transaction is pinned |
+| nosqlite | primary_lookup | warm-read | 10 | 1 | 2 | 2 | 909090.91 | 887.78 | 17624 | scaled prototype dataset: docs=3 < 100000 |
+| nosqlite | seq_scan_filter | warm-read | 10 | 1 | 2 | 2 | 1538461.54 | 1502.40 | 17224 | scaled prototype dataset: docs=3 < 100000 |
+| nosqlite | durable_insert | durable-write | 3 | 74 | 116 | 116 | 11406.84 | 11.14 | 19708 | scaled prototype dataset: docs=3 < 100000 |
+| nosqlite | recovery_open_with_auto_checkpoint | recovery | 10 | 15 | 208 | 208 | 86705.20 | 84.67 | 17924 | prepare once; first sample includes recovery+checkpoint, later samples reopen the checkpointed store; scaled prototype dataset: docs=3 < 100000 |
+| nosqlite | dirty_wal_recovery_open | recovery | 10 | 83 | 106 | 106 | 33707.87 | 32.92 | 21728 | each sample checkpoints the base store, then recreates one dirty WAL txn before measuring the first reopen; scaled prototype dataset: docs=3 < 100000 |
+| nosqlite | long_query_concurrent_commit | durable-write | 10 | 82 | 94 | 94 | 12135.92 | 11.85 | 22696 | scaled prototype dataset: docs=3 < 100000 |
+| sqlite | primary_lookup | warm-read | 10 | 3 | 4 | 4 | 312500.00 | 305.18 | 19048 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL |
+| sqlite | seq_scan_filter | warm-read | 10 | 4 | 6 | 6 | 681818.18 | 665.84 | 19736 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL |
+| sqlite | durable_insert | durable-write | 3 | 77 | 116 | 116 | 12000.00 | 11.72 | 19612 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL |
+| sqlite | dirty_wal_recovery_open | recovery | 10 | 148 | 205 | 205 | 19960.08 | 19.49 | 19764 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL; each sample checkpoints the base store, then keeps the writer connection open with one dirty WAL txn until the measured reopen |
+| sqlite | long_query_concurrent_commit | durable-write | 10 | 68 | 88 | 88 | 13947.00 | 13.62 | 19756 | SQLite JSON1 baseline: id INTEGER PRIMARY KEY, doc JSON TEXT, WAL, synchronous=FULL; writer measured while a read transaction is pinned |
 
 ## 解释边界
 

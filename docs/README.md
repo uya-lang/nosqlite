@@ -4,6 +4,7 @@
 - [详细设计](./nosqlite-design.md)
 - [里程碑发布说明](./nosqlite-release-v1.5.0.md)
 - [v1.6.0 性能发布说明](./nosqlite-release-v1.6.0.md)
+- [v1.7.0 recovery/压力发布说明](./nosqlite-release-v1.7.0.md)
 - [实施 TODO](./nosqlite-todo.md)
 - [Definition of Done 验收矩阵](./nosqlite-definition-of-done.md)
 - [压力测试报告](./nosqlite-stress-report.md)
