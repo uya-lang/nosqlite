@@ -91,3 +91,4 @@ notes="scaled prototype dataset: docs=3 < 100000" ratio_pct_p50=100 ratio_pct_p9
 
 - 第 18 节已经明确标注为“工程预算版”，并使用 `floor / target / stretch` 三档制。
 - 当前仓库的存储原型仍然带有明显的容量上限，因此大规模 benchmark 需要在能力达标后再用同一格式补实测数据。
+- recovery 口径需要单独标明是 `dirty_wal_recovery_open` 还是 `recovery_open_with_auto_checkpoint`，不能再用模糊的 `recovery_open` 混写。

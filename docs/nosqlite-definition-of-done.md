@@ -20,7 +20,7 @@ bash nosqlite/tests/verify_definition_of_done.sh
 | 已提交事务在断电恢复后可见 | `nosqlite/tests/storage/test_storage_wal_runtime.uya` 的 committed redo；`nosqlite/tests/exec/test_exec_runtime.uya` 的 reopen persistence |
 | 长查询执行期间提交不会打断已有读者 | `nosqlite/tests/exec/test_exec_runtime.uya` 的 commit view / retired view tests；`docs/nosqlite-benchmark-v0.json` 中 `long_query_concurrent_commit` 达到 `floor` |
 | 同时具备 `db_query` 和 `db_query_cursor` | `nosqlite/tests/exec/test_exec_runtime.uya` 同时覆盖物化结果和流式 cursor；`docs/nosqlite-api-draft.md` 固定两个 API 名称 |
-| 点查、顺扫、写入、恢复四类 benchmark 至少达到第 18 节 `floor` | `docs/nosqlite-benchmark-v0.json`：`primary_lookup`、`seq_scan_filter`、`durable_insert`、`recovery_open` 的 `floor_status` 均为 `pass` |
+| 点查、顺扫、写入、恢复四类 benchmark 至少达到第 18 节 `floor` | `docs/nosqlite-benchmark-v0.json`：`primary_lookup`、`seq_scan_filter`、`durable_insert`、`dirty_wal_recovery_open` 的 `floor_status` 均为 `pass`；`recovery_open_with_auto_checkpoint` 作为补充口径保留 |
 | 大整数与精确小数无静默降精度 | `nosqlite/tests/doc/test_docblob_codec.uya` 的 round-trip；`nosqlite/tests/storage/test_phase11_stability.uya` 的 numeric precision/order contract |
 | 快照与 WAL 资源在生产策略下保持有界 | `nosqlite/tests/storage/test_storage_page_basics.uya` 的 snapshot pressure/checkpoint policy；`nosqlite/tests/storage/test_storage_wal_runtime.uya` 的 checkpoint truncate 和 soft-limit checkpoint；`nosqlite/tests/exec/test_exec_runtime.uya` 的 hard pressure cleanup；`nosqlite/tests/exec/test_stress_runtime.uya` 的 repeated pressure cycle |
 | 文件格式升级/拒绝打开不兼容版本行为经过验证 | `nosqlite/tests/storage/test_phase13_format_upgrade.uya`；`docs/nosqlite-format-compat.md` |

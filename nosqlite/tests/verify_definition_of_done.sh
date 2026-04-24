@@ -42,7 +42,7 @@ required = {
     "primary_lookup",
     "seq_scan_filter",
     "durable_insert",
-    "recovery_open",
+    "dirty_wal_recovery_open",
     "long_query_concurrent_commit",
 }
 data = json.loads(Path("docs/nosqlite-benchmark-v0.json").read_text())

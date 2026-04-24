@@ -180,7 +180,7 @@ test "nosqlite_storage_wal_recovery_truncates_bad_tail_after_commit" {
     try assert_eq_bool((try pager_wal_size_at_stem(TEST_STEM_TRUNCATE)) > good_size, true);
 
     _ = try pager_open_at_stem(TEST_STEM_TRUNCATE);
-    try assert_eq_u64(try pager_wal_size_at_stem(TEST_STEM_TRUNCATE), good_size);
+    try assert_eq_u64(try pager_wal_size_at_stem(TEST_STEM_TRUNCATE), WAL_HEADER_BYTES);
     try assert_page_payload(TEST_STEM_TRUNCATE, &"ok"[0: 2]);
 }
 

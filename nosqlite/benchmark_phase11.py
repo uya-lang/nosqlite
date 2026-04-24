@@ -16,7 +16,8 @@ CASES = [
     ("warm_primary_lookup", "warm-read", "primary_lookup"),
     ("warm_seq_scan", "warm-read", "seq_scan_filter"),
     ("durable_insert", "durable-write", "durable_insert"),
-    ("recovery_open", "recovery", "recovery_open"),
+    ("recovery_open_with_auto_checkpoint", "recovery", "recovery_open_with_auto_checkpoint"),
+    ("dirty_wal_recovery_open", "recovery", "dirty_wal_recovery_open"),
     ("long_query_concurrent_commit", "durable-write", "long_query_concurrent_commit"),
 ]
 
@@ -36,7 +37,12 @@ THRESHOLDS = {
         "target": {"docs_per_s_min": 48.0, "p95_us_max": 25000},
         "stretch": {"docs_per_s_min": 55.0, "p95_us_max": 22000},
     },
-    "recovery_open": {
+    "recovery_open_with_auto_checkpoint": {
+        "floor": {"docs_per_s_min": 30.0, "p95_us_max": 110000},
+        "target": {"docs_per_s_min": 32.0, "p95_us_max": 100000},
+        "stretch": {"docs_per_s_min": 35.0, "p95_us_max": 90000},
+    },
+    "dirty_wal_recovery_open": {
         "floor": {"docs_per_s_min": 30.0, "p95_us_max": 110000},
         "target": {"docs_per_s_min": 32.0, "p95_us_max": 100000},
         "stretch": {"docs_per_s_min": 35.0, "p95_us_max": 90000},
@@ -140,6 +146,21 @@ def meets_threshold(metrics: dict, limits: dict) -> bool:
     return True
 
 
+def benchmark_notes(case_env: str, docs: int) -> str:
+    notes = []
+    if case_env == "recovery_open_with_auto_checkpoint":
+        notes.append(
+            "prepare once; first sample includes recovery+checkpoint, later samples reopen the checkpointed store"
+        )
+    elif case_env == "dirty_wal_recovery_open":
+        notes.append("each sample checkpoints the base store, then recreates one dirty WAL txn before measuring the first reopen")
+    if docs < 100_000:
+        notes.append(f"scaled prototype dataset: docs={docs} < 100000")
+    if not notes:
+        notes.append("v0 prototype baseline")
+    return "; ".join(notes)
+
+
 def run_case(root: Path, case_env: str, docs: int, avg_doc_bytes: int, iterations: int) -> dict:
     effective_iterations = iterations
     if case_env == "durable_insert":
@@ -180,11 +201,9 @@ def run_case(root: Path, case_env: str, docs: int, avg_doc_bytes: int, iteration
     docs_per_s = docs_total / elapsed_s if elapsed_s else 0.0
     mib_per_s = (bytes_total / (1024 * 1024)) / elapsed_s if elapsed_s else 0.0
 
-    notes = "v0 prototype baseline"
+    notes = benchmark_notes(case_env, docs)
     if skip_reason:
         notes = f"skip: {skip_reason}"
-    elif docs < 100_000:
-        notes = f"scaled prototype dataset: docs={docs} < 100000"
 
     metrics = {
         "runner_info": info,
@@ -214,8 +233,10 @@ def run_case(root: Path, case_env: str, docs: int, avg_doc_bytes: int, iteration
         thresholds = THRESHOLDS["seq_scan_filter"]
     elif case_env == "durable_insert":
         thresholds = THRESHOLDS["durable_insert"]
-    elif case_env == "recovery_open":
-        thresholds = THRESHOLDS["recovery_open"]
+    elif case_env == "recovery_open_with_auto_checkpoint":
+        thresholds = THRESHOLDS["recovery_open_with_auto_checkpoint"]
+    elif case_env == "dirty_wal_recovery_open":
+        thresholds = THRESHOLDS["dirty_wal_recovery_open"]
     elif case_env == "long_query_concurrent_commit":
         thresholds = THRESHOLDS["long_query_concurrent_commit"]
 
@@ -266,6 +287,7 @@ def write_markdown(path: Path, docs: int, avg_doc_bytes: int, iterations: int, r
         f"- 平均文档大小：`{avg_doc_bytes}` bytes",
         f"- 请求迭代数：`{iterations}`",
         "- warm-read 口径：计时前先执行一次未计时 warmup；primary lookup 会预热本轮会访问到的主键集合。",
+        "- recovery 口径：`dirty_wal_recovery_open` 每个 sample 都先 checkpoint base store，再制造一个 dirty WAL txn；`recovery_open_with_auto_checkpoint` prepare 一次后重复 reopen，用于观察 auto-checkpoint 后快路径。",
         f"- 说明：当前原型仍受 `DB_MAX_ROWS_PER_COLLECTION` 容量限制，下面的 `floor/target/stretch` 已切换为 v0 原型基线阈值，不是第 18 节最初的工程预算值。",
         "",
         "| case | mode | iters | p50 us | p95 us | p99 us | docs/s | MiB/s | peak KiB | floor | target | stretch | notes |",

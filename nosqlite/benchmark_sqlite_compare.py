@@ -17,7 +17,7 @@ SQLITE_CASES = [
     ("warm_primary_lookup", "warm-read", "primary_lookup"),
     ("warm_seq_scan", "warm-read", "seq_scan_filter"),
     ("durable_insert", "durable-write", "durable_insert"),
-    ("recovery_open", "recovery", "recovery_open"),
+    ("dirty_wal_recovery_open", "recovery", "dirty_wal_recovery_open"),
     ("long_query_concurrent_commit", "durable-write", "long_query_concurrent_commit"),
 ]
 
@@ -88,6 +88,18 @@ def sqlite_prepare_db(path: Path, docs: int, avg_doc_bytes: int) -> None:
             sqlite_insert_doc(conn, doc_id, avg_doc_bytes)
     finally:
         conn.close()
+
+
+def sqlite_prepare_dirty_wal(path: Path, docs: int, avg_doc_bytes: int) -> sqlite3.Connection:
+    cleanup_sqlite_path(path)
+    conn = sqlite_connect(path)
+    sqlite_create_schema(conn)
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.execute("BEGIN")
+    for doc_id in range(1, docs + 1):
+        sqlite_insert_doc(conn, doc_id, avg_doc_bytes)
+    conn.execute("COMMIT")
+    return conn
 
 
 def elapsed_us(start_ns: int) -> int:
@@ -189,23 +201,30 @@ def run_sqlite_case_inline(case_env: str, docs: int, avg_doc_bytes: int, iterati
         finally:
             conn.close()
             cleanup_sqlite_path(path)
-    elif case_env == "recovery_open":
-        sqlite_prepare_db(path, docs, avg_doc_bytes)
+    elif case_env == "dirty_wal_recovery_open":
         try:
             for _ in range(iterations):
-                start_ns = time.perf_counter_ns()
-                conn = sqlite_connect(path)
+                keeper = sqlite_prepare_dirty_wal(path, docs, avg_doc_bytes)
                 try:
-                    count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+                    wal_path = Path(str(path) + "-wal")
+                    if not wal_path.exists() or wal_path.stat().st_size == 0:
+                        raise RuntimeError("sqlite dirty WAL case failed to preserve a WAL file")
+                    start_ns = time.perf_counter_ns()
+                    conn = sqlite_connect(path)
+                    try:
+                        count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+                    finally:
+                        conn.close()
+                    us = elapsed_us(start_ns)
+                    if count != docs:
+                        raise RuntimeError("sqlite dirty WAL recovery open saw unexpected row count")
+                    samples.append({"us": us, "docs": docs, "bytes": docs * avg_doc_bytes})
                 finally:
-                    conn.close()
-                us = elapsed_us(start_ns)
-                if count != docs:
-                    raise RuntimeError("sqlite recovery open saw unexpected row count")
-                samples.append({"us": us, "docs": docs, "bytes": docs * avg_doc_bytes})
+                    keeper.close()
+                    cleanup_sqlite_path(path)
         finally:
             cleanup_sqlite_path(path)
-        notes += "; open includes schema/count read"
+        notes += "; each sample checkpoints the base store, then keeps the writer connection open with one dirty WAL txn until the measured reopen"
     elif case_env == "long_query_concurrent_commit":
         effective_iterations = iterations
         for i in range(iterations):
@@ -373,8 +392,9 @@ def write_markdown(path: Path, docs: int, avg_doc_bytes: int, iterations: int, r
         "- SQLite durable 配置：`journal_mode=WAL`，`synchronous=FULL`",
         "- NoSQLite 口径：复用 `nosqlite/benchmark_phase11.py` 的 Uya C runner（`-O2` 重链接）与 v0 原型数据集",
         "- warm-read 口径：计时前先执行一次未计时 warmup；primary lookup 会预热本轮会访问到的主键集合",
+        "- 对比摘要中的 recovery case 固定使用 `dirty_wal_recovery_open`；NoSQLite 的 `recovery_open_with_auto_checkpoint` 只保留在原始指标里做补充观察",
         "",
-        "这不是生产级性能宣判：SQLite 是成熟 C 实现，NoSQLite 当前是 Uya/C v0 原型，且仍受单页 collection 容量限制。本报告主要用于给后续优化建立参照物。",
+        f"这不是生产级性能宣判：SQLite 是成熟 C 实现，NoSQLite 当前是 Uya/C v0 原型，且 benchmark 仍使用 `{docs}` 文档小规模原型数据集。本报告主要用于给后续优化建立参照物。",
         "",
         "## 摘要",
         "",
@@ -411,7 +431,9 @@ def write_markdown(path: Path, docs: int, avg_doc_bytes: int, iterations: int, r
         "",
         "- NoSQLite 的 primary lookup 走通用 SQL parser/binder/planner/executor，并用主键 B+Tree 定位 row slot；SQLite 走 `INTEGER PRIMARY KEY`。",
         "- NoSQLite 的 seq scan 走通用 `$.age` 谓词执行；SQLite 使用 `json_extract(doc, '$.age')`。",
-        "- SQLite 的 recovery/open 样本包含 connect、WAL/同步 PRAGMA 设置和一次 `COUNT(*)` 读，用于避免只测 lazy connect。",
+        "- NoSQLite durable commit 使用 WAL `fdatasync` 作为提交边界，数据页/meta 页延迟到 recovery/checkpoint 物化；这不是跳过持久化。",
+        "- NoSQLite recovery 在完整校验并回放 WAL 后执行真实 checkpoint（同步 DB、写 checkpoint meta、截断 WAL）；原始指标里额外保留 `recovery_open_with_auto_checkpoint`，用于观察 recovery 触发的后续 reopen 快路径。",
+        "- SQLite 的 dirty WAL case 先 checkpoint schema base，再用一个事务写入全部样本并保持 writer 连接不关闭，确保 prepare 结束后仍保留一条 dirty WAL txn；样本仍包含 connect、WAL/同步 PRAGMA 设置和一次 `COUNT(*)` 读。",
         "- long query concurrent commit 在 SQLite 侧用两个连接和显式 read transaction 固定 reader snapshot。",
         "- durable/recovery p95 保留首个冷 fdatasync/checkpoint 样本，没有剔除慢样本。",
         "- SQLite peak RSS 是独立 Python 子进程级采样，包含 Python 解释器和 sqlite3 绑定开销。",

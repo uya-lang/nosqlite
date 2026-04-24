@@ -1621,7 +1621,10 @@ v1 基准数据集定义如下：
 
 ### 18.5 恢复时间
 
-当前基线对应 `recovery / recovery_open`，测量的是小规模 WAL 下的 reopen+recovery 路径。
+当前恢复基线改成两条：
+
+- `recovery / dirty_wal_recovery_open`：每个 sample 都重新制造 dirty WAL，再测首次 reopen+recovery
+- `recovery / recovery_open_with_auto_checkpoint`：prepare 一次后重复 reopen；首个 sample 包含 recovery+checkpoint，后续 sample 反映 recovery 触发的 auto-checkpoint 快路径
 
 | 指标 | floor | target | stretch |
 |------|-------|--------|---------|
