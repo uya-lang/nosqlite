@@ -29,7 +29,7 @@ use lib.index.btree_page.btree_internal_child_at;
 use lib.index.btree_page.btree_internal_child_index;
 use lib.index.btree_page.btree_internal_rewrite;
 
-export const PRIMARY_BTREE_MAX_PAGES: usize = 256;
+export const PRIMARY_BTREE_MAX_PAGES: usize = 64;
 const PRIMARY_BTREE_MAX_LEAF_ENTRIES: usize = 513;
 const PRIMARY_BTREE_MAX_INTERNAL_KEYS: usize = 513;
 const PRIMARY_BTREE_MAX_CHILDREN: usize = 514;
@@ -294,20 +294,37 @@ fn primary_btree_leftmost_leaf(tree: &PrimaryBTree) !u32 {
     return error.BTreeInvalidPage;
 }
 
-export fn primary_btree_init(page_size: u32) !PrimaryBTree {
+export fn primary_btree_reset(tree: &PrimaryBTree, page_size: u32) !void {
+    if tree == null {
+        return error.BTreeInvalidPage;
+    }
     _ = try btree_leaf_capacity(page_size);
     _ = try btree_internal_capacity(page_size);
 
+    tree.page_size = page_size;
+    tree.root_page_id = 0u32;
+    tree.page_count = 0u32;
+    var i: usize = 0usize;
+    while i < PRIMARY_BTREE_MAX_PAGES {
+        tree.pages[i].used = false;
+        tree.pages[i].page_id = 0u32;
+        i = i + 1usize;
+    }
+
+    const root_page_id: u32 = try primary_btree_alloc_page(tree);
+    const root_page: &[byte] = try primary_btree_page(tree, root_page_id);
+    try btree_leaf_init(root_page);
+    tree.root_page_id = root_page_id;
+}
+
+export fn primary_btree_init(page_size: u32) !PrimaryBTree {
     var tree: PrimaryBTree = PrimaryBTree{
-        page_size: page_size,
+        page_size: 0u32,
         root_page_id: 0u32,
         page_count: 0u32,
         pages: [],
     };
-    const root_page_id: u32 = try primary_btree_alloc_page(&tree);
-    const root_page: &[byte] = try primary_btree_page(&tree, root_page_id);
-    try btree_leaf_init(root_page);
-    tree.root_page_id = root_page_id;
+    try primary_btree_reset(&tree, page_size);
     return tree;
 }
 

@@ -137,6 +137,11 @@ def run_sqlite_case_inline(case_env: str, docs: int, avg_doc_bytes: int, iterati
         sqlite_prepare_db(path, docs, avg_doc_bytes)
         conn = sqlite_connect(path)
         try:
+            for warm_id in range(1, docs + 1):
+                conn.execute(
+                    "SELECT id, json_extract(doc, '$.name') FROM users WHERE id = ? LIMIT 1",
+                    (warm_id,),
+                ).fetchall()
             for i in range(iterations):
                 target_id = (i % docs) + 1
                 start_ns = time.perf_counter_ns()
@@ -155,6 +160,9 @@ def run_sqlite_case_inline(case_env: str, docs: int, avg_doc_bytes: int, iterati
         sqlite_prepare_db(path, docs, avg_doc_bytes)
         conn = sqlite_connect(path)
         try:
+            conn.execute(
+                "SELECT id FROM users WHERE json_extract(doc, '$.age') >= 18 LIMIT 64"
+            ).fetchall()
             for _ in range(iterations):
                 start_ns = time.perf_counter_ns()
                 rows = conn.execute(
@@ -364,6 +372,7 @@ def write_markdown(path: Path, docs: int, avg_doc_bytes: int, iterations: int, r
         "- SQLite 表结构：`users(id INTEGER PRIMARY KEY, doc TEXT CHECK(json_valid(doc)))`",
         "- SQLite durable 配置：`journal_mode=WAL`，`synchronous=FULL`",
         "- NoSQLite 口径：复用 `nosqlite/benchmark_phase11.py` 的 Uya debug runner 与 v0 原型数据集",
+        "- warm-read 口径：计时前先执行一次未计时 warmup；primary lookup 会预热本轮会访问到的主键集合",
         "",
         "这不是生产级性能宣判：SQLite 是成熟 C 实现，NoSQLite 当前是 Uya debug 原型，且仍受单页 collection 容量限制。本报告主要用于给后续优化建立参照物。",
         "",
@@ -400,8 +409,8 @@ def write_markdown(path: Path, docs: int, avg_doc_bytes: int, iterations: int, r
         "",
         "## 解释边界",
         "",
-        "- NoSQLite 的 primary lookup 走当前主键 B+Tree 与 Uya 物化结果路径，SQLite 走 `INTEGER PRIMARY KEY`。",
-        "- NoSQLite 的 seq scan 使用 `$.age` 谓词，SQLite 使用 `json_extract(doc, '$.age')`。",
+        "- NoSQLite 的 primary lookup 走通用 SQL parser/binder/planner/executor，并用主键 B+Tree 定位 row slot；SQLite 走 `INTEGER PRIMARY KEY`。",
+        "- NoSQLite 的 seq scan 走通用 `$.age` 谓词执行；SQLite 使用 `json_extract(doc, '$.age')`。",
         "- SQLite 的 recovery/open 样本包含 connect、WAL/同步 PRAGMA 设置和一次 `COUNT(*)` 读，用于避免只测 lazy connect。",
         "- long query concurrent commit 在 SQLite 侧用两个连接和显式 read transaction 固定 reader snapshot。",
         "- SQLite peak RSS 是独立 Python 子进程级采样，包含 Python 解释器和 sqlite3 绑定开销。",

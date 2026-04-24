@@ -255,6 +255,7 @@ def write_markdown(path: Path, docs: int, avg_doc_bytes: int, iterations: int, r
         f"- 数据集文档数：`{docs}`",
         f"- 平均文档大小：`{avg_doc_bytes}` bytes",
         f"- 请求迭代数：`{iterations}`",
+        "- warm-read 口径：计时前先执行一次未计时 warmup；primary lookup 会预热本轮会访问到的主键集合。",
         f"- 说明：当前原型仍受 `DB_MAX_ROWS_PER_COLLECTION` 容量限制，下面的 `floor/target/stretch` 已切换为 v0 原型基线阈值，不是第 18 节最初的工程预算值。",
         "",
         "| case | mode | iters | p50 us | p95 us | p99 us | docs/s | MiB/s | peak KiB | floor | target | stretch | notes |",

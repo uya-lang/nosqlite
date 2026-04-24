@@ -63,6 +63,7 @@ use lib.index.key.RecordPointer;
 use lib.index.key.record_pointer_make;
 use lib.index.btree.PrimaryBTree;
 use lib.index.btree.primary_btree_init;
+use lib.index.btree.primary_btree_reset;
 use lib.index.btree.primary_btree_insert;
 use lib.index.btree.primary_btree_lookup;
 use lib.sql.ast.SqlStmt;
@@ -162,6 +163,8 @@ export const DB_MAX_ROWS_PER_COLLECTION: usize = 64;
 export const DB_MAX_CURSOR_ROWS: usize = 64;
 const DB_MAX_SECONDARY_INDEXES_PER_COLLECTION: usize = 8;
 const DB_MAX_COMMIT_VIEWS: usize = 8;
+const DB_QUERY_CACHE_SLOTS: usize = 4;
+const DB_QUERY_CACHE_SQL_MAX: usize = 512;
 const DB_PATH_BUF_SIZE: usize = 512;
 const DB_DOC_BLOB_MAX: usize = 4096;
 const DB_TXN_DOC_SCRATCH_MAX: usize = 8192;
@@ -216,6 +219,14 @@ struct DbSecondaryIndexState {
     row_slots: [u16: DB_MAX_ROWS_PER_COLLECTION],
 }
 
+struct DbQueryCacheEntry {
+    valid: bool,
+    explain: bool,
+    sql_len: u16,
+    sql: [byte: DB_QUERY_CACHE_SQL_MAX],
+    plan: QueryPlan,
+}
+
 export struct CommitView {
     generation: u64,
     commit_lsn: u64,
@@ -249,6 +260,8 @@ export struct DbHandle {
     commit_views: [CommitViewState: DB_MAX_COMMIT_VIEWS],
     primary_indexes: [PrimaryBTree: DB_MAX_COLLECTIONS],
     secondary_indexes: [DbSecondaryIndexState: DB_MAX_COLLECTIONS * DB_MAX_SECONDARY_INDEXES_PER_COLLECTION],
+    query_cache_next_slot: u16,
+    query_cache_entries: [DbQueryCacheEntry: DB_QUERY_CACHE_SLOTS],
     cursor_release_counter: &i32,
     pin_release_counter: &i32,
 }
@@ -543,6 +556,96 @@ fn db_collection_reset(collection: &DbCollection) void {
     }
 }
 
+fn db_query_cache_entry_reset(entry: &DbQueryCacheEntry) void {
+    if entry == null {
+        return;
+    }
+    entry.valid = false;
+    entry.explain = false;
+    entry.sql_len = 0u16;
+    entry.plan = QueryPlan{};
+}
+
+fn db_invalidate_query_cache(db: &DbHandle) void {
+    if db == null {
+        return;
+    }
+    db.query_cache_next_slot = 0u16;
+    var i: usize = 0usize;
+    while i < DB_QUERY_CACHE_SLOTS {
+        db_query_cache_entry_reset(&db.query_cache_entries[i]);
+        i = i + 1usize;
+    }
+}
+
+fn db_query_cache_sql_equal(entry: &DbQueryCacheEntry, sql: &[const byte]) bool {
+    if entry == null || !entry.valid || sql.ptr == null || entry.sql_len as usize != sql.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < sql.len {
+        if entry.sql[i] != sql.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn db_query_cache_lookup(db: &DbHandle, sql: &[const byte]) &DbQueryCacheEntry {
+    if db == null || sql.ptr == null || sql.len == 0usize || sql.len > DB_QUERY_CACHE_SQL_MAX {
+        return null;
+    }
+    var i: usize = 0usize;
+    while i < DB_QUERY_CACHE_SLOTS {
+        const entry: &DbQueryCacheEntry = &db.query_cache_entries[i];
+        if db_query_cache_sql_equal(entry, sql) {
+            return entry;
+        }
+        i = i + 1usize;
+    }
+    return null;
+}
+
+fn db_query_cache_store(db: &DbHandle, sql: &[const byte], explain: bool, plan: &QueryPlan) void {
+    if db == null || sql.ptr == null || plan == null || sql.len == 0usize || sql.len > DB_QUERY_CACHE_SQL_MAX {
+        return;
+    }
+    var slot_idx: usize = 0usize;
+    const slot_idx_u: !usize = db.query_cache_next_slot as! usize;
+    if slot_idx_u.error_id == 0u32 {
+        slot_idx = slot_idx_u.value;
+    } else {
+        db.query_cache_next_slot = 0u16;
+    }
+    if slot_idx >= DB_QUERY_CACHE_SLOTS {
+        slot_idx = 0usize;
+        db.query_cache_next_slot = 0u16;
+    }
+    if slot_idx >= DB_QUERY_CACHE_SLOTS {
+        return;
+    }
+    const entry: &DbQueryCacheEntry = &db.query_cache_entries[slot_idx];
+    entry.valid = true;
+    entry.explain = explain;
+    entry.sql_len = (sql.len as! u16) catch {
+        db_query_cache_entry_reset(entry);
+        return;
+    };
+    _ = mem_copy(&entry.sql[0], sql.ptr, sql.len);
+    entry.plan = plan[0];
+    if slot_idx + 1usize >= DB_QUERY_CACHE_SLOTS {
+        db.query_cache_next_slot = 0u16;
+    } else {
+        const next_slot_u: !u16 = (slot_idx + 1usize) as! u16;
+        if next_slot_u.error_id == 0u32 {
+            db.query_cache_next_slot = next_slot_u.value;
+        } else {
+            db.query_cache_next_slot = 0u16;
+        }
+    }
+}
+
 fn db_default_snapshot_policy() SnapshotPressurePolicy {
     return SnapshotPressurePolicy{
         soft_retired_bytes: 256u64,
@@ -694,7 +797,7 @@ fn db_rebuild_primary_index(db: &DbHandle, collection_slot: u16) !void {
     if slot_idx >= DB_MAX_COLLECTIONS {
         return error.DbCollectionNotFound;
     }
-    db.primary_indexes[slot_idx] = try primary_btree_init(256u32);
+    try primary_btree_reset(&db.primary_indexes[slot_idx], 256u32);
     const state: &CommitViewState = try db_current_view_state(db);
     const collection: &DbCollection = &state.collections[slot_idx];
     var row_idx: u16 = 0u16;
@@ -829,6 +932,7 @@ fn db_reload_from_disk(db: &DbHandle) !void {
     if db == null {
         return error.DbHandleInvalid;
     }
+    db_invalidate_query_cache(db);
     const info: PagerOpenInfo = try pager_open_at_stem(db_stem_ptr(db));
     const snapshot: CatalogSnapshot = try catalog_load_with_info_at_stem(db_stem_ptr(db), &info);
     var i: usize = 0usize;
@@ -838,7 +942,7 @@ fn db_reload_from_disk(db: &DbHandle) !void {
     }
     var index_slot: usize = 0usize;
     while index_slot < DB_MAX_COLLECTIONS {
-        db.primary_indexes[index_slot] = try primary_btree_init(256u32);
+        try primary_btree_reset(&db.primary_indexes[index_slot], 256u32);
         index_slot = index_slot + 1usize;
     }
     index_slot = 0usize;
@@ -1202,6 +1306,7 @@ fn db_publish_view_slot(db: &DbHandle, new_slot: u16) !void {
     if db == null {
         return error.DbHandleInvalid;
     }
+    db_invalidate_query_cache(db);
     const new_state: &CommitViewState = try db_commit_view_state(db, new_slot);
     db_finalize_view_state(new_state);
     const old_slot: u16 = db.current_view_slot;
@@ -1825,6 +1930,39 @@ fn db_build_single_text_result_with_allocator(text: &[const byte], allocator: IA
     };
 }
 
+fn db_project_doc_node(row: &OwnedRow, cursor: &usize, node: &[byte]) !void {
+    const tag: DocNodeTag = try doc_node_tag(node);
+    if tag == DocNodeTag.NULL {
+        try db_result_cell_append(row, cursor, ResultCellKind.NULL, &""[0: 0]);
+        return;
+    }
+    if tag == DocNodeTag.TRUE || tag == DocNodeTag.FALSE {
+        var b: [byte: 1] = [];
+        if try doc_bool_value(node) {
+            b[0] = 1 as byte;
+        } else {
+            b[0] = 0 as byte;
+        }
+        try db_result_cell_append(row, cursor, ResultCellKind.BOOL, b[0: 1]);
+        return;
+    }
+    if tag == DocNodeTag.INT64 {
+        var buf: [byte: 8] = [];
+        db_store_u64_le(buf[0: 8], 0usize, (try doc_int64_value(node)) as u64);
+        try db_result_cell_append(row, cursor, ResultCellKind.INT64, buf[0: 8]);
+        return;
+    }
+    if tag == DocNodeTag.NUMBER_TEXT {
+        try db_result_cell_append(row, cursor, ResultCellKind.NUMBER_TEXT, try doc_number_text_lexeme_view(node));
+        return;
+    }
+    if tag == DocNodeTag.STRING {
+        try db_result_cell_append(row, cursor, ResultCellKind.STRING, try doc_string_view(node));
+        return;
+    }
+    return error.DbScalarExpected;
+}
+
 fn db_project_exec_value(row: &OwnedRow, cursor: &usize, value: &ExecValue) !void {
     if value == null {
         return error.DbInvalidProjection;
@@ -1863,36 +2001,26 @@ fn db_project_exec_value(row: &OwnedRow, cursor: &usize, value: &ExecValue) !voi
         try db_result_cell_append(row, cursor, ResultCellKind.STRING, value.text[0: value.text_len as usize]);
         return;
     }
-    const tag: DocNodeTag = try doc_node_tag(value.doc_node);
-    if tag == DocNodeTag.NULL {
-        try db_result_cell_append(row, cursor, ResultCellKind.NULL, &""[0: 0]);
-        return;
-    }
-    if tag == DocNodeTag.TRUE || tag == DocNodeTag.FALSE {
-        var b: [byte: 1] = [];
-        if try doc_bool_value(value.doc_node) {
-            b[0] = 1 as byte;
-        } else {
-            b[0] = 0 as byte;
-        }
-        try db_result_cell_append(row, cursor, ResultCellKind.BOOL, b[0: 1]);
-        return;
-    }
-    if tag == DocNodeTag.INT64 {
+    try db_project_doc_node(row, cursor, value.doc_node);
+}
+
+fn db_project_expr(bound: &BoundSelect, rowref: &RowRef, out_row: &OwnedRow, cursor: &usize, expr_index: i16) !void {
+    const expr: &BoundExprNode = try bound_expr_node(bound, expr_index);
+    if expr.kind == BoundExprKind.SYSTEM_ID {
         var buf: [byte: 8] = [];
-        db_store_u64_le(buf[0: 8], 0usize, (try doc_int64_value(value.doc_node)) as u64);
-        try db_result_cell_append(row, cursor, ResultCellKind.INT64, buf[0: 8]);
+        db_store_u64_le(buf[0: 8], 0usize, rowref.doc_id);
+        try db_result_cell_append(out_row, cursor, ResultCellKind.UINT64, buf[0: 8]);
         return;
     }
-    if tag == DocNodeTag.NUMBER_TEXT {
-        try db_result_cell_append(row, cursor, ResultCellKind.NUMBER_TEXT, try doc_number_text_lexeme_view(value.doc_node));
+    if expr.kind == BoundExprKind.PATH {
+        const node: &[byte] = (path_program_eval(&expr.path.program, rowref.doc_blob) catch {
+            return error.DbPathError;
+        });
+        try db_project_doc_node(out_row, cursor, node);
         return;
     }
-    if tag == DocNodeTag.STRING {
-        try db_result_cell_append(row, cursor, ResultCellKind.STRING, try doc_string_view(value.doc_node));
-        return;
-    }
-    return error.DbScalarExpected;
+    const value: ExecValue = try db_eval_value(null, bound, rowref, expr_index);
+    try db_project_exec_value(out_row, cursor, &value);
 }
 
 fn db_project_row(bound: &BoundSelect, rowref: &RowRef, out_row: &OwnedRow) !void {
@@ -1904,8 +2032,7 @@ fn db_project_row(bound: &BoundSelect, rowref: &RowRef, out_row: &OwnedRow) !voi
     db_store_u16_le(out_row.result_blob[0: OWNED_ROW_MAX_BLOB], 0usize, bound.projection_count);
     var i: usize = 0usize;
     while i < bound.projection_count as usize {
-        const value: ExecValue = try db_eval_value(null, bound, rowref, bound.projection_exprs[i]);
-        try db_project_exec_value(out_row, &cursor, &value);
+        try db_project_expr(bound, rowref, out_row, &cursor, bound.projection_exprs[i]);
         i = i + 1usize;
     }
     out_row.result_len = (cursor as! u16) catch {
@@ -2503,6 +2630,21 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
             count_out[0] = 0u16;
             return;
         };
+        const direct_idx: usize = (ptr.slot_id as! usize) catch {
+            return error.DbCollectionNotFound;
+        };
+        if direct_idx < collection.row_count as usize && direct_idx < DB_MAX_ROWS_PER_COLLECTION && out_rows.len > 0usize {
+            const row: &DbStoredRow = &collection.rows[direct_idx];
+            if row.present &&
+                !row.tombstone &&
+                row.doc_id == node.lookup_doc_id &&
+                row.record_ptr.page_id == ptr.page_id &&
+                row.record_ptr.slot_id == ptr.slot_id {
+                out_rows.ptr[0usize] = ptr.slot_id;
+                count_out[0] = 1u16;
+                return;
+            }
+        }
         var i: u16 = 0u16;
         while i < collection.row_count {
             const row: &DbStoredRow = &collection.rows[i as usize];
@@ -2600,7 +2742,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
     return error.DbInvalidProjection;
 }
 
-export fn db_test_init_at_stem(db: &DbHandle, stem: &const byte) !void {
+fn db_prepare_handle_runtime_at_stem(db: &DbHandle, stem: &const byte) !void {
     if db == null || stem == null {
         return error.DbHandleInvalid;
     }
@@ -2619,11 +2761,25 @@ export fn db_test_init_at_stem(db: &DbHandle, stem: &const byte) !void {
     db.current_view_slot = 0u16;
     db.next_view_generation = 2u64;
     db.next_page_table_gen = 2u64;
+    db_invalidate_query_cache(db);
     db.cursor_release_counter = null;
     db.pin_release_counter = null;
+    const len: usize = strlen(stem);
+    if len + 1usize > DB_PATH_BUF_SIZE {
+        return error.DbHandleInvalid;
+    }
+    db.stem_len = (len as! u16) catch {
+        return error.DbHandleInvalid;
+    };
+    _ = mem_copy(&db.stem[0], stem, len);
+    db.stem[len] = 0 as byte;
+}
+
+export fn db_test_init_at_stem(db: &DbHandle, stem: &const byte) !void {
+    try db_prepare_handle_runtime_at_stem(db, stem);
     var index_slot: usize = 0usize;
     while index_slot < DB_MAX_COLLECTIONS {
-        db.primary_indexes[index_slot] = try primary_btree_init(256u32);
+        try primary_btree_reset(&db.primary_indexes[index_slot], 256u32);
         index_slot = index_slot + 1usize;
     }
     index_slot = 0usize;
@@ -2651,15 +2807,6 @@ export fn db_test_init_at_stem(db: &DbHandle, stem: &const byte) !void {
     initial.collection_count = 0u16;
     db_finalize_view_state(initial);
     db_refresh_snapshot_status(db);
-    const len: usize = strlen(stem);
-    if len + 1usize > DB_PATH_BUF_SIZE {
-        return error.DbHandleInvalid;
-    }
-    db.stem_len = (len as! u16) catch {
-        return error.DbHandleInvalid;
-    };
-    _ = mem_copy(&db.stem[0], stem, len);
-    db.stem[len] = 0 as byte;
 }
 
 export fn db_test_create_at_stem(db: &DbHandle, stem: &const byte) !void {
@@ -2669,7 +2816,7 @@ export fn db_test_create_at_stem(db: &DbHandle, stem: &const byte) !void {
 }
 
 export fn db_test_open_at_stem(db: &DbHandle, stem: &const byte) !void {
-    try db_test_init_at_stem(db, stem);
+    try db_prepare_handle_runtime_at_stem(db, stem);
     try db_reload_from_disk(db);
 }
 
@@ -2801,7 +2948,13 @@ export fn db_test_reset_primary_index(db: &DbHandle, collection_name: &[const by
         return error.DbHandleInvalid;
     }
     const slot: u16 = try db_find_collection_slot_by_name(db, collection_name);
-    db.primary_indexes[slot as usize] = try primary_btree_init(256u32);
+    const slot_idx: usize = (slot as! usize) catch {
+        return error.DbCollectionNotFound;
+    };
+    if slot_idx >= DB_MAX_COLLECTIONS {
+        return error.DbCollectionNotFound;
+    }
+    try primary_btree_reset(&db.primary_indexes[slot_idx], 256u32);
 }
 
 export fn db_test_create_collection(db: &DbHandle, name: &[const byte]) !void {
@@ -2830,7 +2983,7 @@ export fn db_test_create_collection(db: &DbHandle, name: &[const byte]) !void {
     state.collections[slot].next_doc_id = created.next_doc_id;
     state.collections[slot].primary_root_page = created.primary_root_page;
     try db_copy_name(name, state.collections[slot].name[0: 64], &state.collections[slot].name_len);
-    db.primary_indexes[slot] = try primary_btree_init(256u32);
+    try primary_btree_reset(&db.primary_indexes[slot], 256u32);
     state.collection_count = state.collection_count + 1u16;
     state.view.commit_lsn = info.meta.commit_lsn;
     state.view.page_count = info.meta.page_count;
@@ -2977,7 +3130,7 @@ export fn db_exec(db: &DbHandle, sql: &[const byte]) !void {
     return error.DbUnsupportedStmt;
 }
 
-fn db_select_plan_collect_in_view(db: &DbHandle, stmt: &SqlStmt, view_slot: u16, plan_out: &QueryPlan, collection_slot_out: &u16, out_rows: &[u16], count_out: &u16) !void {
+fn db_compile_select_plan_in_view(db: &DbHandle, stmt: &SqlStmt, view_slot: u16, plan_out: &QueryPlan, collection_slot_out: &u16) !void {
     if db == null || stmt == null || stmt.kind != SqlStmtKind.SELECT || plan_out == null || collection_slot_out == null {
         return error.DbUnsupportedStmt;
     }
@@ -2992,7 +3145,23 @@ fn db_select_plan_collect_in_view(db: &DbHandle, stmt: &SqlStmt, view_slot: u16,
     }
     try plan_select_into(&bound, plan_out);
     collection_slot_out[0] = collection_slot;
-    try db_plan_collect(db, view_slot, plan_out, collection_slot, plan_out.root_node, out_rows, count_out);
+}
+
+fn db_select_plan_collect_in_view(db: &DbHandle, stmt: &SqlStmt, view_slot: u16, plan_out: &QueryPlan, collection_slot_out: &u16, out_rows: &[u16], count_out: &u16) !void {
+    if out_rows.ptr == null || count_out == null {
+        return error.DbUnsupportedStmt;
+    }
+    try db_compile_select_plan_in_view(db, stmt, view_slot, plan_out, collection_slot_out);
+    try db_plan_collect(db, view_slot, plan_out, collection_slot_out[0], plan_out.root_node, out_rows, count_out);
+}
+
+fn db_select_plan_collect_cached_in_view(db: &DbHandle, plan: &QueryPlan, view_slot: u16, collection_slot_out: &u16, out_rows: &[u16], count_out: &u16) !void {
+    if db == null || plan == null || collection_slot_out == null || out_rows.ptr == null || count_out == null {
+        return error.DbUnsupportedStmt;
+    }
+    const collection_slot: u16 = try db_find_collection_slot_by_id_in_view(db, view_slot, plan.bound.collection_id);
+    collection_slot_out[0] = collection_slot;
+    try db_plan_collect(db, view_slot, plan, collection_slot, plan.root_node, out_rows, count_out);
 }
 
 fn db_query_cursor_from_select_stmt(db: &DbHandle, stmt: &SqlStmt) !QueryCursor {
@@ -3076,16 +3245,94 @@ export fn cursor_row(cursor: &QueryCursor) !RowRef {
     return cursor.current_row;
 }
 
+fn db_explain_query_plan_with_allocator(plan: &QueryPlan, allocator: IAllocator) !QueryResult {
+    if plan == null {
+        return error.DbUnsupportedStmt;
+    }
+    var explain_buf: [byte: 1024] = [];
+    const explain_len: usize = try plan_explain(plan, explain_buf[0: 1024]);
+    return try db_build_single_text_result_with_allocator(explain_buf[0: explain_len], allocator);
+}
+
+fn db_query_cached_plan_with_allocator(db: &DbHandle, plan: &QueryPlan, allocator: IAllocator) !QueryResult {
+    if db == null || plan == null {
+        return error.DbHandleInvalid;
+    }
+    db_cleanup_retired_views(db);
+    const effective_status: SnapshotPressureStatus = db_effective_snapshot_status(db);
+    if !snapshot_pressure_cursor_can_open(&db.snapshot_policy, &effective_status) {
+        return error.SnapshotPressure;
+    }
+    const view_slot: u16 = try db_pin_current_view_slot(db);
+    defer {
+        db_unpin_view_slot(db, view_slot);
+    }
+    var match_rows: [u16: DB_MAX_CURSOR_ROWS] = [];
+    var match_count: u16 = 0u16;
+    var collection_slot: u16 = 0u16;
+    try db_select_plan_collect_cached_in_view(db, plan, view_slot, &collection_slot, match_rows[0: DB_MAX_CURSOR_ROWS], &match_count);
+    var row_capacity: usize = match_count as usize;
+    if row_capacity > QUERY_RESULT_MAX_ROWS {
+        return error.DbResultTooLarge;
+    }
+    if row_capacity == 0usize {
+        row_capacity = 1usize;
+    }
+    const storage_size: usize = row_capacity * (@size_of(OwnedRow) as usize);
+    const rows_alloc: !&byte = allocator.alloc(storage_size);
+    if rows_alloc.error_id != 0u32 {
+        return error.DbResultTooLarge;
+    }
+    const rows_mem: &byte = rows_alloc.value;
+    errdefer {
+        allocator.dealloc(rows_mem);
+    }
+    const rows_ptr: &OwnedRow = rows_mem as &OwnedRow;
+    const column_count: u16 = plan.bound.projection_count;
+    var row_count: u32 = 0u32;
+    var match_index: u16 = 0u16;
+    while match_index < match_count {
+        if row_count as usize >= QUERY_RESULT_MAX_ROWS {
+            return error.DbResultTooLarge;
+        }
+        const rowref: RowRef = try db_collection_row_ref(db, view_slot, collection_slot, match_rows[match_index as usize]);
+        const row_idx: usize = (row_count as! usize) catch {
+            return error.DbResultTooLarge;
+        };
+        if row_idx >= QUERY_RESULT_MAX_ROWS {
+            return error.DbResultTooLarge;
+        }
+        const row_addr: usize = @usize_from_ptr(rows_ptr as &void) + row_idx * (@size_of(OwnedRow) as usize);
+        const out_row: &OwnedRow = @ptr_from_usize(row_addr) as &OwnedRow;
+        try db_project_row(&plan.bound, &rowref, out_row);
+        row_count = row_count + 1u32;
+        match_index = match_index + 1u16;
+    }
+    return QueryResult{
+        allocator: allocator,
+        column_count: column_count,
+        row_count: row_count,
+        rows: rows_ptr,
+    };
+}
+
 export fn db_query_with_allocator(db: &DbHandle, sql: &[const byte], allocator: IAllocator) !QueryResult {
+    const cached: &DbQueryCacheEntry = db_query_cache_lookup(db, sql);
+    if cached != null {
+        if cached.explain {
+            return try db_explain_query_plan_with_allocator(&cached.plan, allocator);
+        }
+        return try db_query_cached_plan_with_allocator(db, &cached.plan, allocator);
+    }
+
     var stmt: SqlStmt = try sql_parse(sql);
     if stmt.kind == SqlStmtKind.EXPLAIN {
         stmt.kind = SqlStmtKind.SELECT;
         const bound: BoundSelect = try bind_select_at_stem(db_stem_ptr(db), &stmt);
         var plan: QueryPlan = QueryPlan{};
         try plan_select_into(&bound, &plan);
-        var explain_buf: [byte: 1024] = [];
-        const explain_len: usize = try plan_explain(&plan, explain_buf[0: 1024]);
-        return try db_build_single_text_result_with_allocator(explain_buf[0: explain_len], allocator);
+        db_query_cache_store(db, sql, true, &plan);
+        return try db_explain_query_plan_with_allocator(&plan, allocator);
     }
     if db == null {
         return error.DbHandleInvalid;
@@ -3103,10 +3350,12 @@ export fn db_query_with_allocator(db: &DbHandle, sql: &[const byte], allocator: 
         db_unpin_view_slot(db, view_slot);
     }
     var plan: QueryPlan = QueryPlan{};
+    var collection_slot: u16 = 0u16;
+    try db_compile_select_plan_in_view(db, &stmt, view_slot, &plan, &collection_slot);
+    db_query_cache_store(db, sql, false, &plan);
     var match_rows: [u16: DB_MAX_CURSOR_ROWS] = [];
     var match_count: u16 = 0u16;
-    var collection_slot: u16 = 0u16;
-    try db_select_plan_collect_in_view(db, &stmt, view_slot, &plan, &collection_slot, match_rows[0: DB_MAX_CURSOR_ROWS], &match_count);
+    try db_plan_collect(db, view_slot, &plan, collection_slot, plan.root_node, match_rows[0: DB_MAX_CURSOR_ROWS], &match_count);
     var row_capacity: usize = match_count as usize;
     if row_capacity > QUERY_RESULT_MAX_ROWS {
         return error.DbResultTooLarge;
