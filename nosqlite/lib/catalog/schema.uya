@@ -26,6 +26,7 @@ export const INDEX_META_ENCODED_SIZE: usize = 20;
 const CATALOG_MAX_INDEXES_PER_COLLECTION: usize = 8;
 const CATALOG_MAX_INLINE_NAME: usize = 64;
 const CATALOG_MAX_INLINE_PATH: usize = 128;
+const CATALOG_COLLECTION_PAGE_STRIDE: u32 = 4096;
 
 export struct CatalogRoot {
     collection_count: u32,
@@ -815,7 +816,7 @@ export fn catalog_page_append_collection(page_buf: &[byte], name: &[byte]) !Coll
         name_len: 0u16,
         flags: 0u16,
         next_doc_id: 1u64,
-        primary_root_page: 2u32 + next_collection_id,
+        primary_root_page: 3u32 + ((next_collection_id - 1u32) * CATALOG_COLLECTION_PAGE_STRIDE),
         secondary_index_count: 0u16,
         rsv: 0u16,
         name_off: 0u32,

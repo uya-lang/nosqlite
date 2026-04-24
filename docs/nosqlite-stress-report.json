@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "runner": "nosqlite/tests/exec/test_stress_runtime.uya",
+  "host": {
+    "os": "linux",
+    "arch": "x86_64",
+    "cpu_count": 28
+  },
+  "mode": "single",
+  "iterations": 1,
+  "requested_iterations": 1,
+  "requested_soak_seconds": 0.0,
+  "status": "pass",
+  "max_run_only_elapsed_s": 0.1978929530014284,
+  "max_run_only_peak_rss_kib": 31860,
+  "failure_stage_code": 0,
+  "scale_targets": {
+    "multi_page_collection_enabled": true,
+    "current_fill_rows": 128,
+    "current_random_rows": 24,
+    "row_capacity_max": 3072,
+    "next_fill_rows_min": 1000,
+    "reference_dataset_docs": 100000,
+    "reference_dataset_generator": "nosqlite/generate_bench_dataset.py"
+  },
+  "runs": [
+    {
+      "iteration": 1,
+      "status": "pass",
+      "exit_code": 0,
+      "failure_stage_code": 0,
+      "run_only_elapsed_s": 0.1978929530014284,
+      "run_only_peak_rss_kib": 31860,
+      "stdout_bytes": 0,
+      "stderr_bytes": 0,
+      "stdout_tail": "",
+      "stderr_tail": ""
+    }
+  ]
+}

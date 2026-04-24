@@ -19,6 +19,7 @@ SLOT_SIZE = 6
 CATALOG_ROOT_SIZE = 16
 COLLECTION_META_SIZE = 32
 RECORD_CELL_HEADER_SIZE = 28
+ROWS_PER_COLLECTION_PAGE = 3
 
 PAGE_TYPE_CATALOG = 1
 PAGE_TYPE_DATA = 2
@@ -457,6 +458,7 @@ def validate_catalog(db_path: str, meta: dict) -> tuple[int, int]:
     names = set()
     ids = set()
     total_rows = 0
+    checked_pages = 3
     for idx in range(collection_count):
         off = collections_off + idx * COLLECTION_META_SIZE
         if off + COLLECTION_META_SIZE > len(blob):
@@ -478,42 +480,54 @@ def validate_catalog(db_path: str, meta: dict) -> tuple[int, int]:
             raise CheckError(CATALOG_CORRUPT)
         names.add(name)
         ids.add(collection_id)
-        total_rows += validate_collection_page(db_path, meta["page_size"], primary_root_page, next_doc_id)
-    return collection_count, total_rows
+        page_count = (next_doc_id - 1 + ROWS_PER_COLLECTION_PAGE - 1) // ROWS_PER_COLLECTION_PAGE if next_doc_id > 1 else 0
+        checked_pages += page_count
+        total_rows += validate_collection_pages(db_path, meta["page_size"], primary_root_page, next_doc_id)
+    return collection_count, total_rows, checked_pages
 
 
-def validate_collection_page(db_path: str, page_size: int, page_id: int, next_doc_id: int) -> int:
-    if page_id < 2:
+def validate_collection_pages(db_path: str, page_size: int, first_page_id: int, next_doc_id: int) -> int:
+    if next_doc_id <= 1:
+        return 0
+    if first_page_id < 2:
         raise CheckError(FORMAT_PAGE_BOUNDS_INVALID)
-    page = read_at(db_path, page_id * page_size, page_size)
-    header, slot_count = validate_page(page, page_size)
-    if header["page_type"] != PAGE_TYPE_DATA:
-        raise CheckError(FORMAT_PAGE_BOUNDS_INVALID)
+
+    expected_rows = next_doc_id - 1
+    page_count = (expected_rows + ROWS_PER_COLLECTION_PAGE - 1) // ROWS_PER_COLLECTION_PAGE
     rows = 0
     max_doc_id = 0
     seen_doc_ids: dict[int, tuple[int, int]] = {}
-    for slot_idx in range(slot_count):
-        slot_off = PAGE_HEADER_SIZE + slot_idx * SLOT_SIZE
-        cell_off = load_u16(page, slot_off)
-        cell_len = load_u16(page, slot_off + 2)
-        flags = load_u16(page, slot_off + 4)
-        used = (flags & 1) != 0
-        tombstone = (flags & 2) != 0
-        if not used or tombstone:
-            continue
-        if cell_off + cell_len > page_size or cell_len < RECORD_CELL_HEADER_SIZE:
+
+    for page_offset in range(page_count):
+        page_id = first_page_id + page_offset
+        page = read_at(db_path, page_id * page_size, page_size)
+        header, slot_count = validate_page(page, page_size)
+        if header["page_type"] != PAGE_TYPE_DATA:
             raise CheckError(FORMAT_PAGE_BOUNDS_INVALID)
-        cell = page[cell_off:cell_off + cell_len]
-        doc_id = load_u64(cell, 0)
-        doc_len = load_u32(cell, 24)
-        if doc_id == 0 or RECORD_CELL_HEADER_SIZE + doc_len > len(cell):
-            raise CheckError(FORMAT_PAGE_BOUNDS_INVALID)
-        if doc_id in seen_doc_ids:
-            raise CheckError(FORMAT_PAGE_BOUNDS_INVALID, "duplicate doc_id in collection page")
-        seen_doc_ids[doc_id] = (page_id, slot_idx)
-        max_doc_id = max(max_doc_id, doc_id)
-        validate_docblob(cell[RECORD_CELL_HEADER_SIZE:RECORD_CELL_HEADER_SIZE + doc_len])
-        rows += 1
+        if slot_count > ROWS_PER_COLLECTION_PAGE:
+            raise CheckError(FORMAT_PAGE_BOUNDS_INVALID, "too many slots in collection data page")
+        for slot_idx in range(slot_count):
+            slot_off = PAGE_HEADER_SIZE + slot_idx * SLOT_SIZE
+            cell_off = load_u16(page, slot_off)
+            cell_len = load_u16(page, slot_off + 2)
+            flags = load_u16(page, slot_off + 4)
+            used = (flags & 1) != 0
+            tombstone = (flags & 2) != 0
+            if not used or tombstone:
+                continue
+            if cell_off + cell_len > page_size or cell_len < RECORD_CELL_HEADER_SIZE:
+                raise CheckError(FORMAT_PAGE_BOUNDS_INVALID)
+            cell = page[cell_off:cell_off + cell_len]
+            doc_id = load_u64(cell, 0)
+            doc_len = load_u32(cell, 24)
+            if doc_id == 0 or RECORD_CELL_HEADER_SIZE + doc_len > len(cell):
+                raise CheckError(FORMAT_PAGE_BOUNDS_INVALID)
+            if doc_id in seen_doc_ids:
+                raise CheckError(FORMAT_PAGE_BOUNDS_INVALID, "duplicate doc_id in collection pages")
+            seen_doc_ids[doc_id] = (page_id, slot_idx)
+            max_doc_id = max(max_doc_id, doc_id)
+            validate_docblob(cell[RECORD_CELL_HEADER_SIZE:RECORD_CELL_HEADER_SIZE + doc_len])
+            rows += 1
     if next_doc_id <= max_doc_id:
         raise CheckError(FORMAT_PAGE_BOUNDS_INVALID)
     return rows
@@ -529,7 +543,7 @@ def main() -> int:
     try:
         meta = select_meta(db_path)
         wal = scan_wal(wal_path, meta)
-        collection_count, row_count = validate_catalog(db_path, meta)
+        collection_count, row_count, checked_pages = validate_catalog(db_path, meta)
     except CheckError as exc:
         name, message = ERRORS.get(exc.code, ("UNKNOWN", "unknown NoSQLite error"))
         detail = f" detail={exc.detail}" if exc.detail else ""
@@ -541,7 +555,7 @@ def main() -> int:
 
     print(
         "db_check: OK "
-        f"stem={args.stem} pages={meta['page_count']} checked_pages={collection_count + 3} "
+        f"stem={args.stem} pages={meta['page_count']} checked_pages={checked_pages} "
         f"collections={collection_count} rows={row_count} wal_bytes={wal['wal_bytes']} "
         f"wal_records={wal['wal_records']} committed_wal_txns={wal['committed_wal_txns']}"
     )
