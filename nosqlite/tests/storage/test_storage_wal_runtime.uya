@@ -26,6 +26,7 @@ const TEST_STEM_REDO: *const byte = "/tmp/nosqlite_storage_wal_redo" as *const b
 const TEST_STEM_UNCOMMITTED: *const byte = "/tmp/nosqlite_storage_wal_uncommitted" as *const byte;
 const TEST_STEM_TRUNCATE: *const byte = "/tmp/nosqlite_storage_wal_truncate" as *const byte;
 const TEST_STEM_PAGE_LSN: *const byte = "/tmp/nosqlite_storage_wal_page_lsn" as *const byte;
+const TEST_STEM_FAST_PATH_CORRUPT: *const byte = "/tmp/nosqlite_storage_wal_fast_path_corrupt" as *const byte;
 const TEST_STEM_CHECKPOINT: *const byte = "/tmp/nosqlite_storage_wal_checkpoint" as *const byte;
 const TEST_STEM_SOFT_LIMIT: *const byte = "/tmp/nosqlite_storage_wal_soft_limit" as *const byte;
 const WAL_HEADER_BYTES: u64 = 28u64;
@@ -210,6 +211,26 @@ test "nosqlite_storage_wal_recovery_respects_page_lsn" {
     const opened: PagerOpenInfo = try pager_open_at_stem(TEST_STEM_PAGE_LSN);
     try assert_eq_u64(opened.meta.commit_lsn, 11u64);
     try assert_page_payload(TEST_STEM_PAGE_LSN, &"new"[0: 3]);
+}
+
+test "nosqlite_storage_wal_recovery_replays_matching_tail_when_not_checkpointed" {
+    try cleanup_stem(TEST_STEM_FAST_PATH_CORRUPT);
+    defer {
+        _ = cleanup_stem(TEST_STEM_FAST_PATH_CORRUPT) catch {};
+    }
+
+    _ = try pager_create_at_stem(TEST_STEM_FAST_PATH_CORRUPT, NOSQLITE_PAGE_SIZE_DEFAULT);
+
+    var page_raw: [byte: 4096] = [];
+    const page_buf: &[byte] = page_raw[0: NOSQLITE_PAGE_SIZE_DEFAULT as usize];
+    try init_page(page_buf, &"safe"[0: 4], 21u64);
+    const commit: WalCommit = make_commit(21u64, 21u64);
+    _ = try pager_commit_page_at_stem(TEST_STEM_FAST_PATH_CORRUPT, 2u32, page_buf, &commit, null);
+
+    try pager_xor_db_byte_at_stem(TEST_STEM_FAST_PATH_CORRUPT, 2u32, page_header_size(), 1 as byte);
+    const opened: PagerOpenInfo = try pager_open_at_stem(TEST_STEM_FAST_PATH_CORRUPT);
+    try assert_eq_u64(opened.meta.commit_lsn, 21u64);
+    try assert_page_payload(TEST_STEM_FAST_PATH_CORRUPT, &"safe"[0: 4]);
 }
 
 test "nosqlite_storage_checkpoint_truncates_wal" {

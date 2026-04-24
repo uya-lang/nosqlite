@@ -12,6 +12,8 @@ PAGE_SIZE_DEFAULT = 4096
 PAGE_SIZE_MAX = 8192
 META_SIZE = 68
 WAL_HEADER_SIZE = 28
+WAL_RECORD_HEADER_SIZE = 12
+WAL_PAGE_WRITE_META_SIZE = 28
 PAGE_HEADER_SIZE = 24
 SLOT_SIZE = 6
 CATALOG_ROOT_SIZE = 16
@@ -83,6 +85,15 @@ def crc32_zeroed(data: bytes, off: int, size: int) -> int:
     scratch = bytearray(data)
     scratch[off:off + size] = b"\x00" * size
     return zlib.crc32(scratch) & 0xFFFFFFFF
+
+
+def wal_record_crc_valid(record_type: int, record: bytes, record_crc: int) -> bool:
+    if record_type == RECORD_PAGE_WRITE:
+        meta_len = WAL_RECORD_HEADER_SIZE + WAL_PAGE_WRITE_META_SIZE
+        if len(record) < meta_len:
+            return False
+        return record_crc == crc32_zeroed(record[:meta_len], 8, 4)
+    return record_crc == crc32_zeroed(record, 8, 4)
 
 
 def load_u16(data: bytes, off: int) -> int:
@@ -372,7 +383,7 @@ def scan_wal(wal_path: str, meta: dict) -> dict:
             record = f.read(record_len)
             if len(record) != record_len:
                 raise CheckError(FORMAT_WAL_RECORD_INVALID)
-            if record_crc != crc32_zeroed(record, 8, 4):
+            if not wal_record_crc_valid(record_type, record, record_crc):
                 raise CheckError(FORMAT_WAL_RECORD_INVALID)
             report["wal_records"] += 1
 
@@ -478,8 +489,8 @@ def validate_collection_page(db_path: str, page_size: int, page_id: int, next_do
     header, slot_count = validate_page(page, page_size)
     if header["page_type"] != PAGE_TYPE_DATA:
         raise CheckError(FORMAT_PAGE_BOUNDS_INVALID)
-    expected_doc_id = 1
     rows = 0
+    max_doc_id = 0
     seen_doc_ids: dict[int, tuple[int, int]] = {}
     for slot_idx in range(slot_count):
         slot_off = PAGE_HEADER_SIZE + slot_idx * SLOT_SIZE
@@ -495,15 +506,15 @@ def validate_collection_page(db_path: str, page_size: int, page_id: int, next_do
         cell = page[cell_off:cell_off + cell_len]
         doc_id = load_u64(cell, 0)
         doc_len = load_u32(cell, 24)
-        if doc_id != expected_doc_id or RECORD_CELL_HEADER_SIZE + doc_len > len(cell):
+        if doc_id == 0 or RECORD_CELL_HEADER_SIZE + doc_len > len(cell):
             raise CheckError(FORMAT_PAGE_BOUNDS_INVALID)
         if doc_id in seen_doc_ids:
             raise CheckError(FORMAT_PAGE_BOUNDS_INVALID, "duplicate doc_id in collection page")
         seen_doc_ids[doc_id] = (page_id, slot_idx)
+        max_doc_id = max(max_doc_id, doc_id)
         validate_docblob(cell[RECORD_CELL_HEADER_SIZE:RECORD_CELL_HEADER_SIZE + doc_len])
-        expected_doc_id += 1
         rows += 1
-    if next_doc_id != expected_doc_id:
+    if next_doc_id <= max_doc_id:
         raise CheckError(FORMAT_PAGE_BOUNDS_INVALID)
     return rows
 

@@ -28,23 +28,34 @@ use lib.storage.pager.catalog_cleanup_stem;
 use lib.storage.pager.pager_create_at_stem;
 use lib.storage.pager.pager_commit_page_at_stem;
 use lib.storage.pager.pager_check_wal_at_stem;
+use lib.storage.pager.pager_checkpoint_at_stem;
 use lib.storage.pager.pager_xor_db_byte_at_stem;
 use lib.storage.pager.pager_xor_wal_byte_at_stem;
 use lib.index.key.numeric_index_key_encode;
 use lib.doc.format.doc_encode_number_text_node;
 use lib.doc.compare.doc_compare_scalar_nodes;
+use lib.doc.path.PathProgram;
+use lib.doc.path.path_program_compile;
+use lib.doc.path.path_program_eval;
+use lib.doc.codec.doc_string_view;
 use lib.api.db.DB_MAX_ROWS_PER_COLLECTION;
 use lib.api.db.DbHandle;
 use lib.api.db.DbCheckReport;
+use lib.api.db.QueryCursor;
 use lib.api.db.db_exec;
 use lib.api.db.db_query;
+use lib.api.db.db_query_cursor;
+use lib.api.db.cursor_next;
+use lib.api.db.cursor_row;
 use lib.api.db.db_check_at_stem;
 use lib.api.db.db_test_create_at_stem;
 use lib.api.db.db_test_create_collection;
+use lib.api.db.db_test_open_at_stem;
 use lib.api.error_text.nosqlite_error_code_from_runtime_error_id;
 use lib.api.error_text.nosqlite_error_message_from_runtime_error_id;
 use lib.api.result.QueryResult;
 use lib.api.result.OwnedRow;
+use lib.api.result.RowRef;
 use lib.api.result.query_result_row;
 use lib.api.result.query_result_release;
 use lib.api.result.owned_row_cell_text;
@@ -52,6 +63,7 @@ use lib.api.result.owned_row_cell_text;
 const TEST_STEM_DB_CHECK: *const byte = "/tmp/nosqlite_phase11_db_check" as *const byte;
 const TEST_STEM_WAL_CHECK: *const byte = "/tmp/nosqlite_phase11_wal_check" as *const byte;
 const TEST_STEM_NUMERIC: *const byte = "/tmp/nosqlite_phase11_numeric" as *const byte;
+const TEST_STEM_LAZY_REOPEN: *const byte = "/tmp/nosqlite_phase11_lazy_reopen" as *const byte;
 const TEST_STEM_BENCH_WARM: *const byte = "/tmp/nosqlite_phase11_bench_warm" as *const byte;
 const TEST_STEM_BENCH_DURABLE: *const byte = "/tmp/nosqlite_phase11_bench_durable" as *const byte;
 const TEST_STEM_BENCH_RECOVERY: *const byte = "/tmp/nosqlite_phase11_bench_recovery" as *const byte;
@@ -117,6 +129,14 @@ fn now_usec() u64 {
         return 0u64;
     };
     return (tv.tv_sec as u64) * 1000000u64 + (tv.tv_usec as u64);
+}
+
+fn elapsed_bench_usec(start_us: u64) u64 {
+    const elapsed_us: u64 = now_usec() - start_us;
+    if elapsed_us == 0u64 {
+        return 1u64;
+    }
+    return elapsed_us;
 }
 
 fn bench_collection_page_capacity(avg_doc_bytes: usize) usize {
@@ -329,7 +349,7 @@ fn bench_lookup(docs: u64, avg_doc_bytes: usize, iterations: u64) !void {
             row_count = result.row_count;
             query_result_release(&result);
         }
-        const elapsed_us: u64 = now_usec() - start_us;
+        const elapsed_us: u64 = elapsed_bench_usec(start_us);
         if row_count != 1u32 {
             return error.BenchUnexpectedResult;
         }
@@ -367,7 +387,7 @@ fn bench_seq_scan(docs: u64, avg_doc_bytes: usize, iterations: u64) !void {
             row_count = result.row_count;
             query_result_release(&result);
         }
-        const elapsed_us: u64 = now_usec() - start_us;
+        const elapsed_us: u64 = elapsed_bench_usec(start_us);
         printf(
             "SAMPLE case=warm_seq_scan us=%lu docs=%u bytes=%zu\n" as *byte,
             elapsed_us,
@@ -401,7 +421,7 @@ fn bench_durable_insert(avg_doc_bytes: usize, iterations: u64) !void {
             printf("RUNNER_STAGE case=durable_insert stage=insert error_id=%u\n" as *byte, inserted.error_id);
             return error.BenchUnexpectedResult;
         }
-        const elapsed_us: u64 = now_usec() - start_us;
+        const elapsed_us: u64 = elapsed_bench_usec(start_us);
         printf("SAMPLE case=durable_insert us=%lu docs=1 bytes=%zu\n" as *byte, elapsed_us, avg_doc_bytes);
         i = i + 1u64;
     }
@@ -421,7 +441,7 @@ fn bench_recovery_open(docs: u64, avg_doc_bytes: usize, iterations: u64) !void {
             printf("RUNNER_STAGE case=recovery_open stage=open error_id=%u\n" as *byte, reopened.error_id);
             return error.BenchUnexpectedResult;
         }
-        const elapsed_us: u64 = now_usec() - start_us;
+        const elapsed_us: u64 = elapsed_bench_usec(start_us);
         printf(
             "SAMPLE case=recovery_open us=%lu docs=%lu bytes=%zu\n" as *byte,
             elapsed_us,
@@ -460,7 +480,7 @@ fn bench_long_query_concurrent_ratio(avg_doc_bytes: usize, iterations: u64) !voi
             printf("RUNNER_STAGE case=long_query_concurrent_commit stage=baseline_insert error_id=%u\n" as *byte, baseline_insert.error_id);
             return error.BenchUnexpectedResult;
         }
-        const baseline_us: u64 = now_usec() - baseline_start;
+        const baseline_us: u64 = elapsed_bench_usec(baseline_start);
 
         cleanup_stem(TEST_STEM_BENCH_CONCURRENT);
         const created_b: !void = db_test_create_at_stem(&g_bench_concurrent_db, TEST_STEM_BENCH_CONCURRENT);
@@ -497,7 +517,7 @@ fn bench_long_query_concurrent_ratio(avg_doc_bytes: usize, iterations: u64) !voi
                 printf("RUNNER_STAGE case=long_query_concurrent_commit stage=concurrent_insert error_id=%u\n" as *byte, concurrent_insert.error_id);
                 return error.BenchUnexpectedResult;
             }
-            const concurrent_us: u64 = now_usec() - concurrent_start;
+            const concurrent_us: u64 = elapsed_bench_usec(concurrent_start);
             var ratio_pct: u64 = 0u64;
             if concurrent_us != 0u64 {
                 ratio_pct = (baseline_us * 100u64) / concurrent_us;
@@ -560,6 +580,7 @@ test "nosqlite_phase11_db_check_detects_data_page_corruption" {
     }
 
     try prepare_users_db(&g_db_check_db, TEST_STEM_DB_CHECK);
+    _ = try pager_checkpoint_at_stem(TEST_STEM_DB_CHECK);
     try pager_xor_db_byte_at_stem(TEST_STEM_DB_CHECK, 3u32, page_header_size() - 1usize, 1 as byte);
     const report: !DbCheckReport = db_check_at_stem(TEST_STEM_DB_CHECK);
     try assert_eq_bool(report.error_id != 0u32, true);
@@ -654,6 +675,67 @@ test "nosqlite_phase11_numeric_precision_and_order_contract" {
     try assert_eq_bool(try numeric_pair_matches_executor(&"-0.125"[0: 6], &"0"[0: 1]), true);
     try assert_eq_bool(try numeric_pair_matches_executor(&"12.3400"[0: 7], &"12.34"[0: 5]), true);
     try assert_eq_bool(try numeric_pair_matches_executor(&"9223372036854775808"[0: 19], &"18446744073709551616"[0: 20]), true);
+}
+
+test "nosqlite_phase11_lazy_reopen_insert_preserves_existing_rows" {
+    if bench_mode_enabled() {
+        return;
+    }
+    cleanup_stem(TEST_STEM_LAZY_REOPEN);
+    defer {
+        cleanup_stem(TEST_STEM_LAZY_REOPEN);
+    }
+
+    var db: DbHandle = DbHandle{};
+    try db_test_create_at_stem(&db, TEST_STEM_LAZY_REOPEN);
+    try db_test_create_collection(&db, "users");
+    _ = try db_exec(&db, "INSERT INTO users JSON '{\"name\":\"ann\",\"age\":25,\"active\":true}';");
+
+    var reopened: DbHandle = DbHandle{};
+    try db_test_open_at_stem(&reopened, TEST_STEM_LAZY_REOPEN);
+    _ = try db_exec(&reopened, "INSERT INTO users JSON '{\"name\":\"bob\",\"age\":18,\"active\":false}';");
+
+    const ann_result: QueryResult = try db_query(&reopened, "SELECT $.name FROM users WHERE _id = 1 LIMIT 1;");
+    try assert_eq_i32(ann_result.row_count as i32, 1);
+    const ann_row: &OwnedRow = try query_result_row(&ann_result, 0u32);
+    try assert_eq_bool(byte_slices_equal(try owned_row_cell_text(ann_row, 0u16), "ann"), true);
+
+    const bob_result: QueryResult = try db_query(&reopened, "SELECT $.name FROM users WHERE _id = 2 LIMIT 1;");
+    try assert_eq_i32(bob_result.row_count as i32, 1);
+    const bob_row: &OwnedRow = try query_result_row(&bob_result, 0u32);
+    try assert_eq_bool(byte_slices_equal(try owned_row_cell_text(bob_row, 0u16), "bob"), true);
+}
+
+test "nosqlite_phase11_lazy_cursor_snapshot_materializes_reopened_blob" {
+    if bench_mode_enabled() {
+        return;
+    }
+    cleanup_stem(TEST_STEM_LAZY_REOPEN);
+    defer {
+        cleanup_stem(TEST_STEM_LAZY_REOPEN);
+    }
+
+    var db: DbHandle = DbHandle{};
+    try db_test_create_at_stem(&db, TEST_STEM_LAZY_REOPEN);
+    try db_test_create_collection(&db, "users");
+    _ = try db_exec(&db, "INSERT INTO users JSON '{\"name\":\"ann\",\"age\":25,\"active\":true}';");
+
+    var reopened: DbHandle = DbHandle{};
+    try db_test_open_at_stem(&reopened, TEST_STEM_LAZY_REOPEN);
+    var cursor: QueryCursor = try db_query_cursor(&reopened, "SELECT _id FROM users LIMIT 1;");
+    _ = try db_exec(&reopened, "UPDATE users SET $.name = 'new' WHERE _id = 1;");
+
+    try assert_eq_bool(try cursor_next(&cursor), true);
+    const pinned_row: RowRef = try cursor_row(&cursor);
+    const name_path: PathProgram = try path_program_compile(&"$.name"[0: 6]);
+    const name_node: &[byte] = try path_program_eval(&name_path, pinned_row.doc_blob);
+    const pinned_name: &[byte] = try doc_string_view(name_node);
+    try assert_eq_bool(byte_slices_equal(pinned_name, "ann"), true);
+
+    const latest_result: QueryResult = try db_query(&reopened, "SELECT $.name FROM users WHERE _id = 1 LIMIT 1;");
+    try assert_eq_i32(latest_result.row_count as i32, 1);
+    const latest_row: &OwnedRow = try query_result_row(&latest_result, 0u32);
+    try assert_eq_bool(byte_slices_equal(try owned_row_cell_text(latest_row, 0u16), "new"), true);
 }
 
 test "nosqlite_phase11_benchmark_runner" {

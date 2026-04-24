@@ -6,6 +6,7 @@
 // ============================================================
 
 export const SYS_read: i64 = 0;
+export const SYS_pread64: i64 = 17;
 export const SYS_write: i64 = 1;
 export const SYS_open: i64 = 2;
 export const SYS_close: i64 = 3;
@@ -163,6 +164,10 @@ export fn sys_write(fd: i32, buf: &const byte, count: usize) !isize {
 
 export fn sys_read(fd: i32, buf: &byte, count: usize) !isize {
     return @syscall(SYS_read, fd as i64, buf as i64, count as i64) as! isize;
+}
+
+export fn sys_pread64(fd: i32, buf: &byte, count: usize, offset: i64) !isize {
+    return @syscall(SYS_pread64, fd as i64, buf as i64, count as i64, offset) as! isize;
 }
 
 export fn sys_open(pathname: &const byte, flags: i32, mode: i32) !i32 {

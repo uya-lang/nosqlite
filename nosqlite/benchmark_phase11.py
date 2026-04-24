@@ -11,6 +11,7 @@ from pathlib import Path
 
 RUNNER = "nosqlite/tests/storage/test_phase11_stability.uya"
 RUNNER_BIN = ".uyacache/a.out"
+RUNNER_CFLAGS = "-std=c99 -O2 -g -fno-builtin"
 CASES = [
     ("warm_primary_lookup", "warm-read", "primary_lookup"),
     ("warm_seq_scan", "warm-read", "seq_scan_filter"),
@@ -64,6 +65,15 @@ def kernel_version() -> str:
 def compile_runner(root: Path) -> None:
     subprocess.run(["rm", "-rf", ".uyacache"], cwd=root, check=True)
     subprocess.run([str(root / "uya/bin/uya"), RUNNER], cwd=root, check=True)
+    subprocess.run([
+        "make",
+        "-C",
+        ".uyacache",
+        "-B",
+        "UYA_OUT=a.out",
+        "CC=cc",
+        f"CFLAGS={RUNNER_CFLAGS}",
+    ], cwd=root, check=True)
 
 
 def parse_sample_lines(stdout: str) -> tuple[dict, list[dict], str | None]:
@@ -220,7 +230,7 @@ def bench_env(case_name: str, mode: str, docs: int, avg_doc_bytes: int) -> str:
         "BENCH_ENV version=1 "
         f"host_os={platform.system().lower()} host_arch={platform.machine()} "
         f'kernel="{kernel_version()}" cpu_model="{cpu_model()}" '
-        f"cpu_count={os.cpu_count() or 1} page_size=4096 build_mode=debug durability=fdatasync "
+        f"cpu_count={os.cpu_count() or 1} page_size=4096 build_mode=optimized-c-o2 durability=fdatasync "
         f"dataset_docs={docs} dataset_avg_doc_bytes={avg_doc_bytes} "
         "dataset_generator=nosqlite/generate_bench_dataset.py "
         f"benchmark_mode={mode} case_name={case_name}"

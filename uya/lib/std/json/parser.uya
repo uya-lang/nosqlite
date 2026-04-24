@@ -39,15 +39,6 @@ fn next(s: &ParseState) byte {
 }
 
 fn skip_ws(s: &ParseState) void {
-    while s.pos + 16 <= s.len {
-        const c: JsonWsVec16 = @vector.load(&s.ptr[s.pos]);
-        const w: JsonWsMask16 = (c == @vector.splat(32u8)) | (c == @vector.splat(9u8)) | (c == @vector.splat(10u8)) | (c == @vector.splat(13u8));
-        if @vector.all(w) {
-            s.pos = s.pos + 16;
-        } else {
-            break;
-        }
-    }
     while s.pos < s.len {
         const b: byte = s.ptr[s.pos];
         if b == 32 || b == 9 || b == 10 || b == 13 {
@@ -88,28 +79,15 @@ fn is_digit(b: byte) bool {
 
 // 连续 ASCII 数字 `0`–`9`：先 16 字节块（@vector），再标量收尾（与 skip_ws 同策略）
 fn skip_ascii_digits_vec16(s: &ParseState) void {
-    while s.pos + 16 <= s.len {
-        const c: JsonWsVec16 = @vector.load(&s.ptr[s.pos]);
-        const ge: JsonWsMask16 = c >= @vector.splat(48u8);
-        const le: JsonWsMask16 = c <= @vector.splat(57u8);
-        if @vector.all(ge & le) {
-            s.pos = s.pos + 16;
-        } else {
-            return;
-        }
+    while s.pos < s.len && s.ptr[s.pos] >= 48 && s.ptr[s.pos] <= 57 {
+        s.pos = s.pos + 1;
     }
 }
 
-// 字符串体中无 `"`、无 `\` 的连续段：块推进后仍由标量处理引号与转义
+// 字符串体中无 `"`、无 `\` 的连续段：debug C 后端下标量扫描比 SIMD helper 更少开销。
 fn skip_string_unescaped_run_vec16(s: &ParseState) void {
-    while s.pos + 16 <= s.len {
-        const c: JsonWsVec16 = @vector.load(&s.ptr[s.pos]);
-        const m: JsonWsMask16 = (c != @vector.splat(34u8)) & (c != @vector.splat(92u8));
-        if @vector.all(m) {
-            s.pos = s.pos + 16;
-        } else {
-            return;
-        }
+    while s.pos < s.len && s.ptr[s.pos] != 34 && s.ptr[s.pos] != 92 {
+        s.pos = s.pos + 1;
     }
 }
 
