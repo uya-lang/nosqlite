@@ -4,9 +4,14 @@
 
 NoSQLite 是一个 Uya-native 的嵌入式文档数据库：拿 JSON 的灵活性、SQL 的可读性、存储引擎的谨慎和 Uya 的显式资源模型，压成一个小而硬的数据库内核。
 
-这个仓库已经封板到 NoSQLite v1/v1.5 里程碑：阶段任务全部完成，Definition of Done 每一项都有测试或文档证据，完整验收脚本通过。
+这个仓库已经完成 NoSQLite v1/v1.5 封板，并继续推进到 `v1.6.0` 的性能优化发布：在保留 WAL、snapshot、recovery 和格式兼容语义的前提下，把查询、提交和恢复热路径继续压薄。
 
-当前里程碑版本：`nosqlite-v1.5.0`
+当前版本说明文档：
+
+- `nosqlite-v1.5.0`：封板里程碑
+- `nosqlite-v1.6.0`：性能优化发布
+
+项目仓库：`https://github.com/uya-lang/nosqlite`
 
 ```bash
 bash nosqlite/tests/verify_definition_of_done.sh
@@ -81,6 +86,20 @@ benchmark 输出位置：
 - `docs/nosqlite-benchmark-v0.json`
 - `docs/nosqlite-sqlite-compare.md`
 - `docs/nosqlite-sqlite-compare.json`
+
+## 当前性能摘要
+
+以下数据来自 `2026-04-24` 的同机 `NoSQLite vs SQLite JSON1` 对比 benchmark，测试口径为 `3` 个平均 `1024` bytes 文档、`10` 次迭代：
+
+| case | mode | NoSQLite p50 us | SQLite p50 us | p50 对比 |
+| --- | --- | ---: | ---: | --- |
+| primary_lookup | warm-read | 1 | 3 | NoSQLite faster x3.00 |
+| seq_scan_filter | warm-read | 2 | 4 | NoSQLite faster x2.00 |
+| durable_insert | durable-write | 61 | 58 | SQLite faster x1.05 |
+| recovery_open | recovery | 91 | 103 | NoSQLite faster x1.13 |
+| long_query_concurrent_commit | durable-write | 45 | 70 | NoSQLite faster x1.56 |
+
+这不是生产 SLO 宣言：SQLite 是成熟 C 实现，NoSQLite 当前仍是 Uya/C v0/v1 原型口径，且 collection 容量仍受单页布局限制。它更适合作为 `v1.6.0` 这轮优化效果的对标参照。
 
 ## API 预览
 
@@ -167,7 +186,8 @@ DoD 映射见 [docs/nosqlite-definition-of-done.md](docs/nosqlite-definition-of-
 ## 文档入口
 
 - [详细设计](docs/nosqlite-design.md)
-- [里程碑发布说明](docs/nosqlite-release-v1.5.0.md)
+- [v1.5.0 封板说明](docs/nosqlite-release-v1.5.0.md)
+- [v1.6.0 性能发布说明](docs/nosqlite-release-v1.6.0.md)
 - [Definition of Done](docs/nosqlite-definition-of-done.md)
 - [压力测试报告](docs/nosqlite-stress-report.md)
 - [SQLite 对比 Benchmark](docs/nosqlite-sqlite-compare.md)
@@ -180,7 +200,7 @@ DoD 映射见 [docs/nosqlite-definition-of-done.md](docs/nosqlite-definition-of-
 
 ## 当前边界
 
-这是一个已经封板的 v1/v1.5 数据库内核里程碑，但不是“替代 SQLite 或 MongoDB”的宣言。
+这是一个已经封板并继续演进的 v1/v1.6 数据库内核项目，但不是“替代 SQLite 或 MongoDB”的宣言。
 
 - 单进程嵌入式使用。
 - 单写者设计。
@@ -190,7 +210,7 @@ DoD 映射见 [docs/nosqlite-definition-of-done.md](docs/nosqlite-definition-of-
 
 ## 状态
 
-NoSQLite v1/v1.5 已经完成仓库 checklist 定义的功能和工程验收。
+NoSQLite v1/v1.5 已经完成仓库 checklist 定义的功能和工程验收，`v1.6.0` 继续把性能路径往可用、可比、可解释的方向推进。
 
 最短证明：
 
