@@ -231,8 +231,16 @@ export fn btree_leaf_key_count(page_buf: &[byte]) !u16 {
     return btree_load_u16_le(page_buf, page_body_offset());
 }
 
+export fn btree_leaf_key_count_fast(page_buf: &[byte]) u16 {
+    return btree_load_u16_le(page_buf, page_body_offset());
+}
+
 export fn btree_leaf_next_leaf(page_buf: &[byte]) !u32 {
     _ = try btree_validate_page(page_buf, PageType.BTREE_LEAF);
+    return btree_load_u32_le(page_buf, page_body_offset() + 4usize);
+}
+
+export fn btree_leaf_next_leaf_fast(page_buf: &[byte]) u32 {
     return btree_load_u32_le(page_buf, page_body_offset() + 4usize);
 }
 
@@ -241,8 +249,16 @@ export fn btree_internal_key_count(page_buf: &[byte]) !u16 {
     return btree_load_u16_le(page_buf, page_body_offset());
 }
 
+export fn btree_internal_key_count_fast(page_buf: &[byte]) u16 {
+    return btree_load_u16_le(page_buf, page_body_offset());
+}
+
 export fn btree_internal_first_child(page_buf: &[byte]) !u32 {
     _ = try btree_validate_page(page_buf, PageType.BTREE_INTERNAL);
+    return btree_load_u32_le(page_buf, page_body_offset() + 4usize);
+}
+
+export fn btree_internal_first_child_fast(page_buf: &[byte]) u32 {
     return btree_load_u32_le(page_buf, page_body_offset() + 4usize);
 }
 
@@ -261,12 +277,35 @@ export fn btree_leaf_entry_at(page_buf: &[byte], idx: u16) !BTreeLeafEntry {
     };
 }
 
+export fn btree_leaf_entry_at_fast(page_buf: &[byte], idx: u16) BTreeLeafEntry {
+    const off: usize = btree_leaf_entry_offset(page_buf, idx);
+    return BTreeLeafEntry{
+        key: btree_load_u64_le(page_buf, off),
+        record_ptr: record_pointer_make(
+            btree_load_u32_le(page_buf, off + 8usize),
+            btree_load_u16_le(page_buf, off + 12usize),
+        ),
+    };
+}
+
 export fn btree_leaf_key_at(page_buf: &[byte], idx: u16) !u64 {
     return (try btree_leaf_entry_at(page_buf, idx)).key;
 }
 
+export fn btree_leaf_key_at_fast(page_buf: &[byte], idx: u16) u64 {
+    return btree_load_u64_le(page_buf, btree_leaf_entry_offset(page_buf, idx));
+}
+
 export fn btree_leaf_record_pointer_at(page_buf: &[byte], idx: u16) !RecordPointer {
     return (try btree_leaf_entry_at(page_buf, idx)).record_ptr;
+}
+
+export fn btree_leaf_record_pointer_at_fast(page_buf: &[byte], idx: u16) RecordPointer {
+    const off: usize = btree_leaf_entry_offset(page_buf, idx);
+    return record_pointer_make(
+        btree_load_u32_le(page_buf, off + 8usize),
+        btree_load_u16_le(page_buf, off + 12usize),
+    );
 }
 
 export fn btree_internal_cell_at(page_buf: &[byte], idx: u16) !BTreeInternalCell {
@@ -281,8 +320,20 @@ export fn btree_internal_cell_at(page_buf: &[byte], idx: u16) !BTreeInternalCell
     };
 }
 
+export fn btree_internal_cell_at_fast(page_buf: &[byte], idx: u16) BTreeInternalCell {
+    const off: usize = btree_internal_cell_offset(page_buf, idx);
+    return BTreeInternalCell{
+        key: btree_load_u64_le(page_buf, off),
+        child_page: btree_load_u32_le(page_buf, off + 8usize),
+    };
+}
+
 export fn btree_internal_key_at(page_buf: &[byte], idx: u16) !u64 {
     return (try btree_internal_cell_at(page_buf, idx)).key;
+}
+
+export fn btree_internal_key_at_fast(page_buf: &[byte], idx: u16) u64 {
+    return btree_load_u64_le(page_buf, btree_internal_cell_offset(page_buf, idx));
 }
 
 export fn btree_internal_child_at(page_buf: &[byte], child_idx: u16) !u32 {
@@ -296,13 +347,19 @@ export fn btree_internal_child_at(page_buf: &[byte], child_idx: u16) !u32 {
     return (try btree_internal_cell_at(page_buf, child_idx - 1u16)).child_page;
 }
 
-export fn btree_leaf_lower_bound(page_buf: &[byte], key: u64) !u16 {
-    const count: u16 = try btree_leaf_key_count(page_buf);
+export fn btree_internal_child_at_fast(page_buf: &[byte], child_idx: u16) u32 {
+    if child_idx == 0u16 {
+        return btree_internal_first_child_fast(page_buf);
+    }
+    return btree_internal_cell_at_fast(page_buf, child_idx - 1u16).child_page;
+}
+
+export fn btree_leaf_lower_bound_fast(page_buf: &[byte], key: u64, count: u16) u16 {
     var lo: u16 = 0u16;
     var hi: u16 = count;
     while lo < hi {
         const mid: u16 = lo + ((hi - lo) / 2u16);
-        const mid_key: u64 = try btree_leaf_key_at(page_buf, mid);
+        const mid_key: u64 = btree_leaf_key_at_fast(page_buf, mid);
         if mid_key < key {
             lo = mid + 1u16;
         } else {
@@ -312,13 +369,16 @@ export fn btree_leaf_lower_bound(page_buf: &[byte], key: u64) !u16 {
     return lo;
 }
 
-export fn btree_internal_child_index(page_buf: &[byte], key: u64) !u16 {
-    const count: u16 = try btree_internal_key_count(page_buf);
+export fn btree_leaf_lower_bound(page_buf: &[byte], key: u64) !u16 {
+    return btree_leaf_lower_bound_fast(page_buf, key, try btree_leaf_key_count(page_buf));
+}
+
+export fn btree_internal_child_index_fast(page_buf: &[byte], key: u64, count: u16) u16 {
     var lo: u16 = 0u16;
     var hi: u16 = count;
     while lo < hi {
         const mid: u16 = lo + ((hi - lo) / 2u16);
-        const mid_key: u64 = try btree_internal_key_at(page_buf, mid);
+        const mid_key: u64 = btree_internal_key_at_fast(page_buf, mid);
         if key < mid_key {
             hi = mid;
         } else {
@@ -326,6 +386,10 @@ export fn btree_internal_child_index(page_buf: &[byte], key: u64) !u16 {
         }
     }
     return lo;
+}
+
+export fn btree_internal_child_index(page_buf: &[byte], key: u64) !u16 {
+    return btree_internal_child_index_fast(page_buf, key, try btree_internal_key_count(page_buf));
 }
 
 export fn btree_leaf_rewrite(page_buf: &[byte], next_leaf: u32, entries: &[BTreeLeafEntry], count: u16) !void {

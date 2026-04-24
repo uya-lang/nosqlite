@@ -15,17 +15,26 @@ use lib.index.btree_page.btree_leaf_init;
 use lib.index.btree_page.btree_internal_init;
 use lib.index.btree_page.btree_leaf_capacity;
 use lib.index.btree_page.btree_internal_capacity;
+use lib.index.btree_page.btree_leaf_key_count_fast;
 use lib.index.btree_page.btree_leaf_key_count;
+use lib.index.btree_page.btree_leaf_next_leaf_fast;
 use lib.index.btree_page.btree_leaf_next_leaf;
+use lib.index.btree_page.btree_leaf_key_at_fast;
 use lib.index.btree_page.btree_leaf_key_at;
+use lib.index.btree_page.btree_leaf_record_pointer_at_fast;
 use lib.index.btree_page.btree_leaf_record_pointer_at;
 use lib.index.btree_page.btree_leaf_entry_at;
+use lib.index.btree_page.btree_leaf_lower_bound_fast;
 use lib.index.btree_page.btree_leaf_lower_bound;
 use lib.index.btree_page.btree_leaf_rewrite;
+use lib.index.btree_page.btree_internal_key_count_fast;
 use lib.index.btree_page.btree_internal_key_count;
+use lib.index.btree_page.btree_internal_first_child_fast;
 use lib.index.btree_page.btree_internal_first_child;
 use lib.index.btree_page.btree_internal_key_at;
+use lib.index.btree_page.btree_internal_child_at_fast;
 use lib.index.btree_page.btree_internal_child_at;
+use lib.index.btree_page.btree_internal_child_index_fast;
 use lib.index.btree_page.btree_internal_child_index;
 use lib.index.btree_page.btree_internal_rewrite;
 
@@ -289,7 +298,7 @@ fn primary_btree_leftmost_leaf(tree: &PrimaryBTree) !u32 {
         if header.page_type != PageType.BTREE_INTERNAL {
             return error.BTreeInvalidPage;
         }
-        page_id = try btree_internal_first_child(page_buf);
+        page_id = btree_internal_first_child_fast(page_buf);
     }
     return error.BTreeInvalidPage;
 }
@@ -376,18 +385,19 @@ export fn primary_btree_lookup(tree: &PrimaryBTree, key: u64) !RecordPointer {
             return error.BTreeInvalidPage;
         }
         if header.page_type == PageType.BTREE_LEAF {
-            const pos: u16 = try btree_leaf_lower_bound(page_buf, key);
-            const count: u16 = try btree_leaf_key_count(page_buf);
-            if pos < count && (try btree_leaf_key_at(page_buf, pos)) == key {
-                return try btree_leaf_record_pointer_at(page_buf, pos);
+            const count: u16 = btree_leaf_key_count_fast(page_buf);
+            const pos: u16 = btree_leaf_lower_bound_fast(page_buf, key, count);
+            if pos < count && btree_leaf_key_at_fast(page_buf, pos) == key {
+                return btree_leaf_record_pointer_at_fast(page_buf, pos);
             }
             return error.BTreeKeyNotFound;
         }
         if header.page_type != PageType.BTREE_INTERNAL {
             return error.BTreeInvalidPage;
         }
-        const child_idx: u16 = try btree_internal_child_index(page_buf, key);
-        page_id = try btree_internal_child_at(page_buf, child_idx);
+        const key_count: u16 = btree_internal_key_count_fast(page_buf);
+        const child_idx: u16 = btree_internal_child_index_fast(page_buf, key, key_count);
+        page_id = btree_internal_child_at_fast(page_buf, child_idx);
     }
     return error.BTreeKeyNotFound;
 }
@@ -412,11 +422,11 @@ export fn btree_cursor_next(cursor: &BTreeCursor) !bool {
         cursor.entry_index = 0u16;
     } else if cursor.valid {
         const current_page: &[byte] = try primary_btree_page(cursor.tree, cursor.current_leaf_page);
-        const current_count: u16 = try btree_leaf_key_count(current_page);
+        const current_count: u16 = btree_leaf_key_count_fast(current_page);
         if cursor.entry_index + 1u16 < current_count {
             cursor.entry_index = cursor.entry_index + 1u16;
         } else {
-            cursor.current_leaf_page = try btree_leaf_next_leaf(current_page);
+            cursor.current_leaf_page = btree_leaf_next_leaf_fast(current_page);
             cursor.entry_index = 0u16;
         }
     }

@@ -46,6 +46,7 @@ use lib.api.error_text.nosqlite_error_message_from_runtime_error_id;
 use lib.api.result.QueryResult;
 use lib.api.result.OwnedRow;
 use lib.api.result.query_result_row;
+use lib.api.result.query_result_release;
 use lib.api.result.owned_row_cell_text;
 
 const TEST_STEM_DB_CHECK: *const byte = "/tmp/nosqlite_phase11_db_check" as *const byte;
@@ -292,10 +293,14 @@ fn bench_lookup(docs: u64, avg_doc_bytes: usize, iterations: u64) !void {
         if warm_sql_len_i32 <= 0 {
             return error.BenchBufferTooSmall;
         }
-        const warm_result: !QueryResult = db_query(&g_bench_warm_db, warm_sql_buf[0: warm_sql_len_i32 as usize]);
-        if warm_result.error_id != 0u32 {
-            printf("RUNNER_STAGE case=warm_primary_lookup stage=warmup error_id=%u\n" as *byte, warm_result.error_id);
-            return error.BenchUnexpectedResult;
+        {
+            const warm_result: !QueryResult = db_query(&g_bench_warm_db, warm_sql_buf[0: warm_sql_len_i32 as usize]);
+            if warm_result.error_id != 0u32 {
+                printf("RUNNER_STAGE case=warm_primary_lookup stage=warmup error_id=%u\n" as *byte, warm_result.error_id);
+                return error.BenchUnexpectedResult;
+            }
+            var warm_result_value: QueryResult = warm_result.value;
+            query_result_release(&warm_result_value);
         }
         warm_doc_id = warm_doc_id + 1u64;
     }
@@ -313,14 +318,19 @@ fn bench_lookup(docs: u64, avg_doc_bytes: usize, iterations: u64) !void {
             return error.BenchBufferTooSmall;
         }
         const start_us: u64 = now_usec();
-        const result_u: !QueryResult = db_query(&g_bench_warm_db, sql_buf[0: sql_len_i32 as usize]);
-        if result_u.error_id != 0u32 {
-            printf("RUNNER_STAGE case=warm_primary_lookup stage=query error_id=%u\n" as *byte, result_u.error_id);
-            return error.BenchUnexpectedResult;
+        var row_count: u32 = 0u32;
+        {
+            const result_u: !QueryResult = db_query(&g_bench_warm_db, sql_buf[0: sql_len_i32 as usize]);
+            if result_u.error_id != 0u32 {
+                printf("RUNNER_STAGE case=warm_primary_lookup stage=query error_id=%u\n" as *byte, result_u.error_id);
+                return error.BenchUnexpectedResult;
+            }
+            var result: QueryResult = result_u.value;
+            row_count = result.row_count;
+            query_result_release(&result);
         }
-        const result: QueryResult = result_u.value;
         const elapsed_us: u64 = now_usec() - start_us;
-        if result.row_count != 1u32 {
+        if row_count != 1u32 {
             return error.BenchUnexpectedResult;
         }
         printf("SAMPLE case=warm_primary_lookup us=%lu docs=1 bytes=%zu\n" as *byte, elapsed_us, avg_doc_bytes);
@@ -334,26 +344,35 @@ fn bench_seq_scan(docs: u64, avg_doc_bytes: usize, iterations: u64) !void {
         printf("RUNNER_STAGE case=warm_seq_scan stage=prepare error_id=%u\n" as *byte, prep.error_id);
         return error.BenchUnexpectedResult;
     }
-    const warm_result: !QueryResult = db_query(&g_bench_warm_db, "SELECT _id FROM users WHERE $.age >= 18 LIMIT 64;"[0: 47]);
-    if warm_result.error_id != 0u32 {
-        printf("RUNNER_STAGE case=warm_seq_scan stage=warmup error_id=%u\n" as *byte, warm_result.error_id);
-        return error.BenchUnexpectedResult;
+    {
+        const warm_result: !QueryResult = db_query(&g_bench_warm_db, "SELECT _id FROM users WHERE $.age >= 18 LIMIT 64;"[0: 47]);
+        if warm_result.error_id != 0u32 {
+            printf("RUNNER_STAGE case=warm_seq_scan stage=warmup error_id=%u\n" as *byte, warm_result.error_id);
+            return error.BenchUnexpectedResult;
+        }
+        var warm_result_value: QueryResult = warm_result.value;
+        query_result_release(&warm_result_value);
     }
     var i: u64 = 0u64;
     while i < iterations {
         const start_us: u64 = now_usec();
-        const result_u: !QueryResult = db_query(&g_bench_warm_db, "SELECT _id FROM users WHERE $.age >= 18 LIMIT 64;"[0: 47]);
-        if result_u.error_id != 0u32 {
-            printf("RUNNER_STAGE case=warm_seq_scan stage=query error_id=%u\n" as *byte, result_u.error_id);
-            return error.BenchUnexpectedResult;
+        var row_count: u32 = 0u32;
+        {
+            const result_u: !QueryResult = db_query(&g_bench_warm_db, "SELECT _id FROM users WHERE $.age >= 18 LIMIT 64;"[0: 47]);
+            if result_u.error_id != 0u32 {
+                printf("RUNNER_STAGE case=warm_seq_scan stage=query error_id=%u\n" as *byte, result_u.error_id);
+                return error.BenchUnexpectedResult;
+            }
+            var result: QueryResult = result_u.value;
+            row_count = result.row_count;
+            query_result_release(&result);
         }
-        const result: QueryResult = result_u.value;
         const elapsed_us: u64 = now_usec() - start_us;
         printf(
             "SAMPLE case=warm_seq_scan us=%lu docs=%u bytes=%zu\n" as *byte,
             elapsed_us,
-            docs as u32,
-            docs as usize * avg_doc_bytes,
+            row_count,
+            row_count as usize * avg_doc_bytes,
         );
         i = i + 1u64;
     }

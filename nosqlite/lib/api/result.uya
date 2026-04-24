@@ -47,6 +47,18 @@ export struct QueryResult {
     },
 }
 
+export fn query_result_release(result: &QueryResult) void {
+    if result == null {
+        return;
+    }
+    if result.rows != null {
+        result.allocator.dealloc(result.rows as &byte);
+        result.rows = null;
+    }
+    result.column_count = 0u16;
+    result.row_count = 0u32;
+}
+
 fn result_load_u16_le(data: &[byte], off: usize) u16 {
     return (data.ptr[off] as u16) |
         ((data.ptr[off + 1usize] as u16) << 8);

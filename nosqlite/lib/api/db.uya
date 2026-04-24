@@ -7,8 +7,6 @@ use std.mem.arena.Arena;
 use std.mem.arena.arena_init;
 use std.mem.arena.arena_alloc;
 use std.mem.allocator.IAllocator;
-use std.mem.allocator.g_allocator;
-use std.mem.allocator.get_allocator;
 use std.string.strlen;
 use std.json.value.JsonValue;
 use std.json.value.JsonArray;
@@ -21,6 +19,7 @@ use lib.storage.pager.SnapshotPressurePolicy;
 use lib.storage.pager.SnapshotPressureStatus;
 use lib.storage.pager.CursorLease;
 use lib.storage.pager.PagerOpenInfo;
+use lib.storage.pager.PagerSession;
 use lib.storage.pager.PagerUpgradePlan;
 use lib.storage.pager.PagerUpgradeReport;
 use lib.storage.pager.WalCommit;
@@ -30,13 +29,18 @@ use lib.storage.pager.catalog_cleanup_stem;
 use lib.storage.pager.catalog_create_db_at_stem;
 use lib.storage.pager.catalog_create_collection_at_stem;
 use lib.storage.pager.catalog_load_at_stem;
+use lib.storage.pager.catalog_load_with_file;
 use lib.storage.pager.catalog_load_with_info_at_stem;
 use lib.storage.pager.cursor_lease_start;
 use lib.storage.pager.cursor_lease_validate;
+use lib.storage.pager.pager_close_session;
 use lib.storage.pager.pager_check_wal_at_stem;
 use lib.storage.pager.pager_checkpoint_at_stem;
+use lib.storage.pager.pager_commit_batch_with_open_files_at_stem;
+use lib.storage.pager.pager_open_session_at_stem;
 use lib.storage.pager.pager_open_at_stem;
 use lib.storage.pager.pager_read_page_at_stem;
+use lib.storage.pager.pager_read_page_with_file;
 use lib.storage.pager.pager_read_page_with_info_at_stem;
 use lib.storage.pager.pager_commit_batch_at_stem;
 use lib.storage.pager.pager_commit_batch_with_info_at_stem;
@@ -53,11 +57,14 @@ use lib.catalog.schema.IndexMeta;
 use lib.catalog.schema.CatalogView;
 use lib.catalog.schema.CatalogCollectionView;
 use lib.catalog.schema.CatalogIndexView;
+use lib.catalog.schema.CatalogScratchCollection;
 use lib.catalog.schema.catalog_view_from_page;
 use lib.catalog.schema.catalog_collection_at;
 use lib.catalog.schema.catalog_page_allocate_next_doc_id;
 use lib.catalog.schema.catalog_collection_index_at;
 use lib.catalog.schema.catalog_page_append_index;
+use lib.catalog.schema.catalog_page_init;
+use lib.catalog.schema.catalog_page_rewrite_from_entries;
 use lib.core.NOSQLITE_PAGE_SIZE_DEFAULT;
 use lib.index.key.RecordPointer;
 use lib.index.key.record_pointer_make;
@@ -80,13 +87,15 @@ use lib.sql.binder.BoundSelect;
 use lib.sql.binder.BoundExprNode;
 use lib.sql.binder.BoundExprKind;
 use lib.sql.binder.BoundLiteralKind;
-use lib.sql.binder.bind_select_at_stem;
-use lib.sql.binder.bind_select_with_collection_metadata;
+use lib.sql.binder.bind_select_at_stem_into;
+use lib.sql.binder.bind_select_with_collection_metadata_into;
+use lib.sql.binder.bound_select_reset;
 use lib.sql.binder.bound_expr_node;
 use lib.plan.planner.QueryPlan;
 use lib.plan.planner.PlanNode;
 use lib.plan.planner.PlanNodeKind;
 use lib.plan.planner.plan_select_into;
+use lib.plan.planner.query_plan_copy_used;
 use lib.plan.planner.plan_node;
 use lib.plan.planner.plan_explain;
 use lib.doc.codec.doc_encode_json_value;
@@ -165,6 +174,12 @@ const DB_MAX_SECONDARY_INDEXES_PER_COLLECTION: usize = 8;
 const DB_MAX_COMMIT_VIEWS: usize = 8;
 const DB_QUERY_CACHE_SLOTS: usize = 4;
 const DB_QUERY_CACHE_SQL_MAX: usize = 512;
+const DB_RESULT_POOL_SMALL_SLOTS: usize = 8;
+const DB_RESULT_POOL_MEDIUM_SLOTS: usize = 4;
+const DB_RESULT_POOL_LARGE_SLOTS: usize = 2;
+const DB_RESULT_POOL_SMALL_BYTES: usize = 32768;
+const DB_RESULT_POOL_MEDIUM_BYTES: usize = 131072;
+const DB_RESULT_POOL_LARGE_BYTES: usize = 1048576;
 const DB_PATH_BUF_SIZE: usize = 512;
 const DB_DOC_BLOB_MAX: usize = 4096;
 const DB_TXN_DOC_SCRATCH_MAX: usize = 8192;
@@ -227,6 +242,72 @@ struct DbQueryCacheEntry {
     plan: QueryPlan,
 }
 
+struct DbResultPoolSmallSlot {
+    in_use: bool,
+    bytes: [byte: DB_RESULT_POOL_SMALL_BYTES],
+}
+
+struct DbResultPoolMediumSlot {
+    in_use: bool,
+    bytes: [byte: DB_RESULT_POOL_MEDIUM_BYTES],
+}
+
+struct DbResultPoolLargeSlot {
+    in_use: bool,
+    bytes: [byte: DB_RESULT_POOL_LARGE_BYTES],
+}
+
+struct DbResultPool {
+    small_slots: [DbResultPoolSmallSlot: DB_RESULT_POOL_SMALL_SLOTS],
+    medium_slots: [DbResultPoolMediumSlot: DB_RESULT_POOL_MEDIUM_SLOTS],
+    large_slots: [DbResultPoolLargeSlot: DB_RESULT_POOL_LARGE_SLOTS],
+}
+
+struct DbResultPoolAllocator : IAllocator {
+    pool: &DbResultPool,
+
+    fn alloc(self: &Self, size: usize) !&byte {
+        if size == 0usize {
+            return error.AllocInvalidSize;
+        }
+        const pool_ptr: &byte = db_result_pool_alloc(self.pool, size);
+        if pool_ptr != null {
+            return pool_ptr;
+        }
+        return error.AllocOutOfMemory;
+    }
+
+    fn dealloc(self: &Self, ptr: &byte) void {
+        if ptr == null {
+            return;
+        }
+        if db_result_pool_dealloc(self.pool, ptr) {
+            return;
+        }
+    }
+
+    fn realloc(self: &Self, ptr: &byte, new_size: usize) !&byte {
+        if ptr == null {
+            return self.alloc(new_size);
+        }
+        if new_size == 0usize {
+            self.dealloc(ptr);
+            return error.AllocInvalidSize;
+        }
+        const old_cap: usize = db_result_pool_capacity(self.pool, ptr);
+        if new_size <= old_cap {
+            return ptr;
+        }
+        if old_cap == 0usize {
+            return error.AllocInvalidPointer;
+        }
+        const new_ptr: &byte = try self.alloc(new_size);
+        _ = mem_copy(new_ptr, ptr as &const byte, old_cap);
+        self.dealloc(ptr);
+        return new_ptr;
+    }
+}
+
 export struct CommitView {
     generation: u64,
     commit_lsn: u64,
@@ -249,6 +330,8 @@ struct CommitViewState {
 export struct DbHandle {
     stem_len: u16,
     stem: [byte: DB_PATH_BUF_SIZE],
+    pager_session: PagerSession,
+    result_pool: DbResultPool,
     snapshot_policy: SnapshotPressurePolicy,
     snapshot_status: SnapshotPressureStatus,
     snapshot_status_override_enabled: bool,
@@ -563,7 +646,9 @@ fn db_query_cache_entry_reset(entry: &DbQueryCacheEntry) void {
     entry.valid = false;
     entry.explain = false;
     entry.sql_len = 0u16;
-    entry.plan = QueryPlan{};
+    bound_select_reset(&entry.plan.bound);
+    entry.plan.node_count = 0u16;
+    entry.plan.root_node = -1;
 }
 
 fn db_invalidate_query_cache(db: &DbHandle) void {
@@ -633,7 +718,7 @@ fn db_query_cache_store(db: &DbHandle, sql: &[const byte], explain: bool, plan: 
         return;
     };
     _ = mem_copy(&entry.sql[0], sql.ptr, sql.len);
-    entry.plan = plan[0];
+    query_plan_copy_used(&entry.plan, plan);
     if slot_idx + 1usize >= DB_QUERY_CACHE_SLOTS {
         db.query_cache_next_slot = 0u16;
     } else {
@@ -646,6 +731,132 @@ fn db_query_cache_store(db: &DbHandle, sql: &[const byte], explain: bool, plan: 
     }
 }
 
+fn db_result_pool_reset(pool: &DbResultPool) void {
+    if pool == null {
+        return;
+    }
+    var i: usize = 0usize;
+    while i < DB_RESULT_POOL_SMALL_SLOTS {
+        pool.small_slots[i].in_use = false;
+        i = i + 1usize;
+    }
+    i = 0usize;
+    while i < DB_RESULT_POOL_MEDIUM_SLOTS {
+        pool.medium_slots[i].in_use = false;
+        i = i + 1usize;
+    }
+    i = 0usize;
+    while i < DB_RESULT_POOL_LARGE_SLOTS {
+        pool.large_slots[i].in_use = false;
+        i = i + 1usize;
+    }
+}
+
+fn db_ptr_in_range(ptr: &byte, start: &byte, size: usize) bool {
+    if ptr == null || start == null || size == 0usize {
+        return false;
+    }
+    const p: usize = @usize_from_ptr(ptr as &void);
+    const s: usize = @usize_from_ptr(start as &void);
+    return p >= s && p < s + size;
+}
+
+fn db_result_pool_alloc(pool: &DbResultPool, size: usize) &byte {
+    if pool == null || size == 0usize {
+        return null;
+    }
+    if size <= DB_RESULT_POOL_SMALL_BYTES {
+        var i: usize = 0usize;
+        while i < DB_RESULT_POOL_SMALL_SLOTS {
+            if !pool.small_slots[i].in_use {
+                pool.small_slots[i].in_use = true;
+                return &pool.small_slots[i].bytes[0];
+            }
+            i = i + 1usize;
+        }
+    }
+    if size <= DB_RESULT_POOL_MEDIUM_BYTES {
+        var i: usize = 0usize;
+        while i < DB_RESULT_POOL_MEDIUM_SLOTS {
+            if !pool.medium_slots[i].in_use {
+                pool.medium_slots[i].in_use = true;
+                return &pool.medium_slots[i].bytes[0];
+            }
+            i = i + 1usize;
+        }
+    }
+    if size <= DB_RESULT_POOL_LARGE_BYTES {
+        var i: usize = 0usize;
+        while i < DB_RESULT_POOL_LARGE_SLOTS {
+            if !pool.large_slots[i].in_use {
+                pool.large_slots[i].in_use = true;
+                return &pool.large_slots[i].bytes[0];
+            }
+            i = i + 1usize;
+        }
+    }
+    return null;
+}
+
+fn db_result_pool_capacity(pool: &DbResultPool, ptr: &byte) usize {
+    if pool == null || ptr == null {
+        return 0usize;
+    }
+    var i: usize = 0usize;
+    while i < DB_RESULT_POOL_SMALL_SLOTS {
+        if db_ptr_in_range(ptr, &pool.small_slots[i].bytes[0], DB_RESULT_POOL_SMALL_BYTES) {
+            return DB_RESULT_POOL_SMALL_BYTES;
+        }
+        i = i + 1usize;
+    }
+    i = 0usize;
+    while i < DB_RESULT_POOL_MEDIUM_SLOTS {
+        if db_ptr_in_range(ptr, &pool.medium_slots[i].bytes[0], DB_RESULT_POOL_MEDIUM_BYTES) {
+            return DB_RESULT_POOL_MEDIUM_BYTES;
+        }
+        i = i + 1usize;
+    }
+    i = 0usize;
+    while i < DB_RESULT_POOL_LARGE_SLOTS {
+        if db_ptr_in_range(ptr, &pool.large_slots[i].bytes[0], DB_RESULT_POOL_LARGE_BYTES) {
+            return DB_RESULT_POOL_LARGE_BYTES;
+        }
+        i = i + 1usize;
+    }
+    return 0usize;
+}
+
+fn db_result_pool_dealloc(pool: &DbResultPool, ptr: &byte) bool {
+    if pool == null || ptr == null {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < DB_RESULT_POOL_SMALL_SLOTS {
+        if db_ptr_in_range(ptr, &pool.small_slots[i].bytes[0], DB_RESULT_POOL_SMALL_BYTES) {
+            pool.small_slots[i].in_use = false;
+            return true;
+        }
+        i = i + 1usize;
+    }
+    i = 0usize;
+    while i < DB_RESULT_POOL_MEDIUM_SLOTS {
+        if db_ptr_in_range(ptr, &pool.medium_slots[i].bytes[0], DB_RESULT_POOL_MEDIUM_BYTES) {
+            pool.medium_slots[i].in_use = false;
+            return true;
+        }
+        i = i + 1usize;
+    }
+    i = 0usize;
+    while i < DB_RESULT_POOL_LARGE_SLOTS {
+        if db_ptr_in_range(ptr, &pool.large_slots[i].bytes[0], DB_RESULT_POOL_LARGE_BYTES) {
+            pool.large_slots[i].in_use = false;
+            return true;
+        }
+        i = i + 1usize;
+    }
+    return false;
+}
+
 fn db_default_snapshot_policy() SnapshotPressurePolicy {
     return SnapshotPressurePolicy{
         soft_retired_bytes: 256u64,
@@ -653,6 +864,13 @@ fn db_default_snapshot_policy() SnapshotPressurePolicy {
         max_retired_views: 4u32,
         cursor_lease_ms: 30000u64,
     };
+}
+
+fn db_close_pager_session(db: &DbHandle) void {
+    if db == null {
+        return;
+    }
+    pager_close_session(&db.pager_session);
 }
 
 fn doc_blob_builder_drop(builder: DocBlobBuilder) void {
@@ -810,6 +1028,75 @@ fn db_rebuild_primary_index(db: &DbHandle, collection_slot: u16) !void {
     }
 }
 
+fn db_try_apply_primary_index_delta(db: &DbHandle, collection_slot: u16, previous: &DbCollection, staged: &DbCollection) !bool {
+    if db == null || previous == null || staged == null {
+        return error.DbCollectionNotFound;
+    }
+    const slot_idx: usize = (collection_slot as! usize) catch {
+        return error.DbCollectionNotFound;
+    };
+    if slot_idx >= DB_MAX_COLLECTIONS {
+        return error.DbCollectionNotFound;
+    }
+    if previous.secondary_index_count != 0u16 || staged.secondary_index_count != 0u16 {
+        return false;
+    }
+
+    var row_idx: u16 = 0u16;
+    var max_row_count: u16 = staged.row_count;
+    if previous.row_count > max_row_count {
+        max_row_count = previous.row_count;
+    }
+    while row_idx < max_row_count {
+        var prev_visible: bool = false;
+        var staged_visible: bool = false;
+        var prev_row: &DbStoredRow = null;
+        var staged_row: &DbStoredRow = null;
+        if row_idx < previous.row_count {
+            prev_row = &previous.rows[row_idx as usize];
+            prev_visible = prev_row.present && !prev_row.tombstone;
+        }
+        if row_idx < staged.row_count {
+            staged_row = &staged.rows[row_idx as usize];
+            staged_visible = staged_row.present && !staged_row.tombstone;
+        }
+        if prev_visible {
+            if !staged_visible {
+                return false;
+            }
+            if prev_row.doc_id != staged_row.doc_id {
+                return false;
+            }
+        } else if staged_visible {
+            try primary_btree_insert(&db.primary_indexes[slot_idx], staged_row.doc_id, &staged_row.record_ptr);
+        }
+        row_idx = row_idx + 1u16;
+    }
+    return true;
+}
+
+fn db_refresh_indexes_after_commit(db: &DbHandle, previous_state: &CommitViewState, collection_count: u16) !void {
+    if db == null || previous_state == null {
+        return error.DbCollectionNotFound;
+    }
+    const staged_state: &CommitViewState = try db_current_view_state(db);
+    var i: u16 = 0u16;
+    while i < collection_count {
+        const previous: &DbCollection = &previous_state.collections[i as usize];
+        const staged: &DbCollection = &staged_state.collections[i as usize];
+        if staged.present {
+            const applied: bool = try db_try_apply_primary_index_delta(db, i, previous, staged);
+            if !applied {
+                try db_rebuild_primary_index(db, i);
+            }
+            if staged.secondary_index_count != 0u16 {
+                try db_rebuild_secondary_indexes(db, i);
+            }
+        }
+        i = i + 1u16;
+    }
+}
+
 fn db_collection_secondary_index_meta(collection: &DbCollection, index_slot: u16) !&DbCollectionIndexMeta {
     if collection == null {
         return error.DbCollectionNotFound;
@@ -933,19 +1220,16 @@ fn db_reload_from_disk(db: &DbHandle) !void {
         return error.DbHandleInvalid;
     }
     db_invalidate_query_cache(db);
-    const info: PagerOpenInfo = try pager_open_at_stem(db_stem_ptr(db));
-    const snapshot: CatalogSnapshot = try catalog_load_with_info_at_stem(db_stem_ptr(db), &info);
+    db_close_pager_session(db);
+    db.pager_session = try pager_open_session_at_stem(db_stem_ptr(db));
+    const info: PagerOpenInfo = db.pager_session.info;
+    const snapshot: CatalogSnapshot = try catalog_load_with_file(&db.pager_session.db, &info);
     var i: usize = 0usize;
     while i < DB_MAX_COMMIT_VIEWS {
         db_clear_commit_view_state(&db.commit_views[i]);
         i = i + 1usize;
     }
     var index_slot: usize = 0usize;
-    while index_slot < DB_MAX_COLLECTIONS {
-        try primary_btree_reset(&db.primary_indexes[index_slot], 256u32);
-        index_slot = index_slot + 1usize;
-    }
-    index_slot = 0usize;
     while index_slot < DB_MAX_COLLECTIONS * DB_MAX_SECONDARY_INDEXES_PER_COLLECTION {
         db_secondary_index_state_reset(&db.secondary_indexes[index_slot]);
         index_slot = index_slot + 1usize;
@@ -1000,7 +1284,7 @@ fn db_reload_from_disk(db: &DbHandle) !void {
         if page_id >= 2u32 && page_id < info.meta.page_count {
             var raw_page: [byte: 8192] = [];
             const page_buf: &[byte] = raw_page[0: info.meta.page_size as usize];
-            try pager_read_page_with_info_at_stem(db_stem_ptr(db), &info, page_id, page_buf);
+            try pager_read_page_with_file(&db.pager_session.db, &info, page_id, page_buf);
             try db_collection_load_page(&current.collections[slot], page_id, page_buf);
         }
         collection_idx = collection_idx + 1u32;
@@ -1018,6 +1302,9 @@ fn db_reload_from_disk(db: &DbHandle) !void {
         collection_idx = collection_idx + 1u32;
     }
     db_refresh_snapshot_status(db);
+    if db.pager_session.info.meta.checkpoint_lsn < db.pager_session.info.meta.commit_lsn {
+        db.pager_session.info = try pager_checkpoint_at_stem(db_stem_ptr(db));
+    }
 }
 
 fn db_check_meta_state_valid(meta: &MetaPage) bool {
@@ -1319,7 +1606,6 @@ fn db_publish_view_slot(db: &DbHandle, new_slot: u16) !void {
     }
     db.next_view_generation = db.next_view_generation + 1u64;
     db.next_page_table_gen = db.next_page_table_gen + 1u64;
-    db_cleanup_retired_views(db);
 }
 
 fn db_find_collection_slot_by_id_in_view(db: &DbHandle, view_slot: u16, collection_id: u32) !u16 {
@@ -2342,9 +2628,9 @@ fn db_txn_stage_update_stmt(txn: &Txn, stmt: &SqlStmt) !void {
         stmt.update_stmt.value_expr,
         1u16,
     );
-    const bound: BoundSelect = try bind_select_at_stem(db_stem_ptr(txn.db), &query_stmt);
     var plan: QueryPlan = QueryPlan{};
-    try plan_select_into(&bound, &plan);
+    try bind_select_at_stem_into(db_stem_ptr(txn.db), &query_stmt, &plan.bound);
+    try plan_select_into(&plan.bound, &plan);
     const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(txn.db, txn.view_slot, try db_identifier_bytes(&stmt.update_stmt.collection_name));
     var match_rows: [u16: DB_MAX_CURSOR_ROWS] = [];
     var match_count: u16 = 0u16;
@@ -2355,7 +2641,7 @@ fn db_txn_stage_update_stmt(txn: &Txn, stmt: &SqlStmt) !void {
     while i < match_count {
         const row_slot: u16 = match_rows[i as usize];
         const rowref: RowRef = try db_collection_row_ref(txn.db, txn.view_slot, collection_slot, row_slot);
-        const new_value: ExecValue = try db_eval_value(txn.db, &bound, &rowref, bound.projection_exprs[0]);
+        const new_value: ExecValue = try db_eval_value(txn.db, &plan.bound, &rowref, plan.bound.projection_exprs[0]);
         const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
         const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
         const row: &DbStoredRow = try db_row_at(collection, row_slot);
@@ -2377,9 +2663,9 @@ fn db_txn_stage_delete_stmt(txn: &Txn, stmt: &SqlStmt) !void {
         -1,
         0u16,
     );
-    const bound: BoundSelect = try bind_select_at_stem(db_stem_ptr(txn.db), &query_stmt);
     var plan: QueryPlan = QueryPlan{};
-    try plan_select_into(&bound, &plan);
+    try bind_select_at_stem_into(db_stem_ptr(txn.db), &query_stmt, &plan.bound);
+    try plan_select_into(&plan.bound, &plan);
     const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(txn.db, txn.view_slot, try db_identifier_bytes(&stmt.delete_stmt.collection_name));
     var match_rows: [u16: DB_MAX_CURSOR_ROWS] = [];
     var match_count: u16 = 0u16;
@@ -2510,48 +2796,97 @@ fn db_txn_stage_insert_stmt(txn: &Txn, stmt: &SqlInsertStmt) !u64 {
     return try db_txn_stage_insert(txn, try db_identifier_bytes(&stmt.collection_name), try db_literal_text_bytes(&stmt.json_text));
 }
 
+fn db_catalog_scratch_from_view(state: &CommitViewState, out: &[CatalogScratchCollection], count_out: &u16) !void {
+    if state == null || out.ptr == null || count_out == null {
+        return error.DbCollectionFull;
+    }
+    if state.collection_count as usize > out.len {
+        return error.DbCollectionFull;
+    }
+    var i: usize = 0usize;
+    while i < out.len {
+        out.ptr[i] = CatalogScratchCollection{};
+        i = i + 1usize;
+    }
+
+    i = 0usize;
+    while i < state.collection_count as usize {
+        const collection: &DbCollection = &state.collections[i];
+        if !collection.present {
+            return error.DbCollectionFull;
+        }
+        out.ptr[i].present = true;
+        out.ptr[i].meta = CollectionMeta{
+            collection_id: collection.collection_id,
+            name_len: collection.name_len,
+            flags: 0u16,
+            next_doc_id: collection.next_doc_id,
+            primary_root_page: collection.primary_root_page,
+            secondary_index_count: collection.secondary_index_count,
+            rsv: 0u16,
+            name_off: 0u32,
+            indexes_off: 0u32,
+        };
+        out.ptr[i].name_len = collection.name_len;
+        if collection.name_len > 0u16 {
+            _ = mem_copy(&out.ptr[i].name[0], &collection.name[0], collection.name_len as usize);
+        }
+        out.ptr[i].index_count = collection.secondary_index_count;
+
+        var index_idx: usize = 0usize;
+        while index_idx < collection.secondary_index_count as usize {
+            const index_meta: &DbCollectionIndexMeta = &collection.secondary_indexes[index_idx];
+            if !index_meta.present {
+                return error.DbCollectionFull;
+            }
+            out.ptr[i].indexes[index_idx].present = true;
+            out.ptr[i].indexes[index_idx].meta = IndexMeta{
+                index_id: index_meta.index_id,
+                root_page: index_meta.root_page,
+                flags: 0u16,
+                path_segment_count: index_meta.path_segment_count,
+                name_off: 0u32,
+                path_off: 0u32,
+            };
+            out.ptr[i].indexes[index_idx].name_len = index_meta.name_len;
+            out.ptr[i].indexes[index_idx].path_len = index_meta.path_len;
+            if index_meta.name_len > 0u16 {
+                _ = mem_copy(&out.ptr[i].indexes[index_idx].name[0], &index_meta.name[0], index_meta.name_len as usize);
+            }
+            if index_meta.path_len > 0u16 {
+                _ = mem_copy(&out.ptr[i].indexes[index_idx].path[0], &index_meta.path[0], index_meta.path_len as usize);
+            }
+            index_idx = index_idx + 1usize;
+        }
+        i = i + 1usize;
+    }
+    count_out[0] = state.collection_count;
+}
+
 fn db_txn_commit_persist(txn: &Txn) !WalCommit {
     if txn == null || txn.db == null {
         return error.DbHandleInvalid;
     }
     const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
-    const current: &CommitViewState = try db_current_view_state(txn.db);
-    const info: PagerOpenInfo = try pager_open_at_stem(db_stem_ptr(txn.db));
+    if !txn.db.pager_session.active {
+        txn.db.pager_session = try pager_open_session_at_stem(db_stem_ptr(txn.db));
+    }
+    const info: PagerOpenInfo = txn.db.pager_session.info;
     const next_lsn: u64 = info.meta.commit_lsn + 1u64;
     var max_page_count: u32 = info.meta.page_count;
     var catalog_raw: [byte: 8192] = [];
     const catalog_page: &[byte] = catalog_raw[0: info.meta.page_size as usize];
-    try pager_read_page_with_info_at_stem(db_stem_ptr(txn.db), &info, info.meta.catalog_root, catalog_page);
+    try catalog_page_init(catalog_page);
+    var catalog_entries: [CatalogScratchCollection: DB_MAX_COLLECTIONS] = [];
+    var catalog_count: u16 = 0u16;
+    try db_catalog_scratch_from_view(state, catalog_entries[0: DB_MAX_COLLECTIONS], &catalog_count);
+    try catalog_page_rewrite_from_entries(catalog_page, catalog_entries[0: DB_MAX_COLLECTIONS], catalog_count);
     var batch: WalBatch = wal_batch_init(next_lsn, next_lsn);
     try wal_batch_append_begin(&batch);
     var collection_idx: u16 = 0u16;
     while collection_idx < state.collection_count {
         const collection: &DbCollection = &state.collections[collection_idx as usize];
-        const current_collection: &DbCollection = &current.collections[collection_idx as usize];
         if collection.present {
-            var current_index_count: u16 = current_collection.secondary_index_count;
-            while current_index_count < collection.secondary_index_count {
-                const index_idx: usize = (current_index_count as! usize) catch {
-                    return error.DbCollectionFull;
-                };
-                if index_idx >= DB_MAX_SECONDARY_INDEXES_PER_COLLECTION {
-                    return error.DbCollectionFull;
-                }
-                const index_meta: &DbCollectionIndexMeta = &collection.secondary_indexes[index_idx];
-                _ = try catalog_page_append_index(
-                    catalog_page,
-                    collection.name[0: collection.name_len as usize],
-                    index_meta.name[0: index_meta.name_len as usize],
-                    index_meta.path[0: index_meta.path_len as usize],
-                    index_meta.path_segment_count,
-                );
-                current_index_count = current_index_count + 1u16;
-            }
-            var current_next_doc_id: u64 = current_collection.next_doc_id;
-            while current_next_doc_id < collection.next_doc_id {
-                _ = try catalog_page_allocate_next_doc_id(catalog_page, collection.name[0: collection.name_len as usize]);
-                current_next_doc_id = current_next_doc_id + 1u64;
-            }
             const page_id: u32 = db_collection_data_page_id(collection);
             if page_id >= 2u32 {
                 if page_id + 1u32 > max_page_count {
@@ -2594,7 +2929,14 @@ fn db_txn_commit_persist(txn: &Txn) !WalCommit {
         freelist_head: info.meta.freelist_head,
     };
     try wal_batch_append_commit(&batch, &commit);
-    _ = try pager_commit_batch_with_info_at_stem(db_stem_ptr(txn.db), &info, &batch, null);
+    txn.db.pager_session.info = try pager_commit_batch_with_open_files_at_stem(
+        db_stem_ptr(txn.db),
+        &info,
+        &txn.db.pager_session.db,
+        &txn.db.pager_session.wal,
+        &batch,
+        null,
+    );
     return commit;
 }
 
@@ -2746,6 +3088,8 @@ fn db_prepare_handle_runtime_at_stem(db: &DbHandle, stem: &const byte) !void {
     if db == null || stem == null {
         return error.DbHandleInvalid;
     }
+    db_close_pager_session(db);
+    db_result_pool_reset(&db.result_pool);
     db.stem_len = 0u16;
     db.snapshot_policy = db_default_snapshot_policy();
     db.snapshot_status = SnapshotPressureStatus{
@@ -2860,6 +3204,7 @@ export fn db_checkpoint(db: &DbHandle) !DbCheckReport {
     if db == null {
         return error.DbHandleInvalid;
     }
+    db_close_pager_session(db);
     var guard: WriterLockGuard = writer_lock_guard_acquire(db.next_view_generation, db.next_view_generation);
     defer { writer_lock_guard_release(&guard); }
     _ = try pager_checkpoint_at_stem(db_stem_ptr(db));
@@ -2871,6 +3216,7 @@ export fn db_upgrade_format(db: &DbHandle, plan: &PagerUpgradePlan) !PagerUpgrad
     if db == null {
         return error.DbHandleInvalid;
     }
+    db_close_pager_session(db);
     var guard: WriterLockGuard = writer_lock_guard_acquire(db.next_view_generation, db.next_view_generation);
     defer { writer_lock_guard_release(&guard); }
     const report: PagerUpgradeReport = try pager_upgrade_at_stem(db_stem_ptr(db), plan);
@@ -2961,6 +3307,7 @@ export fn db_test_create_collection(db: &DbHandle, name: &[const byte]) !void {
     if db == null {
         return error.DbCollectionFull;
     }
+    db_close_pager_session(db);
     const current: &CommitViewState = try db_current_view_state(db);
     if current.collection_count as usize >= DB_MAX_COLLECTIONS {
         return error.DbCollectionFull;
@@ -2990,6 +3337,7 @@ export fn db_test_create_collection(db: &DbHandle, name: &[const byte]) !void {
     state.view.catalog_root = info.meta.catalog_root;
     state.view.freelist_head = info.meta.freelist_head;
     try db_publish_view_slot(db, view_slot);
+    db_cleanup_retired_views(db);
 }
 
 export fn db_test_insert_json(db: &DbHandle, collection_name: &[const byte], json: &[const byte]) !u64 {
@@ -3060,6 +3408,7 @@ export fn txn_commit(txn: &Txn) !void {
         txn.active = false;
         return;
     }
+    const previous_state: &CommitViewState = try db_current_view_state(txn.db);
     const committed: WalCommit = try db_txn_commit_persist(txn);
     errdefer {
         _ = db_reload_from_disk(txn.db) catch {};
@@ -3073,12 +3422,8 @@ export fn txn_commit(txn: &Txn) !void {
     staged.view.freelist_head = committed.freelist_head;
     const collection_count: u16 = staged.collection_count;
     try db_publish_view_slot(txn.db, txn.view_slot);
-    var i: u16 = 0u16;
-    while i < collection_count {
-        try db_rebuild_primary_index(txn.db, i);
-        try db_rebuild_secondary_indexes(txn.db, i);
-        i = i + 1u16;
-    }
+    try db_refresh_indexes_after_commit(txn.db, previous_state, collection_count);
+    db_cleanup_retired_views(txn.db);
     writer_lock_guard_release(&txn.writer_guard);
     txn.committed = true;
     txn.active = false;
@@ -3137,13 +3482,12 @@ fn db_compile_select_plan_in_view(db: &DbHandle, stmt: &SqlStmt, view_slot: u16,
     const view_state: &CommitViewState = try db_commit_view_state(db, view_slot);
     const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(db, view_slot, try db_identifier_bytes(&stmt.select_stmt.collection_name));
     const collection: &DbCollection = try db_collection_at_in_state(view_state, collection_slot);
-    var bound: BoundSelect = BoundSelect{};
     if collection.secondary_index_count == 0u16 {
-        bound = try bind_select_with_collection_metadata(stmt, collection.collection_id, collection.primary_root_page);
+        try bind_select_with_collection_metadata_into(stmt, collection.collection_id, collection.primary_root_page, &plan_out.bound);
     } else {
-        bound = try bind_select_at_stem(db_stem_ptr(db), stmt);
+        try bind_select_at_stem_into(db_stem_ptr(db), stmt, &plan_out.bound);
     }
-    try plan_select_into(&bound, plan_out);
+    try plan_select_into(&plan_out.bound, plan_out);
     collection_slot_out[0] = collection_slot;
 }
 
@@ -3328,9 +3672,9 @@ export fn db_query_with_allocator(db: &DbHandle, sql: &[const byte], allocator: 
     var stmt: SqlStmt = try sql_parse(sql);
     if stmt.kind == SqlStmtKind.EXPLAIN {
         stmt.kind = SqlStmtKind.SELECT;
-        const bound: BoundSelect = try bind_select_at_stem(db_stem_ptr(db), &stmt);
         var plan: QueryPlan = QueryPlan{};
-        try plan_select_into(&bound, &plan);
+        try bind_select_at_stem_into(db_stem_ptr(db), &stmt, &plan.bound);
+        try plan_select_into(&plan.bound, &plan);
         db_query_cache_store(db, sql, true, &plan);
         return try db_explain_query_plan_with_allocator(&plan, allocator);
     }
@@ -3402,6 +3746,12 @@ export fn db_query_with_allocator(db: &DbHandle, sql: &[const byte], allocator: 
 }
 
 export fn db_query(db: &DbHandle, sql: &[const byte]) !QueryResult {
-    const allocator: IAllocator = get_allocator()[0];
+    if db == null {
+        return error.DbHandleInvalid;
+    }
+    var allocator_impl: DbResultPoolAllocator = DbResultPoolAllocator{
+        pool: &db.result_pool,
+    };
+    const allocator: IAllocator = allocator_impl;
     return try db_query_with_allocator(db, sql, allocator);
 }

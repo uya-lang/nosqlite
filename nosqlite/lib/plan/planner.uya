@@ -38,6 +38,20 @@ export struct QueryPlan {
     nodes: [PlanNode: PLAN_MAX_NODES],
 }
 
+export fn query_plan_copy_used(dst: &QueryPlan, src: &QueryPlan) void {
+    if dst == null || src == null || dst == src {
+        return;
+    }
+    bound_select_copy_used(&dst.bound, &src.bound);
+    dst.node_count = src.node_count;
+    dst.root_node = src.root_node;
+    var i: usize = 0usize;
+    while i < src.node_count as usize && i < PLAN_MAX_NODES {
+        dst.nodes[i] = src.nodes[i];
+        i = i + 1usize;
+    }
+}
+
 struct PrimaryLookupMatch {
     found: bool,
     key: u64,
@@ -342,15 +356,13 @@ export fn plan_select_into(bound: &BoundSelect, plan: &QueryPlan) !void {
     if bound == null || plan == null {
         return error.PlanInvalidNode;
     }
-    plan[0] = QueryPlan{
-        bound: bound[0],
-        node_count: 0u16,
-        root_node: -1,
-        nodes: [],
-    };
+    bound_select_copy_used(&plan.bound, bound);
+    plan.node_count = 0u16;
+    plan.root_node = -1;
 
     var base_node: i16 = -1;
     var add_filter: bool = false;
+    var base_max_rows_one: bool = false;
     if bound.has_where {
         const direct_match: PrimaryLookupMatch = try plan_expr_direct_primary_lookup(bound, bound.where_expr);
         if direct_match.found {
@@ -364,6 +376,7 @@ export fn plan_select_into(bound: &BoundSelect, plan: &QueryPlan) !void {
                 limit_value: 0u32,
                 lookup_doc_id: direct_match.key,
             });
+            base_max_rows_one = true;
         } else {
             const nested_match: PrimaryLookupMatch = try plan_find_primary_lookup(bound, bound.where_expr);
             if nested_match.found {
@@ -378,6 +391,7 @@ export fn plan_select_into(bound: &BoundSelect, plan: &QueryPlan) !void {
                     lookup_doc_id: nested_match.key,
                 });
                 add_filter = true;
+                base_max_rows_one = true;
             } else {
                 const direct_secondary: SecondaryLookupMatch = try plan_expr_direct_secondary_lookup(bound, bound.where_expr);
                 if direct_secondary.found {
@@ -435,7 +449,7 @@ export fn plan_select_into(bound: &BoundSelect, plan: &QueryPlan) !void {
             lookup_doc_id: 0u64,
         });
     }
-    if bound.has_order_by {
+    if bound.has_order_by && !base_max_rows_one {
         base_node = try plan_add_node(plan, &PlanNode{
             kind: PlanNodeKind.SORT,
             child: base_node,
@@ -447,7 +461,7 @@ export fn plan_select_into(bound: &BoundSelect, plan: &QueryPlan) !void {
             lookup_doc_id: 0u64,
         });
     }
-    if bound.has_limit {
+    if bound.has_limit && (!base_max_rows_one || bound.limit_value == 0u32) {
         base_node = try plan_add_node(plan, &PlanNode{
             kind: PlanNodeKind.LIMIT,
             child: base_node,
