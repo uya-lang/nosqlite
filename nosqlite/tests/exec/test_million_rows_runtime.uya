@@ -1,0 +1,211 @@
+use std.runtime.entry.set_process_stack_limit_bytes;
+
+use libc.printf;
+use libc.snprintf;
+
+use lib.api.db.DbCheckReport;
+use lib.api.db.DbHandle;
+use lib.api.db.Txn;
+use lib.api.db.db_check;
+use lib.api.db.db_query;
+use lib.api.db.db_test_create_at_stem;
+use lib.api.db.db_test_create_collection;
+use lib.api.db.db_test_open_at_stem;
+use lib.api.db.db_test_refresh_pager_session;
+use lib.api.db.db_test_release_loaded_blobs;
+use lib.api.db.db_test_txn_insert_json;
+use lib.api.db.txn_begin;
+use lib.api.db.txn_commit;
+use lib.api.db.txn_rollback;
+use lib.api.result.QueryResult;
+use lib.api.result.OwnedRow;
+use lib.api.result.query_result_release;
+use lib.api.result.query_result_row;
+use lib.api.result.owned_row_cell_i64;
+use lib.api.result.owned_row_cell_u64;
+use lib.storage.pager.catalog_cleanup_stem;
+use lib.storage.pager.pager_checkpoint_at_stem;
+
+const TEST_STEM_MILLION: *const byte = "/tmp/nosqlite_million_rows" as *const byte;
+const TOTAL_ROWS: u64 = 1000000u64;
+const BATCH_ROWS: u64 = 24000u64;
+const CHECKPOINT_EVERY_BATCHES: u64 = 2u64;
+
+error MillionBufferTooSmall;
+error MillionUnexpectedValue;
+
+fn cleanup() void {
+    _ = catalog_cleanup_stem(TEST_STEM_MILLION) catch {};
+}
+
+fn build_json(doc_id: u64, out: &[byte]) !usize {
+    if out.ptr == null || out.len < 64usize {
+        return error.MillionBufferTooSmall;
+    }
+    const len_i32: i32 = snprintf(
+        out.ptr,
+        out.len,
+        "{\"n\":%lu,\"active\":true}\0" as &const byte,
+        doc_id,
+    );
+    if len_i32 <= 0 {
+        return error.MillionBufferTooSmall;
+    }
+    const len: usize = (len_i32 as! usize) catch {
+        return error.MillionBufferTooSmall;
+    };
+    if len + 1usize > out.len {
+        return error.MillionBufferTooSmall;
+    }
+    return len;
+}
+
+fn build_lookup_sql(doc_id: u64, out: &[byte]) !usize {
+    if out.ptr == null || out.len < 96usize {
+        return error.MillionBufferTooSmall;
+    }
+    const len_i32: i32 = snprintf(
+        out.ptr,
+        out.len,
+        "SELECT _id, $.n FROM users WHERE _id = %lu LIMIT 1;\0" as &const byte,
+        doc_id,
+    );
+    if len_i32 <= 0 {
+        return error.MillionBufferTooSmall;
+    }
+    return (len_i32 as! usize) catch {
+        return error.MillionBufferTooSmall;
+    };
+}
+
+fn verify_lookup(db: &DbHandle, doc_id: u64) !void {
+    var sql_buf: [byte: 96] = [];
+    const sql_len: usize = try build_lookup_sql(doc_id, sql_buf[0: 96]);
+    var result: QueryResult = try db_query(db, sql_buf[0: sql_len]);
+    if result.row_count != 1u32 {
+        query_result_release(&result);
+        return error.MillionUnexpectedValue;
+    }
+    const row: &OwnedRow = try query_result_row(&result, 0u32);
+    const actual_id: u64 = try owned_row_cell_u64(row, 0u16);
+    const actual_n: i64 = try owned_row_cell_i64(row, 1u16);
+    query_result_release(&result);
+    if actual_id != doc_id || actual_n != doc_id as i64 {
+        return error.MillionUnexpectedValue;
+    }
+}
+
+fn checkpoint_and_compact(db: &DbHandle) !void {
+    _ = try pager_checkpoint_at_stem(TEST_STEM_MILLION);
+    try db_test_refresh_pager_session(db);
+    try db_test_release_loaded_blobs(db);
+}
+
+fn main() i32 {
+    set_process_stack_limit_bytes(256u64 * 1024u64 * 1024u64);
+    var keep_artifacts: bool = false;
+    cleanup();
+    defer {
+        if !keep_artifacts {
+            cleanup();
+        }
+    }
+
+    var db: DbHandle = DbHandle{};
+    _ = db_test_create_at_stem(&db, TEST_STEM_MILLION) catch {
+        return 1;
+    };
+    _ = db_test_create_collection(&db, "users") catch {
+        return 2;
+    };
+
+    var inserted_total: u64 = 0u64;
+    var batch_count: u64 = 0u64;
+    while inserted_total < TOTAL_ROWS {
+        var txn: Txn = txn_begin(&db) catch {
+            return 3;
+        };
+        defer {
+            _ = txn_rollback(&txn) catch {};
+        }
+
+        const remaining: u64 = TOTAL_ROWS - inserted_total;
+        var batch_rows: u64 = BATCH_ROWS;
+        if remaining < batch_rows {
+            batch_rows = remaining;
+        }
+
+        var doc_id: u64 = inserted_total + 1u64;
+        const batch_end: u64 = inserted_total + batch_rows;
+        var json_buf: [byte: 96] = [];
+        while doc_id <= batch_end {
+            const json_len: usize = build_json(doc_id, json_buf[0: 96]) catch {
+                return 4;
+            };
+            const inserted: u64 = db_test_txn_insert_json(&txn, "users", json_buf[0: json_len]) catch {
+                return 5;
+            };
+            if inserted != doc_id {
+                return 6;
+            }
+            doc_id = doc_id + 1u64;
+        }
+
+        _ = txn_commit(&txn) catch {
+            return 7;
+        };
+        inserted_total = batch_end;
+        batch_count = batch_count + 1u64;
+        printf("MILLION_PROGRESS inserted=%lu\n" as *byte, inserted_total);
+        if inserted_total == TOTAL_ROWS || batch_count % CHECKPOINT_EVERY_BATCHES == 0u64 {
+            const compact_result: !void = checkpoint_and_compact(&db);
+            if compact_result.error_id != 0u32 {
+                keep_artifacts = true;
+                printf("MILLION_CHECKPOINT_ERROR error_id=%u inserted=%lu batches=%lu\n" as *byte, compact_result.error_id, inserted_total, batch_count);
+                return 8;
+            }
+        }
+    }
+
+    var reopened: DbHandle = DbHandle{};
+    _ = db_test_open_at_stem(&reopened, TEST_STEM_MILLION) catch {
+        keep_artifacts = true;
+        return 9;
+    };
+    const report_union: !DbCheckReport = db_check(&reopened);
+    if report_union.error_id != 0u32 {
+        keep_artifacts = true;
+        printf("MILLION_DB_CHECK_ERROR error_id=%u\n" as *byte, report_union.error_id);
+        return 10;
+    }
+    const report: DbCheckReport = report_union.value;
+    if report.row_count != TOTAL_ROWS as u32 {
+        keep_artifacts = true;
+        printf("MILLION_ROW_COUNT_MISMATCH expected=%lu actual=%u\n" as *byte, TOTAL_ROWS, report.row_count);
+        return 11;
+    }
+
+    _ = verify_lookup(&reopened, 1u64) catch {
+        keep_artifacts = true;
+        return 12;
+    };
+    _ = verify_lookup(&reopened, 123456u64) catch {
+        keep_artifacts = true;
+        return 13;
+    };
+    _ = verify_lookup(&reopened, 500000u64) catch {
+        keep_artifacts = true;
+        return 14;
+    };
+    _ = verify_lookup(&reopened, 999999u64) catch {
+        keep_artifacts = true;
+        return 15;
+    };
+    _ = verify_lookup(&reopened, 1000000u64) catch {
+        keep_artifacts = true;
+        return 16;
+    };
+
+    printf("MILLION_OK rows=%lu checked_pages=%u wal_bytes=%lu\n" as *byte, TOTAL_ROWS, report.checked_pages, report.wal_bytes);
+    return 0;
+}

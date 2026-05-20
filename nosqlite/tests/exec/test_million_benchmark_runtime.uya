@@ -1,0 +1,202 @@
+use std.runtime.entry.set_process_stack_limit_bytes;
+
+use libc.getenv;
+use libc.atoll;
+use libc.printf;
+use libc.snprintf;
+
+use osal.TimeVal;
+use osal.os_gettimeofday;
+
+use lib.api.db.DbHandle;
+use lib.api.db.QueryCursor;
+use lib.api.db.Txn;
+use lib.api.db.cursor_next;
+use lib.api.db.cursor_row;
+use lib.api.db.db_query_cursor;
+use lib.api.db.db_test_create_at_stem;
+use lib.api.db.db_test_create_collection;
+use lib.api.db.db_test_txn_insert_json;
+use lib.api.db.txn_begin;
+use lib.api.db.txn_commit;
+use lib.api.db.txn_rollback;
+use lib.storage.pager.catalog_cleanup_stem;
+
+const TEST_STEM_BENCH: *const byte = "/tmp/nosqlite_million_bench" as *const byte;
+const JSON_BUF_CAP: usize = 128;
+
+error BenchBufferTooSmall;
+error BenchUnexpectedResult;
+
+fn cleanup() void {
+    _ = catalog_cleanup_stem(TEST_STEM_BENCH) catch {};
+}
+
+fn env_bytes(name: &const byte) &byte {
+    return getenv(name);
+}
+
+fn env_u64(name: &const byte, fallback: u64) u64 {
+    const raw: &byte = env_bytes(name);
+    if raw == null || raw[0] == 0 as byte {
+        return fallback;
+    }
+    const parsed: i64 = atoll(raw as &const byte);
+    if parsed <= 0i64 {
+        return fallback;
+    }
+    return parsed as u64;
+}
+
+fn now_usec() u64 {
+    var tv: TimeVal = TimeVal{ tv_sec: 0i64, tv_usec: 0i64 };
+    _ = os_gettimeofday(&tv, null) catch {
+        return 0u64;
+    };
+    return (tv.tv_sec as u64) * 1000000u64 + (tv.tv_usec as u64);
+}
+
+fn elapsed_bench_usec(start_us: u64) u64 {
+    const elapsed_us: u64 = now_usec() - start_us;
+    if elapsed_us == 0u64 {
+        return 1u64;
+    }
+    return elapsed_us;
+}
+
+fn build_json(doc_id: u64, out: &[byte]) !usize {
+    if out.ptr == null || out.len < JSON_BUF_CAP {
+        return error.BenchBufferTooSmall;
+    }
+    const bucket: u64 = doc_id % 100u64;
+    var active: &const byte = "false";
+    if doc_id % 2u64 == 0u64 {
+        active = "true";
+    }
+    const len_i32: i32 = snprintf(
+        out.ptr,
+        out.len,
+        "{\"n\":%lu,\"bucket\":%lu,\"active\":%s}\0" as &const byte,
+        doc_id,
+        bucket,
+        active,
+    );
+    if len_i32 <= 0 {
+        return error.BenchBufferTooSmall;
+    }
+    const len: usize = (len_i32 as! usize) catch {
+        return error.BenchBufferTooSmall;
+    };
+    if len + 1usize > out.len {
+        return error.BenchBufferTooSmall;
+    }
+    return len;
+}
+
+fn run_load(db: &DbHandle, docs: u64, batch_rows: u64) !u64 {
+    var inserted_total: u64 = 0u64;
+    const start_us: u64 = now_usec();
+    while inserted_total < docs {
+        var txn: Txn = try txn_begin(db);
+        var txn_ok: bool = false;
+        defer {
+            if !txn_ok {
+                _ = txn_rollback(&txn) catch {};
+            }
+        }
+
+        const remaining: u64 = docs - inserted_total;
+        var current_batch: u64 = batch_rows;
+        if remaining < current_batch {
+            current_batch = remaining;
+        }
+
+        var doc_id: u64 = inserted_total + 1u64;
+        const batch_end: u64 = inserted_total + current_batch;
+        var json_buf: [byte: JSON_BUF_CAP] = [];
+        while doc_id <= batch_end {
+            const json_len: usize = try build_json(doc_id, json_buf[0: JSON_BUF_CAP]);
+            const inserted: u64 = try db_test_txn_insert_json(&txn, "users", json_buf[0: json_len]);
+            if inserted != doc_id {
+                return error.BenchUnexpectedResult;
+            }
+            doc_id = doc_id + 1u64;
+        }
+
+        try txn_commit(&txn);
+        txn_ok = true;
+        inserted_total = batch_end;
+        printf("PROGRESS inserted=%lu\n" as *byte, inserted_total);
+    }
+    return elapsed_bench_usec(start_us);
+}
+
+
+fn main() i32 {
+    set_process_stack_limit_bytes(256u64 * 1024u64 * 1024u64);
+    const docs: u64 = env_u64("NOSQLITE_MILLION_BENCH_DOCS" as &const byte, 1000000u64);
+    const batch_rows: u64 = env_u64("NOSQLITE_MILLION_BENCH_BATCH_ROWS" as &const byte, 48000u64);
+    const query_iters: u64 = env_u64("NOSQLITE_MILLION_BENCH_QUERY_ITERS" as &const byte, 100u64);
+
+    cleanup();
+    defer {
+        cleanup();
+    }
+
+    printf(
+        "BENCH_INFO docs=%lu batch_rows=%lu query_iters=%lu\n" as *byte,
+        docs,
+        batch_rows,
+        query_iters,
+    );
+
+    var db: DbHandle = DbHandle{};
+    _ = db_test_create_at_stem(&db, TEST_STEM_BENCH) catch {
+        printf("BENCH_ERROR stage=create_db error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
+        return 1;
+    };
+    _ = db_test_create_collection(&db, "users") catch {
+        printf("BENCH_ERROR stage=create_collection error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
+        return 2;
+    };
+
+    const load_u: !u64 = run_load(&db, docs, batch_rows);
+    if load_u.error_id != 0u32 {
+        printf("BENCH_ERROR stage=load error_id=%u\n" as *byte, load_u.error_id);
+        return 3;
+    }
+    const load_us: u64 = load_u.value;
+    printf("RESULT case=bulk_load us=%lu rows=%lu\n" as *byte, load_us, docs);
+
+    const lookup_u: !void = run_limit_query_samples(&db, query_iters);
+    if lookup_u.error_id != 0u32 {
+        printf("BENCH_ERROR stage=limit_query error_id=%u\n" as *byte, lookup_u.error_id);
+        return 5;
+    }
+    return 0;
+}
+
+fn run_limit_query_samples(db: &DbHandle, iterations: u64) !void {
+    const sql: &[const byte] = "SELECT _id FROM users LIMIT 64;"[0: 30];
+    var warm_cursor: QueryCursor = try db_query_cursor(db, sql);
+    if !(try cursor_next(&warm_cursor)) {
+        return error.BenchUnexpectedResult;
+    }
+
+    var i: u64 = 0u64;
+    while i < iterations {
+        const start_us: u64 = now_usec();
+        var cursor: QueryCursor = try db_query_cursor(db, sql);
+        const elapsed_us: u64 = elapsed_bench_usec(start_us);
+        var docs_returned: u32 = 0u32;
+        while try cursor_next(&cursor) {
+            _ = try cursor_row(&cursor);
+            docs_returned = docs_returned + 1u32;
+        }
+        if docs_returned == 0u32 {
+            return error.BenchUnexpectedResult;
+        }
+        printf("SAMPLE case=limit_query us=%lu docs=%u\n" as *byte, elapsed_us, docs_returned);
+        i = i + 1u64;
+    }
+}

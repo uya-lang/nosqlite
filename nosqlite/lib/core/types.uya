@@ -13,6 +13,8 @@ export const NOSQLITE_FORMAT_READER_VERSION_MIN: u32 = NOSQLITE_FORMAT_VERSION_V
 export const NOSQLITE_PAGE_SIZE_DEFAULT: u32 = 4096;
 export const NOSQLITE_PAGE_SIZE_MAX_V1: u32 = 8192;
 export const NOSQLITE_FEATURE_FLAGS_SUPPORTED_V1: u64 = 0u64;
+export const NOSQLITE_COLLECTION_PAGE_RANGE: u32 = 1073741823u32;
+export const NOSQLITE_COLLECTION_MAX_ROWS_PER_COLLECTION: u32 = 3221225469u32;
 
 export const NOSQLITE_META_SLOT_A: u32 = 0;
 export const NOSQLITE_META_SLOT_B: u32 = 1;
@@ -32,6 +34,13 @@ export fn nosqlite_min_reader_version_supported(min_reader_version: u32) bool {
 
 export fn nosqlite_feature_flags_supported(feature_flags: u64) bool {
     return (feature_flags & NOSQLITE_FEATURE_FLAGS_SUPPORTED_V1) == feature_flags;
+}
+
+export fn nosqlite_collection_primary_root_page(collection_id: u32) u32 {
+    if collection_id == 0u32 {
+        return 0u32;
+    }
+    return 3u32 + ((collection_id - 1u32) * NOSQLITE_COLLECTION_PAGE_RANGE);
 }
 
 export fn nosqlite_format_compatible(format_version: u32, min_reader_version: u32, feature_flags: u64) bool {

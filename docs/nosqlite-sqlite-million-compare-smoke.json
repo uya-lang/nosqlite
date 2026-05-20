@@ -1,0 +1,46 @@
+{
+  "docs": 1000,
+  "batch_rows": 300,
+  "query_iters": 10,
+  "python_version": "3.12.11",
+  "sqlite_version": "3.46.1",
+  "sqlite_json1": true,
+  "nosqlite": {
+    "engine": "nosqlite",
+    "docs": 1000,
+    "batch_rows": 300,
+    "load": {
+      "rows": 1000,
+      "load_us": 21071,
+      "rows_per_s": 47458.59237815007
+    },
+    "limit_query": {
+      "samples": 10,
+      "p50_us": 1103,
+      "p95_us": 1649,
+      "p99_us": 1649,
+      "qps": 839.278220730172
+    },
+    "notes": "NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64",
+    "peak_memory_kib": 816
+  },
+  "sqlite": {
+    "engine": "sqlite",
+    "docs": 1000,
+    "batch_rows": 300,
+    "load": {
+      "rows": 1000,
+      "load_us": 1359,
+      "rows_per_s": 735835.1729212657
+    },
+    "limit_query": {
+      "samples": 10,
+      "p50_us": 13,
+      "p95_us": 14,
+      "p99_us": 14,
+      "qps": 75187.96992481203
+    },
+    "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64",
+    "peak_memory_kib": 19164
+  }
+}

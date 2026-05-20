@@ -216,9 +216,8 @@ struct RecoveryTxnState {
     page_count: u16,
 }
 
-export const WAL_BATCH_MAX_RECORDS: usize = 1152;
-export const WAL_BATCH_MAX_BYTES: usize = 10000000;
-const RECOVERY_PAGE_BUFFER_CAP: usize = WAL_BATCH_MAX_RECORDS;
+export const WAL_BATCH_MAX_RECORDS: usize = 16384;
+export const WAL_BATCH_MAX_BYTES: usize = 1048576;
 const RECOVERY_STACK_PAGE_BUFFER_CAP: usize = 4;
 
 const NOSQLITE_FILE_MODE: u32 = 0o644;
@@ -1144,9 +1143,6 @@ fn pager_recover_wal(db: &File, wal_file: &File, base_meta: &MetaPage) !MetaPage
     if page_buffer_cap == 0usize {
         page_buffer_cap = 1usize;
     }
-    if page_buffer_cap > RECOVERY_PAGE_BUFFER_CAP {
-        page_buffer_cap = RECOVERY_PAGE_BUFFER_CAP;
-    }
     const allocator: &HeapAllocator = get_heap_allocator();
     var stack_pages: [RecoveryBufferedPage: RECOVERY_STACK_PAGE_BUFFER_CAP] = [];
     var pages_mem: &byte = null;
@@ -2064,6 +2060,9 @@ export fn pager_commit_page_at_stem(stem: &const byte, page_id: u32, page_buf: &
     _ = try page_checksum_finalize(page_buf);
 
     var batch: WalBatch = wal_batch_init(commit.txn_id, commit.commit_lsn);
+    defer {
+        wal_batch_release_storage(&batch);
+    }
     try wal_batch_append_begin(&batch);
     try wal_batch_append_page(&batch, page_id, commit.commit_lsn, page_buf);
     try wal_batch_append_commit(&batch, commit);
@@ -2280,7 +2279,8 @@ export struct WalBatch {
     commit_lsn: u64,
     record_count: u16,
     used_bytes: usize,
-    bytes: [byte: WAL_BATCH_MAX_BYTES],
+    capacity: usize,
+    bytes: &byte,
 }
 
 fn wal_store_u32_le(out: &[byte], off: usize, value: u32) void {
@@ -2649,7 +2649,8 @@ export fn wal_batch_init(txn_id: u64, commit_lsn: u64) WalBatch {
         commit_lsn: commit_lsn,
         record_count: 0u16,
         used_bytes: 0usize,
-        bytes: [],
+        capacity: WAL_BATCH_MAX_BYTES,
+        bytes: null,
     };
 }
 
@@ -2663,16 +2664,56 @@ export fn wal_batch_reset(batch: &WalBatch, txn_id: u64, commit_lsn: u64) void {
     batch.used_bytes = 0usize;
 }
 
+export fn wal_batch_release_storage(batch: &WalBatch) void {
+    if batch == null || batch.bytes == null {
+        return;
+    }
+    const allocator: &HeapAllocator = get_heap_allocator();
+    allocator.dealloc(batch.bytes);
+    batch.bytes = null;
+    batch.used_bytes = 0usize;
+    batch.record_count = 0u16;
+}
+
+fn wal_batch_ensure_storage(batch: &WalBatch, required_total: usize) !void {
+    if batch == null {
+        return error.WalInvalidBuffer;
+    }
+    const allocator: &HeapAllocator = get_heap_allocator();
+    if batch.capacity == 0usize {
+        batch.capacity = WAL_BATCH_MAX_BYTES;
+    }
+    if batch.bytes == null {
+        var initial_capacity: usize = batch.capacity;
+        while initial_capacity < required_total {
+            initial_capacity = initial_capacity * 2usize;
+        }
+        batch.bytes = try allocator.alloc(initial_capacity);
+        _ = mem_set(batch.bytes, 0, initial_capacity);
+        batch.capacity = initial_capacity;
+        return;
+    }
+    if required_total <= batch.capacity {
+        return;
+    }
+    var new_capacity: usize = batch.capacity;
+    while new_capacity < required_total {
+        new_capacity = new_capacity * 2usize;
+    }
+    batch.bytes = try allocator.realloc(batch.bytes, new_capacity);
+    batch.capacity = new_capacity;
+}
+
 fn wal_batch_append_bytes(batch: &WalBatch, data: &[byte]) !void {
     if batch == null || data.ptr == null {
         return error.WalInvalidBuffer;
     }
-    if batch.record_count as usize >= WAL_BATCH_MAX_RECORDS ||
-        batch.used_bytes + data.len > @len(batch.bytes) {
+    if batch.record_count as usize >= WAL_BATCH_MAX_RECORDS {
         return error.WalBatchFull;
     }
+    try wal_batch_ensure_storage(batch, batch.used_bytes + data.len);
     const dst_off: usize = batch.used_bytes;
-    if dst_off >= @len(batch.bytes) && data.len > 0 {
+    if (batch.bytes == null && data.len > 0usize) || (dst_off >= batch.capacity && data.len > 0usize) {
         return error.WalBatchFull;
     }
     _ = mem_copy(&batch.bytes[dst_off], data.ptr, data.len);
@@ -2698,10 +2739,10 @@ fn wal_batch_reserve_record(batch: &WalBatch, record_len: usize) !usize {
     if batch == null {
         return error.WalInvalidBuffer;
     }
-    if batch.record_count as usize >= WAL_BATCH_MAX_RECORDS ||
-        batch.used_bytes + record_len > @len(batch.bytes) {
+    if batch.record_count as usize >= WAL_BATCH_MAX_RECORDS {
         return error.WalBatchFull;
     }
+    try wal_batch_ensure_storage(batch, batch.used_bytes + record_len);
     return batch.used_bytes;
 }
 
@@ -2711,7 +2752,7 @@ fn wal_batch_finish_record(batch: &WalBatch, used: usize) void {
 }
 
 export fn wal_batch_bytes(batch: &WalBatch) &[byte] {
-    if batch == null {
+    if batch == null || batch.bytes == null {
         return &""[0: 0];
     }
     return batch.bytes[0: batch.used_bytes];
@@ -2765,6 +2806,9 @@ export fn wal_batch_extract_commit(batch: &WalBatch) !WalCommit {
     var found: bool = false;
     var last: WalCommit = WalCommit{};
     while off < batch.used_bytes {
+        if batch.bytes == null {
+            return error.WalBatchCommitMissing;
+        }
         const header: WalRecordHeader = try wal_record_header_decode(batch.bytes[off: batch.used_bytes - off]);
         const total: usize = header.record_len as usize;
         if off + total > batch.used_bytes {
