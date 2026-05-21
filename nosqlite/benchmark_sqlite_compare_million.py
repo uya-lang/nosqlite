@@ -15,7 +15,7 @@ import benchmark_phase11 as bench_common
 
 RUNNER = "nosqlite/tests/exec/test_million_benchmark_runtime.uya"
 RUNNER_BIN = ".uyacache/a.out"
-RUNNER_CFLAGS = "-std=c99 -O2 -g -fno-builtin"
+RUNNER_CFLAGS = os.environ.get("NOSQLITE_MILLION_RUNNER_CFLAGS", "-std=c99 -O3 -g -fno-builtin")
 
 
 def cpu_model() -> str:

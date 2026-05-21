@@ -6,6 +6,7 @@ use std.mem.mem.mem_copy;
 use std.mem.mem.mem_set;
 use std.json.value.JsonValue;
 use std.json.value.JsonArray;
+use std.json.value.JsonKeyValue;
 use std.json.value.JsonObject;
 use std.json.value.JsonStrView;
 use lib.doc.format;
@@ -209,6 +210,31 @@ fn doc_measure_json_value_depth(value: &JsonValue, depth: usize) !usize {
     }
 }
 
+fn doc_measure_primitive_json_value(value: &JsonValue) !usize {
+    if value == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    match value[0] {
+        .json_null(_) => { return node_header_size(); },
+        .bool_val(_) => { return node_header_size(); },
+        .int_val(_) => { return int64_node_size(); },
+        .float_val(v) => {
+            var buf: [byte: DOC_FLOAT_LEXEME_BUF] = [];
+            const lexeme: &[byte] = try doc_format_float_lexeme(v, buf[0: DOC_FLOAT_LEXEME_BUF]);
+            return doc_blob_align_up(number_text_prefix_size() + lexeme.len);
+        },
+        .num_text(s) => {
+            return doc_blob_align_up(number_text_prefix_size() + s.len);
+        },
+        .str(s) => {
+            return doc_blob_align_up(string_node_prefix_size() + s.len);
+        },
+        else => {
+            return error.DocBlobWrongNodeType;
+        },
+    }
+}
+
 fn doc_measure_json_array(arr: &JsonArray, depth: usize) !usize {
     if arr.len > DOC_MAX_CONTAINER_ITEMS {
         return error.DocBlobContainerTooLarge;
@@ -297,6 +323,31 @@ fn doc_encode_json_value_depth(value: &JsonValue, out: &[byte], depth: usize) !u
         },
         .obj(obj) => {
             return doc_encode_json_object(&obj, out, depth + 1);
+        },
+    }
+}
+
+fn doc_encode_primitive_json_value(value: &JsonValue, out: &[byte]) !usize {
+    if value == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    match value[0] {
+        .json_null(_) => { return doc_encode_null_node(out); },
+        .bool_val(v) => { return doc_encode_bool_node(v, out); },
+        .int_val(v) => { return doc_encode_int64_node(v, out); },
+        .float_val(v) => {
+            var buf: [byte: DOC_FLOAT_LEXEME_BUF] = [];
+            const lexeme: &[byte] = try doc_format_float_lexeme(v, buf[0: DOC_FLOAT_LEXEME_BUF]);
+            return doc_encode_number_text_node(lexeme, out);
+        },
+        .num_text(s) => {
+            return doc_encode_number_text_node(doc_json_str_view_as_slice(s), out);
+        },
+        .str(s) => {
+            return doc_encode_string_node(doc_json_str_view_as_slice(s), out);
+        },
+        else => {
+            return error.DocBlobWrongNodeType;
         },
     }
 }
@@ -402,6 +453,91 @@ fn doc_encode_json_object(obj: &JsonObject, out: &[byte], depth: usize) !usize {
 
 export fn doc_encode_json_value(value: &JsonValue, out: &[byte]) !usize {
     return doc_encode_json_value_depth(value, out, 0);
+}
+
+export fn doc_encode_json_flat_object_pairs(pairs: &[JsonKeyValue], out: &[byte]) !usize {
+    if pairs.ptr == null && pairs.len > 0usize {
+        return error.DocBlobInvalidBuffer;
+    }
+    if pairs.len > DOC_MAX_CONTAINER_ITEMS {
+        return error.DocBlobContainerTooLarge;
+    }
+
+    var key_bytes: usize = 0usize;
+    var values_bytes: usize = 0usize;
+    var i: usize = 0usize;
+    while i < pairs.len {
+        key_bytes = key_bytes + pairs.ptr[i].key.len;
+        values_bytes = values_bytes + (try doc_measure_primitive_json_value(&pairs.ptr[i].value));
+        i = i + 1usize;
+    }
+
+    const key_area_end: usize = object_node_prefix_size() + pairs.len * object_entry_size() + key_bytes;
+    const total_size: usize = doc_blob_align_up(key_area_end) + values_bytes;
+    if out.ptr == null || out.len < total_size {
+        return error.DocBlobInvalidBuffer;
+    }
+
+    const prefix: &ObjectNodePrefix = doc_object_prefix_ptr(out[0: total_size]);
+    const entries: &ObjectEntry = doc_object_entries_ptr(out[0: total_size]);
+    if prefix == null || entries == null {
+        return error.DocBlobInvalidBuffer;
+    }
+    prefix.hdr = node_header_make(DocNodeTag.OBJECT, (total_size as! u32).value);
+    prefix.count = (pairs.len as! u32).value;
+
+    const object_value: JsonObject = JsonObject{
+        pairs: pairs.ptr,
+        len: pairs.len,
+    };
+    var order_buf: [u16: DOC_MAX_CONTAINER_ITEMS] = [];
+    var hash_buf: [u32: DOC_MAX_CONTAINER_ITEMS] = [];
+    i = 0usize;
+    while i < pairs.len {
+        hash_buf[i] = doc_hash_fnv1a32(doc_json_str_view_as_slice(pairs.ptr[i].key));
+        i = i + 1usize;
+    }
+    doc_sort_object_indexes(&object_value, order_buf[0: DOC_MAX_CONTAINER_ITEMS], hash_buf[0: DOC_MAX_CONTAINER_ITEMS]);
+    const hash_slice: &[u32] = hash_buf[0: pairs.len];
+
+    var key_cursor: usize = object_node_prefix_size() + pairs.len * object_entry_size();
+    var rank: usize = 0usize;
+    while rank < pairs.len {
+        const src_idx: usize = order_buf[rank] as usize;
+        if src_idx >= DOC_MAX_CONTAINER_ITEMS || src_idx >= pairs.len {
+            return error.DocBlobContainerTooLarge;
+        }
+        const key: &[byte] = doc_json_str_view_as_slice(pairs.ptr[src_idx].key);
+        const entry: &ObjectEntry = &entries[rank];
+        entry.key_hash = hash_slice.ptr[src_idx];
+        entry.key_len = (key.len as! u16).value;
+        entry.rsv = 0u16;
+        entry.key_off = (key_cursor as! u32).value;
+        if key.len > 0usize {
+            _ = mem_copy(&out.ptr[key_cursor], key.ptr, key.len);
+        }
+        key_cursor = key_cursor + key.len;
+        rank = rank + 1usize;
+    }
+
+    const value_start: usize = doc_blob_align_up(key_cursor);
+    if value_start > key_cursor {
+        _ = mem_set(&out.ptr[key_cursor], 0 as byte, value_start - key_cursor);
+    }
+    var value_cursor: usize = value_start;
+    rank = 0usize;
+    while rank < pairs.len {
+        const src_idx: usize = order_buf[rank] as usize;
+        if src_idx >= DOC_MAX_CONTAINER_ITEMS || src_idx >= pairs.len {
+            return error.DocBlobContainerTooLarge;
+        }
+        const entry: &ObjectEntry = &entries[rank];
+        entry.val_off = (value_cursor as! u32).value;
+        const child_size: usize = try doc_encode_primitive_json_value(&pairs.ptr[src_idx].value, out[value_cursor: out.len - value_cursor]);
+        value_cursor = value_cursor + child_size;
+        rank = rank + 1usize;
+    }
+    return total_size;
 }
 
 export fn doc_node_tag(node: &[byte]) !DocNodeTag {

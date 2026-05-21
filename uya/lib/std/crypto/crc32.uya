@@ -69,10 +69,68 @@ const CRC32_TABLE: [u32: 256] = [
     0xb40bbe37u32, 0xc30c8ea1u32, 0x5a05df1bu32, 0x2d02ef8du32,
 ];
 
+var crc32_tables_ready: bool = false;
+var CRC32_TABLE_1: [u32: 256] = [];
+var CRC32_TABLE_2: [u32: 256] = [];
+var CRC32_TABLE_3: [u32: 256] = [];
+var CRC32_TABLE_4: [u32: 256] = [];
+var CRC32_TABLE_5: [u32: 256] = [];
+var CRC32_TABLE_6: [u32: 256] = [];
+var CRC32_TABLE_7: [u32: 256] = [];
+
+fn crc32_tables_init() void {
+    if crc32_tables_ready {
+        return;
+    }
+    var i: usize = 0;
+    while i < 256 {
+        var c: u32 = CRC32_TABLE[i];
+        c = CRC32_TABLE[(c & 255u32) as usize] ^ (c >> 8);
+        CRC32_TABLE_1[i] = c;
+        c = CRC32_TABLE[(c & 255u32) as usize] ^ (c >> 8);
+        CRC32_TABLE_2[i] = c;
+        c = CRC32_TABLE[(c & 255u32) as usize] ^ (c >> 8);
+        CRC32_TABLE_3[i] = c;
+        c = CRC32_TABLE[(c & 255u32) as usize] ^ (c >> 8);
+        CRC32_TABLE_4[i] = c;
+        c = CRC32_TABLE[(c & 255u32) as usize] ^ (c >> 8);
+        CRC32_TABLE_5[i] = c;
+        c = CRC32_TABLE[(c & 255u32) as usize] ^ (c >> 8);
+        CRC32_TABLE_6[i] = c;
+        c = CRC32_TABLE[(c & 255u32) as usize] ^ (c >> 8);
+        CRC32_TABLE_7[i] = c;
+        i = i + 1;
+    }
+    crc32_tables_ready = true;
+}
+
+fn crc32_load_u32_le(data: &[byte], off: usize) u32 {
+    return (data.ptr[off] as u32) |
+        ((data.ptr[off + 1usize] as u32) << 8) |
+        ((data.ptr[off + 2usize] as u32) << 16) |
+        ((data.ptr[off + 3usize] as u32) << 24);
+}
+
 /// 计算 CRC-32（初值 `0xffffffff`，输出异或 `0xffffffff`）。
 export fn crc32_compute(data: &[byte]) u32 {
+    crc32_tables_init();
     var crc: u32 = 0xffffffffu32;
     var i: usize = 0;
+    while i + 8usize <= data.len {
+        const low: u32 = crc32_load_u32_le(data, i);
+        const high: u32 = crc32_load_u32_le(data, i + 4usize);
+        const mixed: u32 = crc ^ low;
+        crc =
+            CRC32_TABLE_7[(mixed & 255u32) as usize] ^
+            CRC32_TABLE_6[((mixed >> 8) & 255u32) as usize] ^
+            CRC32_TABLE_5[((mixed >> 16) & 255u32) as usize] ^
+            CRC32_TABLE_4[((mixed >> 24) & 255u32) as usize] ^
+            CRC32_TABLE_3[(high & 255u32) as usize] ^
+            CRC32_TABLE_2[((high >> 8) & 255u32) as usize] ^
+            CRC32_TABLE_1[((high >> 16) & 255u32) as usize] ^
+            CRC32_TABLE[((high >> 24) & 255u32) as usize];
+        i = i + 8usize;
+    }
     while i < data.len {
         const idx: usize = ((crc ^ (data.ptr[i] as u32)) & 255u32) as usize;
         crc = (crc >> 8) ^ CRC32_TABLE[idx];

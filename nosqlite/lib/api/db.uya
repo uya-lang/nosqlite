@@ -109,6 +109,7 @@ use lib.plan.planner.plan_select_into;
 use lib.plan.planner.query_plan_copy_used;
 use lib.plan.planner.plan_node;
 use lib.plan.planner.plan_explain;
+use lib.doc.codec.doc_encode_json_flat_object_pairs;
 use lib.doc.codec.doc_encode_json_value;
 use lib.doc.codec.doc_node_tag;
 use lib.doc.codec.doc_bool_value;
@@ -158,6 +159,7 @@ use lib.storage.slotted_page.slotted_page_slot_count;
 use lib.storage.slotted_page.slotted_page_cell_view;
 use lib.storage.slotted_page.slotted_page_insert_copy;
 use lib.storage.slotted_page.slotted_page_insert_copy_with_flags;
+use lib.storage.slotted_page.slotted_page_insert_reserve_with_flags;
 use lib.storage.slotted_page.SLOT_FLAG_TOMBSTONE;
 use lib.storage.pager.writer_lock_guard_acquire;
 use lib.storage.pager.writer_lock_guard_release;
@@ -202,19 +204,22 @@ const DB_TXN_DOC_SCRATCH_MAX: usize = 8192;
 const DB_JSON_VALUE_ALLOC_SIZE: usize = 64;
 const DB_JSON_KEY_VALUE_ALLOC_SIZE: usize = 48;
 const DB_JSON_FAST_OBJECT_MAX_FIELDS: usize = 16;
+const DB_BLOB_ARENA_MAX_CHUNKS: usize = 1024;
+const DB_BLOB_ARENA_CHUNK_MIN_BYTES: u32 = 4096u32;
+const DB_BLOB_ARENA_CHUNK_GROW_MAX: u32 = 1048576u32;
 const DB_VIEW_BASE_RETAINED_BYTES: u64 = 64u64;
 const DB_COLLECTION_RETAINED_BYTES: u64 = 32u64;
 const DB_ROW_RETAINED_BYTES: u64 = 16u64;
 
 struct DbStoredRow {
+    doc_id: u64,
+    record_ptr: RecordPointer,
+    doc_blob: &byte,
+    doc_len: u16,
     present: bool,
     tombstone: bool,
     blob_loaded: bool,
     doc_blob_owned: bool,
-    doc_id: u64,
-    record_ptr: RecordPointer,
-    doc_len: u16,
-    doc_blob: &byte,
 }
 
 struct DbCollectionIndexMeta {
@@ -226,6 +231,12 @@ struct DbCollectionIndexMeta {
     path_len: u16,
     name: [byte: 64],
     path: [byte: 128],
+}
+
+struct DbBlobArenaChunk {
+    data: &byte,
+    used: u32,
+    capacity: u32,
 }
 
 struct DbCollection {
@@ -243,6 +254,8 @@ struct DbCollection {
     may_have_tombstones: bool,
     secondary_index_count: u16,
     secondary_indexes: [DbCollectionIndexMeta: DB_MAX_SECONDARY_INDEXES_PER_COLLECTION],
+    blob_chunk_count: u16,
+    blob_chunks: [DbBlobArenaChunk: DB_BLOB_ARENA_MAX_CHUNKS],
     row_count: u32,
     row_capacity: u32,
     dirty_page_word_capacity: u32,
@@ -547,11 +560,12 @@ fn db_collection_rows_per_page(collection: &DbCollection) u16 {
     return DB_ROWS_PER_DATA_PAGE_LEGACY;
 }
 
-fn db_collection_update_max_doc_len(collection: &DbCollection, doc_len: u16) void {
+fn db_collection_update_max_doc_len(collection: &DbCollection, doc_len: u16) bool {
     if collection == null || doc_len <= collection.max_doc_len_seen {
-        return;
+        return false;
     }
     collection.max_doc_len_seen = doc_len;
+    return true;
 }
 
 fn db_collection_compute_packed_rows_per_page(page_size: u32, max_doc_len: u16) u16 {
@@ -642,14 +656,119 @@ fn db_collection_at_in_state(state: &CommitViewState, collection_slot: u16) !&Db
     return &state.collections[idx];
 }
 
+fn db_blob_arena_chunk_reset(chunk: &DbBlobArenaChunk) void {
+    if chunk == null {
+        return;
+    }
+    chunk.data = null;
+    chunk.used = 0u32;
+    chunk.capacity = 0u32;
+}
+
+fn db_collection_release_blob_chunks(collection: &DbCollection) void {
+    if collection == null {
+        return;
+    }
+    const allocator: &HeapAllocator = get_heap_allocator();
+    var chunk_idx: usize = 0usize;
+    while chunk_idx < collection.blob_chunk_count as usize {
+        if collection.blob_chunks[chunk_idx].data != null {
+            allocator.dealloc(collection.blob_chunks[chunk_idx].data);
+        }
+        db_blob_arena_chunk_reset(&collection.blob_chunks[chunk_idx]);
+        chunk_idx = chunk_idx + 1usize;
+    }
+    collection.blob_chunk_count = 0u16;
+}
+
+fn db_collection_next_blob_chunk_capacity(collection: &DbCollection, needed: usize) !u32 {
+    if collection == null || needed == 0usize || needed > DB_DOC_BLOB_MAX {
+        return error.DbRowTooLarge;
+    }
+    const needed_u32: u32 = (needed as! u32) catch {
+        return error.DbRowTooLarge;
+    };
+    var capacity: u32 = DB_BLOB_ARENA_CHUNK_MIN_BYTES;
+    if collection.blob_chunk_count > 0u16 {
+        const last_idx: usize = (collection.blob_chunk_count - 1u16) as usize;
+        if last_idx >= DB_BLOB_ARENA_MAX_CHUNKS {
+            return error.DbRowTooLarge;
+        }
+        if collection.blob_chunks[last_idx].capacity > capacity {
+            capacity = collection.blob_chunks[last_idx].capacity;
+        }
+        if capacity < DB_BLOB_ARENA_CHUNK_GROW_MAX {
+            if capacity > (DB_BLOB_ARENA_CHUNK_GROW_MAX / 2u32) {
+                capacity = DB_BLOB_ARENA_CHUNK_GROW_MAX;
+            } else {
+                capacity = capacity * 2u32;
+            }
+        }
+    }
+    while capacity < needed_u32 {
+        if capacity >= DB_BLOB_ARENA_CHUNK_GROW_MAX {
+            capacity = needed_u32;
+            break;
+        }
+        if capacity > (DB_BLOB_ARENA_CHUNK_GROW_MAX / 2u32) {
+            capacity = DB_BLOB_ARENA_CHUNK_GROW_MAX;
+        } else {
+            capacity = capacity * 2u32;
+        }
+    }
+    if capacity < needed_u32 {
+        capacity = needed_u32;
+    }
+    return capacity;
+}
+
+fn db_collection_blob_alloc(collection: &DbCollection, size: usize) !&byte {
+    if collection == null {
+        return error.DbCollectionNotFound;
+    }
+    if size == 0usize {
+        return null;
+    }
+    if size > DB_DOC_BLOB_MAX {
+        return error.DbRowTooLarge;
+    }
+    const size_u32: u32 = (size as! u32) catch {
+        return error.DbRowTooLarge;
+    };
+    if collection.blob_chunk_count > 0u16 {
+        const last_idx: usize = (collection.blob_chunk_count - 1u16) as usize;
+        if last_idx >= DB_BLOB_ARENA_MAX_CHUNKS {
+            return error.DbRowTooLarge;
+        }
+        const last: &DbBlobArenaChunk = &collection.blob_chunks[last_idx];
+        if last.data != null && last.capacity >= last.used && (last.capacity - last.used) >= size_u32 {
+            const out: &byte = &last.data[last.used as usize];
+            last.used = last.used + size_u32;
+            return out;
+        }
+    }
+    if collection.blob_chunk_count as usize >= DB_BLOB_ARENA_MAX_CHUNKS {
+        return error.DbRowTooLarge;
+    }
+    const chunk_capacity: u32 = try db_collection_next_blob_chunk_capacity(collection, size);
+    const allocator: &HeapAllocator = get_heap_allocator();
+    const mem: &byte = try allocator.alloc(chunk_capacity as usize);
+    const chunk_idx: usize = collection.blob_chunk_count as usize;
+    if chunk_idx >= DB_BLOB_ARENA_MAX_CHUNKS {
+        allocator.dealloc(mem);
+        return error.DbRowTooLarge;
+    }
+    const chunk: &DbBlobArenaChunk = &collection.blob_chunks[chunk_idx];
+    chunk.data = mem;
+    chunk.used = size_u32;
+    chunk.capacity = chunk_capacity;
+    collection.blob_chunk_count = collection.blob_chunk_count + 1u16;
+    return mem;
+}
+
 fn db_stored_row_reset(row: &DbStoredRow) void {
     if row == null {
         return;
-    }
-    if row.doc_blob != null && row.doc_blob_owned {
-        const allocator: &HeapAllocator = get_heap_allocator();
-        allocator.dealloc(row.doc_blob);
-        row.doc_blob = null;
     }
     row.present = false;
     row.tombstone = false;
@@ -661,8 +780,8 @@ fn db_stored_row_reset(row: &DbStoredRow) void {
     row.doc_blob = null;
 }
 
-fn db_stored_row_set_blob_copy(row: &DbStoredRow, doc_blob: &[byte]) !void {
-    if row == null {
+fn db_collection_row_set_blob_copy(collection: &DbCollection, row: &DbStoredRow, doc_blob: &[byte]) !void {
+    if collection == null || row == null {
         return error.DbRowTooLarge;
     }
     if doc_blob.ptr == null && doc_blob.len > 0usize {
@@ -671,24 +790,19 @@ fn db_stored_row_set_blob_copy(row: &DbStoredRow, doc_blob: &[byte]) !void {
     if doc_blob.len > DB_DOC_BLOB_MAX {
         return error.DbRowTooLarge;
     }
-    if row.doc_blob != null && row.doc_blob_owned {
-        const allocator: &HeapAllocator = get_heap_allocator();
-        allocator.dealloc(row.doc_blob);
-        row.doc_blob = null;
-    }
     row.doc_len = (doc_blob.len as! u16) catch {
         return error.DbRowTooLarge;
     };
     if doc_blob.len == 0usize {
+        row.doc_blob = null;
         row.blob_loaded = true;
         row.doc_blob_owned = false;
         return;
     }
-    const allocator: &HeapAllocator = get_heap_allocator();
-    row.doc_blob = try allocator.alloc(doc_blob.len);
+    row.doc_blob = try db_collection_blob_alloc(collection, doc_blob.len);
     _ = mem_copy(row.doc_blob, doc_blob.ptr, doc_blob.len);
     row.blob_loaded = true;
-    row.doc_blob_owned = true;
+    row.doc_blob_owned = false;
 }
 
 fn db_rows_alloc_size(capacity: u32) usize {
@@ -806,7 +920,7 @@ fn db_collection_ensure_dirty_page_capacity(collection: &DbCollection, rows: u32
     collection.dirty_page_word_capacity = needed_words;
 }
 
-fn db_collection_ensure_row_capacity(collection: &DbCollection, needed: u32) !void {
+fn db_collection_ensure_row_capacity_impl(collection: &DbCollection, needed: u32, zero_init: bool) !void {
     if collection == null {
         return error.DbCollectionNotFound;
     }
@@ -827,10 +941,12 @@ fn db_collection_ensure_row_capacity(collection: &DbCollection, needed: u32) !vo
     var mem: &byte = null;
     if collection.rows == null || collection.row_capacity == 0u32 {
         mem = try allocator.alloc(new_bytes);
-        _ = mem_set(mem, 0, new_bytes);
+        if zero_init {
+            _ = mem_set(mem, 0, new_bytes);
+        }
     } else {
         mem = try allocator.realloc(collection.rows as &byte, new_bytes);
-        if new_bytes > old_bytes {
+        if zero_init && new_bytes > old_bytes {
             if mem == null {
                 return error.DbRowFull;
             }
@@ -842,17 +958,21 @@ fn db_collection_ensure_row_capacity(collection: &DbCollection, needed: u32) !vo
     try db_collection_ensure_dirty_page_capacity(collection, new_capacity);
 }
 
+fn db_collection_ensure_row_capacity(collection: &DbCollection, needed: u32) !void {
+    try db_collection_ensure_row_capacity_impl(collection, needed, true);
+}
+
+fn db_collection_ensure_row_capacity_uninit(collection: &DbCollection, needed: u32) !void {
+    try db_collection_ensure_row_capacity_impl(collection, needed, false);
+}
+
 fn db_collection_release_rows(collection: &DbCollection) void {
     if collection == null {
         return;
     }
+    db_collection_release_blob_chunks(collection);
     const allocator: &HeapAllocator = get_heap_allocator();
     if collection.rows != null {
-        var row_idx: u32 = 0u32;
-        while row_idx < collection.row_capacity {
-            db_stored_row_reset(&collection.rows[row_idx as usize]);
-            row_idx = row_idx + 1u32;
-        }
         allocator.dealloc(collection.rows as &byte);
         collection.rows = null;
     }
@@ -868,11 +988,11 @@ fn db_collection_clear_dirty_pages(collection: &DbCollection) void {
     if collection == null || collection.dirty_page_bits == null {
         return;
     }
-    var word_idx: u32 = 0u32;
-    while word_idx < collection.dirty_page_word_capacity {
-        collection.dirty_page_bits[word_idx as usize] = 0u64;
-        word_idx = word_idx + 1u32;
-    }
+    _ = mem_set(
+        collection.dirty_page_bits as &byte,
+        0 as byte,
+        (collection.dirty_page_word_capacity as usize) * 8usize,
+    );
 }
 
 fn db_collection_mark_row_dirty(collection: &DbCollection, row_idx: u32) !void {
@@ -954,14 +1074,11 @@ fn db_collection_reset(collection: &DbCollection) void {
     if collection == null {
         return;
     }
+    db_collection_release_blob_chunks(collection);
     if collection.row_capacity > DB_COLLECTION_ROW_REUSE_MAX {
         db_collection_release_rows(collection);
     } else if collection.rows != null {
-        var row_idx: u32 = 0u32;
-        while row_idx < collection.row_capacity {
-            db_stored_row_reset(&collection.rows[row_idx as usize]);
-            row_idx = row_idx + 1u32;
-        }
+        _ = mem_set(collection.rows as &byte, 0 as byte, db_rows_alloc_size(collection.row_capacity));
         db_collection_clear_dirty_pages(collection);
     }
     collection.present = false;
@@ -976,6 +1093,7 @@ fn db_collection_reset(collection: &DbCollection) void {
     collection.rows_loaded = false;
     collection.may_have_tombstones = false;
     collection.secondary_index_count = 0u16;
+    collection.blob_chunk_count = 0u16;
     collection.row_count = 0u32;
 }
 
@@ -991,12 +1109,7 @@ fn db_copy_stored_row(target: &DbStoredRow, source: &DbStoredRow) !void {
     target.doc_id = source.doc_id;
     target.record_ptr = source.record_ptr;
     target.doc_len = source.doc_len;
-    if source.blob_loaded && source.doc_len > 0u16 && source.doc_blob != null {
-        const allocator: &HeapAllocator = get_heap_allocator();
-        target.doc_blob = try allocator.alloc(source.doc_len as usize);
-        _ = mem_copy(target.doc_blob, source.doc_blob as &const byte, source.doc_len as usize);
-        target.doc_blob_owned = true;
-    }
+    target.doc_blob = source.doc_blob;
 }
 
 fn db_copy_collection_index_meta(target: &DbCollectionIndexMeta, source: &DbCollectionIndexMeta) void {
@@ -1034,6 +1147,7 @@ fn db_copy_collection_used(target: &DbCollection, source: &DbCollection) !void {
     target.rows_loaded = source.rows_loaded;
     target.may_have_tombstones = source.may_have_tombstones;
     target.secondary_index_count = source.secondary_index_count;
+    target.blob_chunk_count = 0u16;
     target.row_count = source.row_count;
     target.rows_loaded = source.rows_loaded;
     if source.name_len > 0u16 {
@@ -1047,42 +1161,23 @@ fn db_copy_collection_used(target: &DbCollection, source: &DbCollection) !void {
     if source.row_count == 0u32 || source.rows == null {
         return;
     }
-    try db_collection_ensure_row_capacity(target, source.row_count);
+    try db_collection_ensure_row_capacity_uninit(target, source.row_count);
     const row_bytes: usize = db_rows_alloc_size(source.row_count);
     _ = mem_copy(target.rows as &byte, source.rows as &const byte, row_bytes);
-    var row_idx: usize = 0usize;
-    while row_idx < source.row_count as usize {
-        target.rows[row_idx].doc_blob_owned = false;
-        row_idx = row_idx + 1usize;
-    }
 }
 
 fn db_transfer_collection_blob_ownership(previous: &DbCollection, staged: &DbCollection) void {
-    if previous == null || staged == null || previous.rows == null || staged.rows == null {
+    if previous == null || staged == null || previous.blob_chunk_count == 0u16 {
         return;
     }
-    var row_limit: u32 = previous.row_count;
-    if staged.row_count < row_limit {
-        row_limit = staged.row_count;
+    var prev_idx: usize = 0usize;
+    while prev_idx < previous.blob_chunk_count as usize {
+        staged.blob_chunks[staged.blob_chunk_count as usize] = previous.blob_chunks[prev_idx];
+        staged.blob_chunk_count = staged.blob_chunk_count + 1u16;
+        db_blob_arena_chunk_reset(&previous.blob_chunks[prev_idx]);
+        prev_idx = prev_idx + 1usize;
     }
-    var row_idx: u32 = 0u32;
-    while row_idx < row_limit {
-        const prev_row: &DbStoredRow = &previous.rows[row_idx as usize];
-        const staged_row: &DbStoredRow = &staged.rows[row_idx as usize];
-        if prev_row.present &&
-            staged_row.present &&
-            prev_row.doc_blob != null &&
-            prev_row.doc_blob == staged_row.doc_blob &&
-            prev_row.doc_blob_owned &&
-            !staged_row.doc_blob_owned &&
-            prev_row.doc_id == staged_row.doc_id &&
-            prev_row.doc_len == staged_row.doc_len &&
-            prev_row.tombstone == staged_row.tombstone {
-            prev_row.doc_blob_owned = false;
-            staged_row.doc_blob_owned = true;
-        }
-        row_idx = row_idx + 1u32;
-    }
+    previous.blob_chunk_count = 0u16;
 }
 
 fn db_transfer_view_blob_ownership(previous_state: &CommitViewState, staged_state: &CommitViewState) void {
@@ -1556,11 +1651,7 @@ fn doc_blob_builder_build_json_fast(builder: &DocBlobBuilder, json: &[const byte
     var count: usize = 0usize;
     pos = db_json_fast_skip_ws(json, pos);
     if pos < json.len && json.ptr[pos] == 125 as byte {
-        const value: JsonValue = JsonValue.obj(JsonObject{
-            pairs: null,
-            len: 0usize,
-        });
-        const encoded_len: usize = try doc_encode_json_value(&value, builder.doc_blob[0: DB_DOC_BLOB_MAX]);
+        const encoded_len: usize = try doc_encode_json_flat_object_pairs(pairs[0: 0], builder.doc_blob[0: DB_DOC_BLOB_MAX]);
         builder.doc_len = (encoded_len as! u16) catch {
             return error.DbRowTooLarge;
         };
@@ -1600,11 +1691,7 @@ fn doc_blob_builder_build_json_fast(builder: &DocBlobBuilder, json: &[const byte
     if pos != json.len {
         return false;
     }
-    const object_value: JsonValue = JsonValue.obj(JsonObject{
-        pairs: &pairs[0],
-        len: count,
-    });
-    const encoded_len: usize = try doc_encode_json_value(&object_value, builder.doc_blob[0: DB_DOC_BLOB_MAX]);
+    const encoded_len: usize = try doc_encode_json_flat_object_pairs(pairs[0: count], builder.doc_blob[0: DB_DOC_BLOB_MAX]);
     builder.doc_len = (encoded_len as! u16) catch {
         return error.DbRowTooLarge;
     };
@@ -1754,8 +1841,8 @@ fn db_record_cell_encode(row: &DbStoredRow, now_ms: u64, out: &[byte]) !usize {
     return total_len;
 }
 
-fn db_record_cell_decode(cell: &[byte], row: &DbStoredRow) !void {
-    if cell.ptr == null || row == null || cell.len < RECORD_CELL_HEADER_SIZE {
+fn db_record_cell_decode(collection: &DbCollection, cell: &[byte], row: &DbStoredRow) !void {
+    if collection == null || cell.ptr == null || row == null || cell.len < RECORD_CELL_HEADER_SIZE {
         return error.DbPageCorrupt;
     }
     const doc_len: usize = db_load_u32_le(cell, RECORD_CELL_DOC_LEN_OFF) as usize;
@@ -1765,7 +1852,7 @@ fn db_record_cell_decode(cell: &[byte], row: &DbStoredRow) !void {
     db_stored_row_reset(row);
     row.present = true;
     row.doc_id = db_load_u64_le(cell, RECORD_CELL_DOC_ID_OFF);
-    try db_stored_row_set_blob_copy(row, cell[RECORD_CELL_HEADER_SIZE: doc_len]);
+    try db_collection_row_set_blob_copy(collection, row, cell[RECORD_CELL_HEADER_SIZE: doc_len]);
 }
 
 fn db_record_cell_decode_header(cell: &[byte], row: &DbStoredRow) !void {
@@ -1800,13 +1887,13 @@ fn db_collection_encode_page_range(collection: &DbCollection, page_size: u32, no
         const row: &DbStoredRow = &collection.rows[row_idx as usize];
         if row.present {
             row.record_ptr = record_pointer_make(page_id, local_slot);
-            var cell_buf: [byte: RECORD_CELL_HEADER_SIZE + DB_DOC_BLOB_MAX] = [];
-            const cell_len: usize = try db_record_cell_encode(row, now_ms, cell_buf[0: RECORD_CELL_HEADER_SIZE + DB_DOC_BLOB_MAX]);
+            const cell_len: usize = RECORD_CELL_HEADER_SIZE + row.doc_len as usize;
             var flags: u16 = 0u16;
             if row.tombstone {
                 flags = SLOT_FLAG_TOMBSTONE;
             }
-            _ = try slotted_page_insert_copy_with_flags(out, cell_buf[0: cell_len], flags);
+            const cell_view: SlottedPageCellView = try slotted_page_insert_reserve_with_flags(out, cell_len, flags);
+            _ = try db_record_cell_encode(row, now_ms, cell_view.ptr[0: cell_view.len]);
         }
         local_slot = local_slot + 1u16;
     }
@@ -1841,11 +1928,11 @@ fn db_collection_load_page_range(collection: &DbCollection, page_id: u32, page_o
         if slot_is_used(cell.flags) {
             const row: &DbStoredRow = &collection.rows[row_idx as usize];
             if load_blobs {
-                try db_record_cell_decode(cell.ptr[0: cell.len], row);
+                try db_record_cell_decode(collection, cell.ptr[0: cell.len], row);
             } else {
                 try db_record_cell_decode_header(cell.ptr[0: cell.len], row);
             }
-            db_collection_update_max_doc_len(collection, row.doc_len);
+            _ = db_collection_update_max_doc_len(collection, row.doc_len);
             row.record_ptr = record_pointer_make(page_id, slot_idx);
             row.tombstone = slot_is_tombstone(cell.flags);
             if row.tombstone {
@@ -1948,7 +2035,7 @@ fn db_collection_load_page_header_only(db: &DbHandle, collection: &DbCollection,
                 cell_header[0: RECORD_CELL_HEADER_SIZE],
             );
             try db_record_cell_decode_header(cell_header[0: RECORD_CELL_HEADER_SIZE], row);
-            db_collection_update_max_doc_len(collection, row.doc_len);
+            _ = db_collection_update_max_doc_len(collection, row.doc_len);
             row.record_ptr = record_pointer_make(page_id, slot_idx);
             row.tombstone = slot_is_tombstone(slot.flags);
             if row.tombstone {
@@ -1968,8 +2055,8 @@ fn db_collection_load_page_header_only(db: &DbHandle, collection: &DbCollection,
     }
 }
 
-fn db_ensure_row_blob_loaded(db: &DbHandle, row: &DbStoredRow) !void {
-    if db == null || row == null || !row.present {
+fn db_ensure_row_blob_loaded(db: &DbHandle, collection: &DbCollection, row: &DbStoredRow) !void {
+    if db == null || collection == null || row == null || !row.present {
         return error.DbRowTooLarge;
     }
     if row.blob_loaded {
@@ -1983,7 +2070,7 @@ fn db_ensure_row_blob_loaded(db: &DbHandle, row: &DbStoredRow) !void {
     const cell: SlottedPageCellView = slotted_page_cell_view(page_buf, row.record_ptr.slot_id) catch {
         return error.DbPageCorrupt;
     };
-    try db_record_cell_decode(cell.ptr[0: cell.len], row);
+    try db_record_cell_decode(collection, cell.ptr[0: cell.len], row);
     row.record_ptr = record_pointer_make(page_id, slot_id);
     row.tombstone = slot_is_tombstone(cell.flags);
 }
@@ -1996,7 +2083,7 @@ fn db_ensure_collection_blobs_loaded(db: &DbHandle, collection: &DbCollection) !
     while row_idx < collection.row_count {
         const row: &DbStoredRow = &collection.rows[row_idx as usize];
         if row.present && !row.blob_loaded {
-            try db_ensure_row_blob_loaded(db, row);
+            try db_ensure_row_blob_loaded(db, collection, row);
         }
         row_idx = row_idx + 1u32;
     }
@@ -2460,6 +2547,8 @@ fn db_check_collection_at_stem(stem: &const byte, page_size: u32, entry: &Catalo
         may_have_tombstones: false,
         secondary_index_count: 0u16,
         secondary_indexes: [],
+        blob_chunk_count: 0u16,
+        blob_chunks: [],
         row_count: 0u32,
         row_capacity: 0u32,
         dirty_page_word_capacity: 0u32,
@@ -2788,16 +2877,13 @@ fn db_collection_release_loaded_blobs(collection: &DbCollection) void {
     while row_idx < collection.row_count {
         const row: &DbStoredRow = &collection.rows[row_idx as usize];
         if row.present && row.blob_loaded && row.doc_blob != null {
-            if row.doc_blob_owned {
-                const allocator: &HeapAllocator = get_heap_allocator();
-                allocator.dealloc(row.doc_blob);
-            }
             row.doc_blob = null;
             row.blob_loaded = false;
             row.doc_blob_owned = false;
         }
         row_idx = row_idx + 1u32;
     }
+    db_collection_release_blob_chunks(collection);
 }
 
 fn db_collection_row_ref(db: &DbHandle, view_slot: u16, collection_slot: u16, row_slot: u32) !RowRef {
@@ -2828,7 +2914,7 @@ fn db_collection_row_ref(db: &DbHandle, view_slot: u16, collection_slot: u16, ro
     if !row.blob_loaded && state.retired {
         return error.DbPageCorrupt;
     }
-    try db_ensure_row_blob_loaded(db, row);
+    try db_ensure_row_blob_loaded(db, collection, row);
     return RowRef{
         doc_id: row.doc_id,
         record_ptr: row.record_ptr,
@@ -3738,7 +3824,7 @@ fn db_json_set_path(arena: &Arena, value: &JsonValue, program: &PathProgram, ste
     }
 }
 
-fn db_update_row_doc_at_path(row: &DbStoredRow, program: &PathProgram, replacement: &ExecValue) !void {
+fn db_update_row_doc_at_path(collection: &DbCollection, row: &DbStoredRow, program: &PathProgram, replacement: &ExecValue) !void {
     var scratch: [byte: DB_TXN_DOC_SCRATCH_MAX] = [];
     var arena: Arena = Arena{ buffer: null, size: 0, used: 0 };
     arena_init(&arena, &scratch[0], DB_TXN_DOC_SCRATCH_MAX);
@@ -3747,7 +3833,7 @@ fn db_update_row_doc_at_path(row: &DbStoredRow, program: &PathProgram, replaceme
     const updated_json: JsonValue = try db_json_set_path(&arena, &root_json, program, 0usize, &replacement_json);
     var encoded_buf: [byte: DB_DOC_BLOB_MAX] = [];
     const encoded_len: usize = try doc_encode_json_value(&updated_json, encoded_buf[0: DB_DOC_BLOB_MAX]);
-    try db_stored_row_set_blob_copy(row, encoded_buf[0: encoded_len]);
+    try db_collection_row_set_blob_copy(collection, row, encoded_buf[0: encoded_len]);
 }
 
 fn db_txn_stage_update_stmt(txn: &Txn, stmt: &SqlStmt) !void {
@@ -3776,9 +3862,10 @@ fn db_txn_stage_update_stmt(txn: &Txn, stmt: &SqlStmt) !void {
         const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
         const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
         const row: &DbStoredRow = try db_row_at(collection, row_slot);
-        try db_update_row_doc_at_path(row, &program, &new_value);
-        db_collection_update_max_doc_len(collection, row.doc_len);
-        try db_collection_refresh_packed_layout(collection, db_effective_page_size(txn.db));
+        try db_update_row_doc_at_path(collection, row, &program, &new_value);
+        if db_collection_update_max_doc_len(collection, row.doc_len) {
+            try db_collection_refresh_packed_layout(collection, db_effective_page_size(txn.db));
+        }
         try db_collection_mark_row_dirty(collection, row_slot);
         changed = true;
         i = i + 1u16;
@@ -3922,7 +4009,7 @@ fn db_txn_stage_insert(txn: &Txn, collection_name: &[const byte], json_text: &[c
     row.present = true;
     row.tombstone = false;
     row.doc_id = doc_id;
-    try db_stored_row_set_blob_copy(row, builder.doc_blob[0: builder.doc_len as usize]);
+    try db_collection_row_set_blob_copy(&state.collections[collection_idx], row, builder.doc_blob[0: builder.doc_len as usize]);
     if state.collections[collection_idx].primary_root_page == 0u32 {
         state.collections[collection_idx].primary_root_page = db_collection_data_page_id(&state.collections[collection_idx]);
     }
@@ -3932,8 +4019,9 @@ fn db_txn_stage_insert(txn: &Txn, collection_name: &[const byte], json_text: &[c
     } else {
         state.collections[collection_idx].may_have_tombstones = true;
     }
-    db_collection_update_max_doc_len(&state.collections[collection_idx], row.doc_len);
-    try db_collection_refresh_packed_layout(&state.collections[collection_idx], db_effective_page_size(txn.db));
+    if db_collection_update_max_doc_len(&state.collections[collection_idx], row.doc_len) {
+        try db_collection_refresh_packed_layout(&state.collections[collection_idx], db_effective_page_size(txn.db));
+    }
     row.record_ptr = record_pointer_make(
         db_collection_page_id_for_index(&state.collections[collection_idx], row_slot),
         db_collection_local_slot_for_index(&state.collections[collection_idx], row_slot),

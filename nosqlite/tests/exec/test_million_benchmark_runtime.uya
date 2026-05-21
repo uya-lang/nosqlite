@@ -102,7 +102,7 @@ fn build_json(doc_id: u64, out: &[byte]) !usize {
     return len;
 }
 
-fn run_load(db: &DbHandle, docs: u64, batch_rows: u64) !u64 {
+fn run_load(db: &DbHandle, docs: u64, batch_rows: u64, emit_progress: bool) !u64 {
     var inserted_total: u64 = 0u64;
     const start_ns: u64 = now_nsec();
     while inserted_total < docs {
@@ -125,17 +125,38 @@ fn run_load(db: &DbHandle, docs: u64, batch_rows: u64) !u64 {
         var json_buf: [byte: JSON_BUF_CAP] = [];
         while doc_id <= batch_end {
             const json_len: usize = try build_json(doc_id, json_buf[0: JSON_BUF_CAP]);
-            const inserted: u64 = try db_test_txn_insert_json(&txn, "users", json_buf[0: json_len]);
+            const inserted_u: !u64 = db_test_txn_insert_json(&txn, "users", json_buf[0: json_len]);
+            if inserted_u.error_id != 0u32 {
+                printf(
+                    "BENCH_ERROR_DETAIL stage=insert doc_id=%lu batch_end=%lu error_id=%u\n" as *byte,
+                    doc_id,
+                    batch_end,
+                    inserted_u.error_id,
+                );
+                return error.BenchUnexpectedResult;
+            }
+            const inserted: u64 = inserted_u.value;
             if inserted != doc_id {
                 return error.BenchUnexpectedResult;
             }
             doc_id = doc_id + 1u64;
         }
 
-        try txn_commit(&txn);
+        const commit_u: !void = txn_commit(&txn);
+        if commit_u.error_id != 0u32 {
+            printf(
+                "BENCH_ERROR_DETAIL stage=commit inserted_total=%lu batch_end=%lu error_id=%u\n" as *byte,
+                inserted_total,
+                batch_end,
+                commit_u.error_id,
+            );
+            return error.BenchUnexpectedResult;
+        }
         txn_ok = true;
         inserted_total = batch_end;
-        printf("PROGRESS inserted=%lu\n" as *byte, inserted_total);
+        if emit_progress {
+            printf("PROGRESS inserted=%lu\n" as *byte, inserted_total);
+        }
     }
     return elapsed_bench_usec(start_ns);
 }
@@ -146,6 +167,7 @@ fn main() i32 {
     const docs: u64 = env_u64("NOSQLITE_MILLION_BENCH_DOCS" as &const byte, 1000000u64);
     const batch_rows: u64 = env_u64("NOSQLITE_MILLION_BENCH_BATCH_ROWS" as &const byte, 48000u64);
     const query_iters: u64 = env_u64("NOSQLITE_MILLION_BENCH_QUERY_ITERS" as &const byte, 100u64);
+    const emit_progress: bool = env_u64("NOSQLITE_MILLION_BENCH_PROGRESS" as &const byte, 0u64) != 0u64;
 
     cleanup();
     defer {
@@ -169,7 +191,7 @@ fn main() i32 {
         return 2;
     };
 
-    const load_u: !u64 = run_load(&db, docs, batch_rows);
+    const load_u: !u64 = run_load(&db, docs, batch_rows, emit_progress);
     if load_u.error_id != 0u32 {
         printf("BENCH_ERROR stage=load error_id=%u\n" as *byte, load_u.error_id);
         return 3;
