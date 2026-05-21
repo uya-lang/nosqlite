@@ -160,6 +160,7 @@ use lib.storage.slotted_page.slotted_page_cell_view;
 use lib.storage.slotted_page.slotted_page_insert_copy;
 use lib.storage.slotted_page.slotted_page_insert_copy_with_flags;
 use lib.storage.slotted_page.slotted_page_insert_reserve_with_flags;
+use lib.storage.slotted_page.slotted_page_set_slot_tombstone;
 use lib.storage.slotted_page.SLOT_FLAG_TOMBSTONE;
 use lib.storage.pager.writer_lock_guard_acquire;
 use lib.storage.pager.writer_lock_guard_release;
@@ -210,6 +211,7 @@ const DB_BLOB_ARENA_CHUNK_GROW_MAX: u32 = 1048576u32;
 const DB_VIEW_BASE_RETAINED_BYTES: u64 = 64u64;
 const DB_COLLECTION_RETAINED_BYTES: u64 = 32u64;
 const DB_ROW_RETAINED_BYTES: u64 = 16u64;
+const DB_COLLECTION_META_DOC_ID_MASK: u64 = 4294967295u64;
 
 struct DbStoredRow {
     doc_id: u64,
@@ -248,10 +250,12 @@ struct DbCollection {
     rows_per_page: u16,
     max_doc_len_seen: u16,
     next_doc_id: u64,
+    deleted_through_doc_id: u64,
     primary_root_page: u32,
     primary_index_ready: bool,
     rows_loaded: bool,
     may_have_tombstones: bool,
+    prefix_delete_only: bool,
     secondary_index_count: u16,
     secondary_indexes: [DbCollectionIndexMeta: DB_MAX_SECONDARY_INDEXES_PER_COLLECTION],
     blob_chunk_count: u16,
@@ -259,6 +263,9 @@ struct DbCollection {
     row_count: u32,
     row_capacity: u32,
     dirty_page_word_capacity: u32,
+    tombstone_patch_pages_valid: bool,
+    tombstone_patch_page_start: u32,
+    tombstone_patch_page_end_exclusive: u32,
     dirty_page_bits: &u64,
     rows: &DbStoredRow,
 }
@@ -528,6 +535,24 @@ fn db_copy_name(name: &[const byte], out: &[byte], len_out: &u16) !void {
     if name.len > 0 {
         _ = mem_copy(out.ptr, name.ptr, name.len);
     }
+}
+
+fn db_collection_meta_unpack_next_doc_id(packed: u64, next_doc_id_out: &u64, deleted_through_doc_id_out: &u64) void {
+    if next_doc_id_out != null {
+        next_doc_id_out[0] = packed & DB_COLLECTION_META_DOC_ID_MASK;
+    }
+    if deleted_through_doc_id_out != null {
+        deleted_through_doc_id_out[0] = packed >> 32i32;
+    }
+}
+
+fn db_collection_meta_pack_next_doc_id(next_doc_id: u64, deleted_through_doc_id: u64) !u64 {
+    if next_doc_id == 0u64 ||
+        next_doc_id > DB_COLLECTION_META_DOC_ID_MASK ||
+        deleted_through_doc_id > DB_COLLECTION_META_DOC_ID_MASK {
+        return error.DbRowFull;
+    }
+    return next_doc_id | (deleted_through_doc_id << 32i32);
 }
 
 fn db_copy_path(path: &[const byte], out: &[byte], len_out: &u16) !void {
@@ -889,6 +914,40 @@ fn db_collection_dirty_word_capacity(collection: &DbCollection, rows: u32) u32 {
     return ((page_count - 1u32) / 64u32) + 1u32;
 }
 
+fn db_collection_clear_tombstone_patch_pages(collection: &DbCollection) void {
+    if collection == null {
+        return;
+    }
+    collection.tombstone_patch_pages_valid = false;
+    collection.tombstone_patch_page_start = 0u32;
+    collection.tombstone_patch_page_end_exclusive = 0u32;
+}
+
+fn db_collection_extend_tombstone_patch_pages(collection: &DbCollection, start_page: u32, end_page_exclusive: u32) void {
+    if collection == null || start_page >= end_page_exclusive {
+        return;
+    }
+    if !collection.tombstone_patch_pages_valid {
+        collection.tombstone_patch_pages_valid = true;
+        collection.tombstone_patch_page_start = start_page;
+        collection.tombstone_patch_page_end_exclusive = end_page_exclusive;
+        return;
+    }
+    if start_page < collection.tombstone_patch_page_start {
+        collection.tombstone_patch_page_start = start_page;
+    }
+    if end_page_exclusive > collection.tombstone_patch_page_end_exclusive {
+        collection.tombstone_patch_page_end_exclusive = end_page_exclusive;
+    }
+}
+
+fn db_collection_page_in_tombstone_patch_pages(collection: &DbCollection, page_offset: u32) bool {
+    return collection != null &&
+        collection.tombstone_patch_pages_valid &&
+        page_offset >= collection.tombstone_patch_page_start &&
+        page_offset < collection.tombstone_patch_page_end_exclusive;
+}
+
 fn db_collection_ensure_dirty_page_capacity(collection: &DbCollection, rows: u32) !void {
     if collection == null {
         return error.DbCollectionNotFound;
@@ -986,6 +1045,7 @@ fn db_collection_release_rows(collection: &DbCollection) void {
 
 fn db_collection_clear_dirty_pages(collection: &DbCollection) void {
     if collection == null || collection.dirty_page_bits == null {
+        db_collection_clear_tombstone_patch_pages(collection);
         return;
     }
     _ = mem_set(
@@ -993,12 +1053,14 @@ fn db_collection_clear_dirty_pages(collection: &DbCollection) void {
         0 as byte,
         (collection.dirty_page_word_capacity as usize) * 8usize,
     );
+    db_collection_clear_tombstone_patch_pages(collection);
 }
 
 fn db_collection_mark_row_dirty(collection: &DbCollection, row_idx: u32) !void {
     if collection == null {
         return error.DbCollectionNotFound;
     }
+    db_collection_clear_tombstone_patch_pages(collection);
     try db_collection_ensure_dirty_page_capacity(collection, row_idx + 1u32);
     const page_idx: u32 = row_idx / (db_collection_rows_per_page(collection) as u32);
     if page_idx / 64u32 >= collection.dirty_page_word_capacity {
@@ -1088,10 +1150,13 @@ fn db_collection_reset(collection: &DbCollection) void {
     collection.rows_per_page = 0u16;
     collection.max_doc_len_seen = 0u16;
     collection.next_doc_id = 0u64;
+    collection.deleted_through_doc_id = 0u64;
     collection.primary_root_page = 0u32;
     collection.primary_index_ready = false;
     collection.rows_loaded = false;
     collection.may_have_tombstones = false;
+    collection.prefix_delete_only = true;
+    db_collection_clear_tombstone_patch_pages(collection);
     collection.secondary_index_count = 0u16;
     collection.blob_chunk_count = 0u16;
     collection.row_count = 0u32;
@@ -1142,10 +1207,12 @@ fn db_copy_collection_used(target: &DbCollection, source: &DbCollection) !void {
     target.rows_per_page = source.rows_per_page;
     target.max_doc_len_seen = source.max_doc_len_seen;
     target.next_doc_id = source.next_doc_id;
+    target.deleted_through_doc_id = source.deleted_through_doc_id;
     target.primary_root_page = source.primary_root_page;
     target.primary_index_ready = source.primary_index_ready;
     target.rows_loaded = source.rows_loaded;
     target.may_have_tombstones = source.may_have_tombstones;
+    target.prefix_delete_only = source.prefix_delete_only;
     target.secondary_index_count = source.secondary_index_count;
     target.blob_chunk_count = 0u16;
     target.row_count = source.row_count;
@@ -1762,6 +1829,7 @@ fn db_collection_mark_page_dirty(collection: &DbCollection, page_offset: u32) !v
     if collection == null {
         return error.DbCollectionNotFound;
     }
+    db_collection_clear_tombstone_patch_pages(collection);
     try db_collection_ensure_dirty_page_capacity(collection, db_collection_first_row_for_page_offset(collection, page_offset) + 1u32);
     if page_offset / 64u32 >= collection.dirty_page_word_capacity {
         return error.DbRowFull;
@@ -1935,8 +2003,14 @@ fn db_collection_load_page_range(collection: &DbCollection, page_id: u32, page_o
             _ = db_collection_update_max_doc_len(collection, row.doc_len);
             row.record_ptr = record_pointer_make(page_id, slot_idx);
             row.tombstone = slot_is_tombstone(cell.flags);
+            if row.doc_id <= collection.deleted_through_doc_id {
+                row.tombstone = true;
+            }
             if row.tombstone {
                 collection.may_have_tombstones = true;
+            }
+            if slot_is_tombstone(cell.flags) && row.doc_id > collection.deleted_through_doc_id {
+                collection.prefix_delete_only = false;
             }
             if row.doc_id > max_doc_id {
                 max_doc_id = row.doc_id;
@@ -2038,8 +2112,14 @@ fn db_collection_load_page_header_only(db: &DbHandle, collection: &DbCollection,
             _ = db_collection_update_max_doc_len(collection, row.doc_len);
             row.record_ptr = record_pointer_make(page_id, slot_idx);
             row.tombstone = slot_is_tombstone(slot.flags);
+            if row.doc_id <= collection.deleted_through_doc_id {
+                row.tombstone = true;
+            }
             if row.tombstone {
                 collection.may_have_tombstones = true;
+            }
+            if slot_is_tombstone(slot.flags) && row.doc_id > collection.deleted_through_doc_id {
+                collection.prefix_delete_only = false;
             }
             if row.doc_id > max_doc_id {
                 max_doc_id = row.doc_id;
@@ -2118,6 +2198,81 @@ fn db_ensure_collection_page_blobs_loaded(db: &DbHandle, collection: &DbCollecti
     const page_buf: &[byte] = page_raw[0: db.pager_session.info.meta.page_size as usize];
     try pager_read_page_with_file(&db.pager_session.db, &db.pager_session.info, page_id, page_buf);
     try db_collection_load_page_range(collection, page_id, page_offset, page_buf, true);
+}
+
+fn db_collection_try_patch_tombstone_page_from_disk(db: &DbHandle, collection: &DbCollection, page_offset: u32, page_buf: &[byte], patched_out: &bool) !void {
+    if patched_out != null {
+        patched_out[0] = false;
+    }
+    if db == null || collection == null || page_buf.ptr == null || patched_out == null {
+        return error.DbHandleInvalid;
+    }
+    const rows_per_page: u16 = db_collection_rows_per_page(collection);
+    const first_row: u32 = db_collection_first_row_for_page_offset(collection, page_offset);
+    var expected_slot_count: u16 = rows_per_page;
+    if first_row >= collection.row_count {
+        expected_slot_count = 0u16;
+    } else {
+        const remaining_rows: u32 = collection.row_count - first_row;
+        if remaining_rows < rows_per_page as u32 {
+            expected_slot_count = (remaining_rows as! u16) catch {
+                return error.DbRowFull;
+            };
+        }
+    }
+    var scan_row_idx: u32 = first_row;
+    const end_row: u32 = first_row + (expected_slot_count as u32);
+    while scan_row_idx < end_row {
+        const row: &DbStoredRow = &collection.rows[scan_row_idx as usize];
+        if row.present && row.blob_loaded {
+            return;
+        }
+        scan_row_idx = scan_row_idx + 1u32;
+    }
+    const page_id: u32 = db_collection_data_page_id(collection) + page_offset;
+    if page_id < 2u32 || page_id >= db.pager_session.info.meta.page_count {
+        return;
+    }
+    try pager_read_page_with_file(&db.pager_session.db, &db.pager_session.info, page_id, page_buf);
+    const header: &PageHeader = page_header_from_buf(page_buf);
+    if header == null || header.page_type != PageType.DATA {
+        return error.DbPageCorrupt;
+    }
+    const slot_count: u16 = slotted_page_slot_count(page_buf);
+    if slot_count != expected_slot_count {
+        return;
+    }
+    var slot_idx: u16 = 0u16;
+    while slot_idx < slot_count {
+        const row_idx: u32 = first_row + (slot_idx as u32);
+        const row: &DbStoredRow = &collection.rows[row_idx as usize];
+        if !row.present ||
+            row.record_ptr.page_id != page_id ||
+            row.record_ptr.slot_id != slot_idx {
+            return;
+        }
+        const cell: SlottedPageCellView = slotted_page_cell_view(page_buf, slot_idx) catch {
+            return error.DbPageCorrupt;
+        };
+        if !slot_is_used(cell.flags) ||
+            cell.len < RECORD_CELL_HEADER_SIZE {
+            return error.DbPageCorrupt;
+        }
+        const cell_doc_len_u32: u32 = db_load_u32_le(cell.ptr[0: cell.len], RECORD_CELL_DOC_LEN_OFF);
+        const cell_doc_len: usize = (cell_doc_len_u32 as! usize) catch {
+            return error.DbPageCorrupt;
+        };
+        if cell.len != RECORD_CELL_HEADER_SIZE + cell_doc_len ||
+            db_load_u64_le(cell.ptr[0: cell.len], RECORD_CELL_DOC_ID_OFF) != row.doc_id ||
+            cell_doc_len != row.doc_len as usize {
+            return;
+        }
+        if slot_is_tombstone(cell.flags) != row.tombstone {
+            try slotted_page_set_slot_tombstone(page_buf, slot_idx, row.tombstone);
+        }
+        slot_idx = slot_idx + 1u16;
+    }
+    patched_out[0] = true;
 }
 
 fn db_materialize_matched_rows_for_cursor(db: &DbHandle, view_slot: u16, collection_slot: u16, match_rows: &[u32], match_count: u16) !void {
@@ -2438,9 +2593,10 @@ fn db_reload_from_disk(db: &DbHandle) !void {
         current.collections[slot].collection_id = entry.meta.collection_id;
         current.collections[slot].layout_flags = entry.meta.flags;
         current.collections[slot].rows_per_page = entry.meta.rsv;
-        current.collections[slot].next_doc_id = entry.meta.next_doc_id;
+        db_collection_meta_unpack_next_doc_id(entry.meta.next_doc_id, &current.collections[slot].next_doc_id, &current.collections[slot].deleted_through_doc_id);
         current.collections[slot].primary_root_page = entry.meta.primary_root_page;
         current.collections[slot].secondary_index_count = entry.meta.secondary_index_count;
+        current.collections[slot].prefix_delete_only = true;
         try db_copy_name(entry.name, current.collections[slot].name[0: 64], &current.collections[slot].name_len);
         var collection_index_idx: u32 = 0u32;
         while collection_index_idx < entry.meta.secondary_index_count {
@@ -2540,11 +2696,13 @@ fn db_check_collection_at_stem(stem: &const byte, page_size: u32, entry: &Catalo
         layout_flags: entry.meta.flags,
         rows_per_page: entry.meta.rsv,
         max_doc_len_seen: 0u16,
-        next_doc_id: entry.meta.next_doc_id,
+        next_doc_id: 0u64,
+        deleted_through_doc_id: 0u64,
         primary_root_page: entry.meta.primary_root_page,
         primary_index_ready: false,
         rows_loaded: false,
         may_have_tombstones: false,
+        prefix_delete_only: true,
         secondary_index_count: 0u16,
         secondary_indexes: [],
         blob_chunk_count: 0u16,
@@ -2552,12 +2710,16 @@ fn db_check_collection_at_stem(stem: &const byte, page_size: u32, entry: &Catalo
         row_count: 0u32,
         row_capacity: 0u32,
         dirty_page_word_capacity: 0u32,
+        tombstone_patch_pages_valid: false,
+        tombstone_patch_page_start: 0u32,
+        tombstone_patch_page_end_exclusive: 0u32,
         dirty_page_bits: null,
         rows: null,
     };
+    db_collection_meta_unpack_next_doc_id(entry.meta.next_doc_id, &collection.next_doc_id, &collection.deleted_through_doc_id);
     try db_copy_name(entry.name, collection.name[0: 64], &collection.name_len);
-    if entry.meta.next_doc_id > 1u64 {
-        const expected_rows_u64: u64 = entry.meta.next_doc_id - 1u64;
+    if collection.next_doc_id > 1u64 {
+        const expected_rows_u64: u64 = collection.next_doc_id - 1u64;
         if expected_rows_u64 > DB_MAX_ROWS_PER_COLLECTION as u64 {
             return error.DbRowFull;
         }
@@ -2576,7 +2738,7 @@ fn db_check_collection_at_stem(stem: &const byte, page_size: u32, entry: &Catalo
             page_offset = page_offset + 1u32;
         }
     }
-    try db_check_validate_collection_rows(&collection, entry.meta.next_doc_id, row_count_out);
+    try db_check_validate_collection_rows(&collection, collection.next_doc_id, row_count_out);
 }
 
 fn db_zero_commit_view() CommitView {
@@ -4288,6 +4450,7 @@ fn db_txn_apply_delete_row_in_collection(collection: &DbCollection, row_slot: u3
     if !row.present || row.tombstone {
         return false;
     }
+    collection.prefix_delete_only = false;
     row.tombstone = true;
     collection.may_have_tombstones = true;
     collection.primary_index_ready = false;
@@ -4387,15 +4550,36 @@ fn db_txn_try_apply_doc_id_range_delete(txn: &Txn, plan: &QueryPlan, collection_
         return;
     }
     matched_out[0] = true;
+    if collection.prefix_delete_only && start_slot < end_slot_exclusive {
+        const start_doc_id: u64 = start_slot as u64 + 1u64;
+        const end_doc_id_exclusive: u64 = end_slot_exclusive as u64 + 1u64;
+        if start_doc_id == collection.deleted_through_doc_id + 1u64 {
+            collection.deleted_through_doc_id = end_doc_id_exclusive - 1u64;
+            collection.may_have_tombstones = true;
+            collection.primary_index_ready = false;
+            var prefix_row_slot: u32 = start_slot;
+            while prefix_row_slot < end_slot_exclusive {
+                const row: &DbStoredRow = &collection.rows[prefix_row_slot as usize];
+                if row.present && !row.tombstone {
+                    row.tombstone = true;
+                    changed_out[0] = changed_out[0] + 1u32;
+                }
+                prefix_row_slot = prefix_row_slot + 1u32;
+            }
+            return;
+        }
+    }
+    collection.prefix_delete_only = false;
     collection.may_have_tombstones = true;
     collection.primary_index_ready = false;
     var last_dirty_page: u32 = 4294967295u32;
     var row_slot: u32 = start_slot;
+    const rows_per_page_u32: u32 = db_collection_rows_per_page(collection) as u32;
     while row_slot < end_slot_exclusive {
         const row: &DbStoredRow = &collection.rows[row_slot as usize];
         if row.present && !row.tombstone {
             row.tombstone = true;
-            const page_offset: u32 = row_slot / (db_collection_rows_per_page(collection) as u32);
+            const page_offset: u32 = row_slot / rows_per_page_u32;
             if page_offset != last_dirty_page {
                 try db_collection_mark_page_dirty(collection, page_offset);
                 last_dirty_page = page_offset;
@@ -4403,6 +4587,11 @@ fn db_txn_try_apply_doc_id_range_delete(txn: &Txn, plan: &QueryPlan, collection_
             changed_out[0] = changed_out[0] + 1u32;
         }
         row_slot = row_slot + 1u32;
+    }
+    if changed_out[0] > 0u32 && rows_per_page_u32 != 0u32 {
+        const start_page: u32 = start_slot / rows_per_page_u32;
+        const end_page_exclusive: u32 = ((end_slot_exclusive - 1u32) / rows_per_page_u32) + 1u32;
+        db_collection_extend_tombstone_patch_pages(collection, start_page, end_page_exclusive);
     }
 }
 
@@ -4760,7 +4949,8 @@ fn db_txn_stage_insert(txn: &Txn, collection_name: &[const byte], json_text: &[c
         var scan_slot: usize = 0usize;
         while scan_slot < state.collections[collection_idx].row_count as usize {
             if state.collections[collection_idx].rows[scan_slot].present &&
-                state.collections[collection_idx].rows[scan_slot].tombstone {
+                state.collections[collection_idx].rows[scan_slot].tombstone &&
+                state.collections[collection_idx].rows[scan_slot].doc_id > state.collections[collection_idx].deleted_through_doc_id {
                 row_slot = scan_slot as u32;
                 break;
             }
@@ -4791,6 +4981,7 @@ fn db_txn_stage_insert(txn: &Txn, collection_name: &[const byte], json_text: &[c
         state.collections[collection_idx].row_count = state.collections[collection_idx].row_count + 1u32;
     } else {
         state.collections[collection_idx].may_have_tombstones = true;
+        state.collections[collection_idx].prefix_delete_only = false;
     }
     if db_collection_update_max_doc_len(&state.collections[collection_idx], row.doc_len) {
         try db_collection_refresh_packed_layout(&state.collections[collection_idx], db_effective_page_size(txn.db));
@@ -4832,7 +5023,7 @@ fn db_catalog_scratch_from_view(state: &CommitViewState, out: &[CatalogScratchCo
             collection_id: collection.collection_id,
             name_len: collection.name_len,
             flags: collection.layout_flags,
-            next_doc_id: collection.next_doc_id,
+            next_doc_id: try db_collection_meta_pack_next_doc_id(collection.next_doc_id, collection.deleted_through_doc_id),
             primary_root_page: collection.primary_root_page,
             secondary_index_count: collection.secondary_index_count,
             rsv: collection.rows_per_page,
@@ -4915,6 +5106,7 @@ fn db_collection_catalog_equal(left: &DbCollection, right: &DbCollection) bool {
         left.layout_flags != right.layout_flags ||
         left.rows_per_page != right.rows_per_page ||
         left.next_doc_id != right.next_doc_id ||
+        left.deleted_through_doc_id != right.deleted_through_doc_id ||
         left.primary_root_page != right.primary_root_page ||
         left.secondary_index_count != right.secondary_index_count {
         return false;
@@ -5022,12 +5214,18 @@ fn db_txn_commit_persist(txn: &Txn) !WalCommit {
                         page_offset = page_offset + 1u32;
                         continue;
                     }
-                    try db_ensure_collection_page_blobs_loaded(txn.db, collection, page_offset);
-                    const first_row: u32 = db_collection_first_row_for_page_offset(collection, page_offset);
                     const page_id: u32 = base_page_id + page_offset;
                     var raw_page: [byte: 8192] = [];
                     const page_buf: &[byte] = raw_page[0: info.meta.page_size as usize];
-                    try db_collection_encode_page_range(collection, info.meta.page_size, txn.db.now_ms, page_id, first_row, page_buf);
+                    var patched_from_disk: bool = false;
+                    if db_collection_page_in_tombstone_patch_pages(collection, page_offset) {
+                        try db_collection_try_patch_tombstone_page_from_disk(txn.db, collection, page_offset, page_buf, &patched_from_disk);
+                    }
+                    if !patched_from_disk {
+                        try db_ensure_collection_page_blobs_loaded(txn.db, collection, page_offset);
+                        const first_row: u32 = db_collection_first_row_for_page_offset(collection, page_offset);
+                        try db_collection_encode_page_range(collection, info.meta.page_size, txn.db.now_ms, page_id, first_row, page_buf);
+                    }
                     const header: &PageHeader = page_header_from_buf(page_buf);
                     if header == null {
                         return error.DbCollectionPageMissing;
@@ -5518,8 +5716,11 @@ export fn db_check_at_stem(stem: &const byte) !DbCheckReport {
     while collection_idx < view.root.collection_count {
         const entry: CatalogCollectionView = try catalog_collection_at(&view, collection_idx);
         try db_check_collection_at_stem(stem, info.meta.page_size, &entry, &report.row_count);
-        if entry.meta.next_doc_id > 1u64 {
-            const expected_rows: u32 = (entry.meta.next_doc_id - 1u64) as u32;
+        var decoded_next_doc_id: u64 = 0u64;
+        var decoded_deleted_through_doc_id: u64 = 0u64;
+        db_collection_meta_unpack_next_doc_id(entry.meta.next_doc_id, &decoded_next_doc_id, &decoded_deleted_through_doc_id);
+        if decoded_next_doc_id > 1u64 {
+            const expected_rows: u32 = (decoded_next_doc_id - 1u64) as u32;
             var collection: DbCollection = DbCollection{};
             collection.layout_flags = entry.meta.flags;
             collection.rows_per_page = entry.meta.rsv;
@@ -5687,8 +5888,9 @@ export fn db_test_create_collection(db: &DbHandle, name: &[const byte]) !void {
     state.collections[slot].collection_id = created.collection_id;
     state.collections[slot].layout_flags = created.flags;
     state.collections[slot].rows_per_page = created.rsv;
-    state.collections[slot].next_doc_id = created.next_doc_id;
+    db_collection_meta_unpack_next_doc_id(created.next_doc_id, &state.collections[slot].next_doc_id, &state.collections[slot].deleted_through_doc_id);
     state.collections[slot].primary_root_page = created.primary_root_page;
+    state.collections[slot].prefix_delete_only = true;
     try db_copy_name(name, state.collections[slot].name[0: 64], &state.collections[slot].name_len);
     try primary_btree_reset(&db.primary_indexes[slot], db_effective_page_size(db));
     state.collections[slot].primary_index_ready = false;

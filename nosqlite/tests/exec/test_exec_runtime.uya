@@ -877,6 +877,30 @@ fn run_update_delete_cover_more_than_64_rows() i32 {
     }) != 81u64 {
         return 245;
     }
+    var reopened_delete_db: DbHandle = DbHandle{};
+    _ = db_test_open_at_stem(&reopened_delete_db, TEST_STEM_LARGE_DELETE) catch {
+        return 500;
+    };
+    const reopened_deleted_row: QueryResult = db_query(&reopened_delete_db, "SELECT _id FROM users WHERE _id = 80 LIMIT 1;") catch {
+        return 501;
+    };
+    if reopened_deleted_row.row_count != 0u32 {
+        return 502;
+    }
+    const reopened_survivor: QueryResult = db_query(&reopened_delete_db, "SELECT _id FROM users WHERE _id = 81 LIMIT 1;") catch {
+        return 503;
+    };
+    if reopened_survivor.row_count != 1u32 {
+        return 504;
+    }
+    const reopened_first_row: &OwnedRow = query_result_row(&reopened_survivor, 0u32) catch {
+        return 505;
+    };
+    if (owned_row_cell_u64(reopened_first_row, 0u16) catch {
+        return 506;
+    }) != 81u64 {
+        return 507;
+    }
 
     var reused_update_db: DbHandle = DbHandle{};
     _ = prepare_db(&reused_update_db) catch {

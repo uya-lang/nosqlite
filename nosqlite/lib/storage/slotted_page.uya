@@ -196,3 +196,25 @@ export fn slotted_page_insert_copy_with_flags(page_buf: &[byte], cell: &[byte], 
 export fn slotted_page_insert_copy(page_buf: &[byte], cell: &[byte]) !u16 {
     return try slotted_page_insert_copy_with_flags(page_buf, cell, SLOT_FLAG_NONE);
 }
+
+export fn slotted_page_set_slot_tombstone(page_buf: &[byte], slot_idx: u16, tombstone: bool) !void {
+    const header: &PageHeader = slotted_page_header_ptr(page_buf);
+    if header == null || !page_bounds_valid(header, page_buf.len as u32) {
+        return error.SlottedPageInvalidHeader;
+    }
+    const count: u16 = slotted_page_slot_count(page_buf);
+    if slot_idx >= count {
+        return error.SlottedPageInvalidSlot;
+    }
+    const slotp: &Slot = slotted_page_slot_ptr(page_buf, slot_idx);
+    if slotp == null || !slot_is_used(slotp.flags) {
+        return error.SlottedPageInvalidSlot;
+    }
+    if tombstone {
+        slotp.flags = slotp.flags | SLOT_FLAG_TOMBSTONE;
+        return;
+    }
+    if slot_is_tombstone(slotp.flags) {
+        slotp.flags = slotp.flags - SLOT_FLAG_TOMBSTONE;
+    }
+}

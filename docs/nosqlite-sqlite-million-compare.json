@@ -11,35 +11,35 @@
     "batch_rows": 48000,
     "load": {
       "rows": 1000000,
-      "load_us": 581271,
-      "rows_per_s": 1720367.9522976375,
+      "load_us": 662011,
+      "rows_per_s": 1510548.918371447,
       "notes": "NoSQLite million-row benchmark; staged txn batches; direct JSON insert helper; durable commit timed"
     },
     "limit_query": {
       "samples": 100,
-      "p50_ns": 658,
-      "p95_ns": 678,
-      "p99_ns": 747,
-      "p50_us": 0.658,
-      "p95_us": 0.678,
-      "p99_us": 0.747,
-      "qps": 1502968.362515969,
+      "p50_ns": 753,
+      "p95_ns": 778,
+      "p99_ns": 835,
+      "p50_us": 0.753,
+      "p95_us": 0.778,
+      "p99_us": 0.835,
+      "qps": 1314060.4467805517,
       "notes": "NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64; full fetch timed"
     },
     "bulk_update": {
       "rows": 1000000,
-      "op_us": 350201,
-      "rows_per_s": 2855502.982572865,
+      "op_us": 454247,
+      "rows_per_s": 2201445.4690950075,
       "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end"
     },
     "bulk_delete": {
       "rows": 1000000,
-      "op_us": 298767,
-      "rows_per_s": 3347089.872710172,
+      "op_us": 198813,
+      "rows_per_s": 5029852.172644646,
       "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; DELETE FROM users WHERE _id >= start AND _id < end"
     },
     "notes": "NoSQLite million-row benchmark",
-    "peak_memory_kib": 515212
+    "peak_memory_kib": 515088
   },
   "sqlite": {
     "engine": "sqlite",
@@ -47,34 +47,34 @@
     "batch_rows": 48000,
     "load": {
       "rows": 1000000,
-      "load_us": 1421614,
-      "rows_per_s": 703425.8244502376,
+      "load_us": 1447264,
+      "rows_per_s": 690958.9404559223,
       "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; full fetch timed"
     },
     "limit_query": {
       "samples": 100,
-      "p50_ns": 13121,
-      "p95_ns": 13824,
-      "p99_ns": 16174,
-      "p50_us": 13.121,
-      "p95_us": 13.824,
-      "p99_us": 16.174,
-      "qps": 75468.2806816295,
+      "p50_ns": 13102,
+      "p95_ns": 13727,
+      "p99_ns": 15971,
+      "p50_us": 13.102,
+      "p95_us": 13.727,
+      "p99_us": 15.971,
+      "qps": 75286.2382779327,
       "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64; full fetch timed"
     },
     "bulk_update": {
       "rows": 1000000,
-      "op_us": 772344,
-      "rows_per_s": 1294759.8479434033,
+      "op_us": 802375,
+      "rows_per_s": 1246300.0467362518,
       "notes": "SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?"
     },
     "bulk_delete": {
       "rows": 1000000,
-      "op_us": 148914,
-      "rows_per_s": 6715285.332473777,
+      "op_us": 163825,
+      "rows_per_s": 6104074.46970853,
       "notes": "SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; DELETE FROM users WHERE id >= ? AND id < ?"
     },
     "notes": "SQLite JSON1 million-row benchmark",
-    "peak_memory_kib": 38224
+    "peak_memory_kib": 38192
   }
 }
