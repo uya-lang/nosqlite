@@ -2,7 +2,7 @@
 
 日期：2026-05-21
 
-本报告聚焦百万条记录量级下的装载与查询性能对比。
+本报告聚焦百万条记录量级下的装载、查询、批量更新与批量删除性能对比。
 
 ## 运行口径
 
@@ -14,25 +14,29 @@
 - SQLite JSON1：`available`
 - CPU：`Intel(R) Core(TM) i7-14700`
 - Kernel：`6.12.65-amd64-desktop-rolling`
-- 数据文档：`{"n": <id>, "bucket": <id % 100>, "active": <bool>}`
+- 数据文档：`{"n": <id>, "bucket": <id % 100>, "age": <18 + (id % 41)>, "active": <bool>}`
 - 查询口径：`SELECT _id FROM users LIMIT 64` / `SELECT id FROM users LIMIT 64`
+- 更新口径：fresh preload 后按 `batch_rows` 分段执行 durable range update；NoSQLite 执行 `UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end`，SQLite 执行 `UPDATE users SET doc = json_set(doc, '$.age', 30) WHERE id >= start AND id < end`。
+- 删除口径：fresh preload 后按 `batch_rows` 分段执行 durable range delete；NoSQLite 执行 `DELETE FROM users WHERE _id >= start AND _id < end`，SQLite 执行 `DELETE FROM users WHERE id >= start AND id < end`。
 - limit_query 计时范围：从开始执行查询到完整取回 64 行结果，两侧统一口径。
-- NoSQLite 这里先比较“批量写入后同进程 warm query”，不包含 recovery/open 延迟。
+- 更新/删除各自使用独立 fresh preload 数据集，预装载不计入该 case 计时，避免 load/query cache 污染后续结果。
 
 ## 摘要
 
 | case | NoSQLite | SQLite | 对比 |
 | --- | ---: | ---: | --- |
-| bulk_load rows/s | 1894886.84 | 721138.07 | NoSQLite faster x2.63 |
-| limit_query p50 us | 0.61 | 13.1 | NoSQLite faster x21.43 |
-| limit_query p95 us | 0.62 | 13.44 | NoSQLite faster x21.57 |
+| bulk_load rows/s | 1233620.60 | 669291.18 | NoSQLite faster x1.84 |
+| limit_query p50 us | 0.63 | 13.24 | NoSQLite faster x21.09 |
+| limit_query p95 us | 0.65 | 15.16 | NoSQLite faster x23.35 |
+| bulk_update rows/s | 40442.96 | 1121135.31 | SQLite faster x27.72 |
+| bulk_delete rows/s | 48437.43 | 4768853.66 | SQLite faster x98.45 |
 
 ## 原始指标
 
-| engine | load s | load rows/s | query p50 us | query p95 us | query qps | peak KiB | notes |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| nosqlite | 0.53 | 1894886.84 | 0.61 | 0.62 | 1620955.72 | 197516 | NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64; full fetch timed |
-| sqlite | 1.39 | 721138.07 | 13.1 | 13.44 | 75548.22 | 19700 | SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64; full fetch timed |
+| engine | load s | load rows/s | update s | update rows/s | delete s | delete rows/s | query p50 us | query p95 us | query qps | peak KiB | notes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| nosqlite | 0.81 | 1233620.60 | 24.73 | 40442.96 | 20.65 | 48437.43 | 0.63 | 0.65 | 1523345.27 | 1833784 | NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end; NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; DELETE FROM users WHERE _id >= start AND _id < end |
+| sqlite | 1.49 | 669291.18 | 0.89 | 1121135.31 | 0.21 | 4768853.66 | 13.24 | 15.16 | 73132.83 | 38148 | SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?; SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; DELETE FROM users WHERE id >= ? AND id < ? |
 
 ## 复现命令
 

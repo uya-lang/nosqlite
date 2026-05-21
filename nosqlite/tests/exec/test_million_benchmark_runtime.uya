@@ -19,12 +19,15 @@ use lib.api.db.db_test_create_at_stem;
 use lib.api.db.db_test_create_collection;
 use lib.api.db.db_test_txn_insert_json;
 use lib.api.db.txn_begin;
+use lib.api.db.txn_exec;
 use lib.api.db.txn_commit;
 use lib.api.db.txn_rollback;
 use lib.storage.pager.catalog_cleanup_stem;
 
 const TEST_STEM_BENCH: *const byte = "/tmp/nosqlite_million_bench" as *const byte;
 const JSON_BUF_CAP: usize = 128;
+const SQL_BUF_CAP: usize = 160;
+const BULK_UPDATE_AGE: u64 = 30u64;
 
 error BenchBufferTooSmall;
 error BenchUnexpectedResult;
@@ -78,6 +81,7 @@ fn build_json(doc_id: u64, out: &[byte]) !usize {
         return error.BenchBufferTooSmall;
     }
     const bucket: u64 = doc_id % 100u64;
+    const age: u64 = 18u64 + (doc_id % 41u64);
     var active: &const byte = "false";
     if doc_id % 2u64 == 0u64 {
         active = "true";
@@ -85,9 +89,10 @@ fn build_json(doc_id: u64, out: &[byte]) !usize {
     const len_i32: i32 = snprintf(
         out.ptr,
         out.len,
-        "{\"n\":%lu,\"bucket\":%lu,\"active\":%s}\0" as &const byte,
+        "{\"n\":%lu,\"bucket\":%lu,\"age\":%lu,\"active\":%s}\0" as &const byte,
         doc_id,
         bucket,
+        age,
         active,
     );
     if len_i32 <= 0 {
@@ -100,6 +105,112 @@ fn build_json(doc_id: u64, out: &[byte]) !usize {
         return error.BenchBufferTooSmall;
     }
     return len;
+}
+
+fn build_bulk_update_sql(start_id: u64, end_id_exclusive: u64, out: &[byte]) !usize {
+    if out.ptr == null || out.len < SQL_BUF_CAP {
+        return error.BenchBufferTooSmall;
+    }
+    const len_i32: i32 = snprintf(
+        out.ptr,
+        out.len,
+        "UPDATE users SET $.age = %lu WHERE _id >= %lu AND _id < %lu;\0" as &const byte,
+        BULK_UPDATE_AGE,
+        start_id,
+        end_id_exclusive,
+    );
+    if len_i32 <= 0 {
+        return error.BenchBufferTooSmall;
+    }
+    const len: usize = (len_i32 as! usize) catch {
+        return error.BenchBufferTooSmall;
+    };
+    if len + 1usize > out.len {
+        return error.BenchBufferTooSmall;
+    }
+    return len;
+}
+
+fn build_bulk_delete_sql(start_id: u64, end_id_exclusive: u64, out: &[byte]) !usize {
+    if out.ptr == null || out.len < SQL_BUF_CAP {
+        return error.BenchBufferTooSmall;
+    }
+    const len_i32: i32 = snprintf(
+        out.ptr,
+        out.len,
+        "DELETE FROM users WHERE _id >= %lu AND _id < %lu;\0" as &const byte,
+        start_id,
+        end_id_exclusive,
+    );
+    if len_i32 <= 0 {
+        return error.BenchBufferTooSmall;
+    }
+    const len: usize = (len_i32 as! usize) catch {
+        return error.BenchBufferTooSmall;
+    };
+    if len + 1usize > out.len {
+        return error.BenchBufferTooSmall;
+    }
+    return len;
+}
+
+fn build_update_verify_sql(expect_updated: bool, out: &[byte]) !usize {
+    if out.ptr == null || out.len < SQL_BUF_CAP {
+        return error.BenchBufferTooSmall;
+    }
+    var len_i32: i32 = 0;
+    if expect_updated {
+        len_i32 = snprintf(
+            out.ptr,
+            out.len,
+            "SELECT _id FROM users WHERE $.age = %lu LIMIT 1;\0" as &const byte,
+            BULK_UPDATE_AGE,
+        );
+    } else {
+        len_i32 = snprintf(
+            out.ptr,
+            out.len,
+            "SELECT _id FROM users WHERE NOT $.age = %lu LIMIT 1;\0" as &const byte,
+            BULK_UPDATE_AGE,
+        );
+    }
+    if len_i32 <= 0 {
+        return error.BenchBufferTooSmall;
+    }
+    const len: usize = (len_i32 as! usize) catch {
+        return error.BenchBufferTooSmall;
+    };
+    if len + 1usize > out.len {
+        return error.BenchBufferTooSmall;
+    }
+    return len;
+}
+
+fn build_id_lookup_sql(doc_id: u64, out: &[byte]) !usize {
+    if out.ptr == null || out.len < SQL_BUF_CAP {
+        return error.BenchBufferTooSmall;
+    }
+    const len_i32: i32 = snprintf(
+        out.ptr,
+        out.len,
+        "SELECT _id FROM users WHERE _id = %lu LIMIT 1;\0" as &const byte,
+        doc_id,
+    );
+    if len_i32 <= 0 {
+        return error.BenchBufferTooSmall;
+    }
+    const len: usize = (len_i32 as! usize) catch {
+        return error.BenchBufferTooSmall;
+    };
+    if len + 1usize > out.len {
+        return error.BenchBufferTooSmall;
+    }
+    return len;
+}
+
+fn create_users_db(db: &DbHandle) !void {
+    try db_test_create_at_stem(db, TEST_STEM_BENCH);
+    try db_test_create_collection(db, "users");
 }
 
 fn run_load(db: &DbHandle, docs: u64, batch_rows: u64, emit_progress: bool) !u64 {
@@ -161,6 +272,129 @@ fn run_load(db: &DbHandle, docs: u64, batch_rows: u64, emit_progress: bool) !u64
     return elapsed_bench_usec(start_ns);
 }
 
+fn run_bulk_update(db: &DbHandle, docs: u64, batch_rows: u64, emit_progress: bool) !u64 {
+    var updated_total: u64 = 0u64;
+    const start_ns: u64 = now_nsec();
+    while updated_total < docs {
+        var txn: Txn = try txn_begin(db);
+        var txn_ok: bool = false;
+        defer {
+            if !txn_ok {
+                _ = txn_rollback(&txn) catch {};
+            }
+        }
+        const remaining: u64 = docs - updated_total;
+        var current_batch: u64 = batch_rows;
+        if remaining < current_batch {
+            current_batch = remaining;
+        }
+        const batch_start: u64 = updated_total + 1u64;
+        const batch_end_exclusive: u64 = batch_start + current_batch;
+        var sql_buf: [byte: SQL_BUF_CAP] = [];
+        const sql_len: usize = try build_bulk_update_sql(batch_start, batch_end_exclusive, sql_buf[0: SQL_BUF_CAP]);
+        const exec_u: !void = txn_exec(&txn, sql_buf[0: sql_len]);
+        if exec_u.error_id != 0u32 {
+            printf(
+                "BENCH_ERROR_DETAIL stage=bulk_update batch_start=%lu batch_end=%lu error_id=%u\n" as *byte,
+                batch_start,
+                batch_end_exclusive,
+                exec_u.error_id,
+            );
+            return error.BenchUnexpectedResult;
+        }
+        const commit_u: !void = txn_commit(&txn);
+        if commit_u.error_id != 0u32 {
+            printf(
+                "BENCH_ERROR_DETAIL stage=bulk_update_commit batch_start=%lu batch_end=%lu error_id=%u\n" as *byte,
+                batch_start,
+                batch_end_exclusive,
+                commit_u.error_id,
+            );
+            return error.BenchUnexpectedResult;
+        }
+        txn_ok = true;
+        updated_total = updated_total + current_batch;
+        if emit_progress {
+            printf("PROGRESS updated=%lu\n" as *byte, updated_total);
+        }
+    }
+    return elapsed_bench_usec(start_ns);
+}
+
+fn run_bulk_delete(db: &DbHandle, docs: u64, batch_rows: u64, emit_progress: bool) !u64 {
+    var deleted_total: u64 = 0u64;
+    const start_ns: u64 = now_nsec();
+    while deleted_total < docs {
+        var txn: Txn = try txn_begin(db);
+        var txn_ok: bool = false;
+        defer {
+            if !txn_ok {
+                _ = txn_rollback(&txn) catch {};
+            }
+        }
+        const remaining: u64 = docs - deleted_total;
+        var current_batch: u64 = batch_rows;
+        if remaining < current_batch {
+            current_batch = remaining;
+        }
+        const batch_start: u64 = deleted_total + 1u64;
+        const batch_end_exclusive: u64 = batch_start + current_batch;
+        var sql_buf: [byte: SQL_BUF_CAP] = [];
+        const sql_len: usize = try build_bulk_delete_sql(batch_start, batch_end_exclusive, sql_buf[0: SQL_BUF_CAP]);
+        const exec_u: !void = txn_exec(&txn, sql_buf[0: sql_len]);
+        if exec_u.error_id != 0u32 {
+            printf(
+                "BENCH_ERROR_DETAIL stage=bulk_delete batch_start=%lu batch_end=%lu error_id=%u\n" as *byte,
+                batch_start,
+                batch_end_exclusive,
+                exec_u.error_id,
+            );
+            return error.BenchUnexpectedResult;
+        }
+        const commit_u: !void = txn_commit(&txn);
+        if commit_u.error_id != 0u32 {
+            printf(
+                "BENCH_ERROR_DETAIL stage=bulk_delete_commit batch_start=%lu batch_end=%lu error_id=%u\n" as *byte,
+                batch_start,
+                batch_end_exclusive,
+                commit_u.error_id,
+            );
+            return error.BenchUnexpectedResult;
+        }
+        txn_ok = true;
+        deleted_total = deleted_total + current_batch;
+        if emit_progress {
+            printf("PROGRESS deleted=%lu\n" as *byte, deleted_total);
+        }
+    }
+    return elapsed_bench_usec(start_ns);
+}
+
+fn query_returns_any(db: &DbHandle, sql: &[const byte]) !bool {
+    var cursor: QueryCursor = try db_query_cursor(db, sql);
+    return try cursor_next(&cursor);
+}
+
+fn verify_bulk_update(db: &DbHandle) !void {
+    var sql_buf: [byte: SQL_BUF_CAP] = [];
+    const updated_sql_len: usize = try build_update_verify_sql(true, sql_buf[0: SQL_BUF_CAP]);
+    if !(try query_returns_any(db, sql_buf[0: updated_sql_len])) {
+        return error.BenchUnexpectedResult;
+    }
+    const stale_sql_len: usize = try build_update_verify_sql(false, sql_buf[0: SQL_BUF_CAP]);
+    if try query_returns_any(db, sql_buf[0: stale_sql_len]) {
+        return error.BenchUnexpectedResult;
+    }
+}
+
+fn verify_bulk_delete(db: &DbHandle) !void {
+    var sql_buf: [byte: SQL_BUF_CAP] = [];
+    const sql_len: usize = try build_id_lookup_sql(1u64, sql_buf[0: SQL_BUF_CAP]);
+    if try query_returns_any(db, sql_buf[0: sql_len]) {
+        return error.BenchUnexpectedResult;
+    }
+}
+
 
 fn main() i32 {
     set_process_stack_limit_bytes(256u64 * 1024u64 * 1024u64);
@@ -182,13 +416,9 @@ fn main() i32 {
     );
 
     var db: DbHandle = DbHandle{};
-    _ = db_test_create_at_stem(&db, TEST_STEM_BENCH) catch {
+    _ = create_users_db(&db) catch {
         printf("BENCH_ERROR stage=create_db error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
         return 1;
-    };
-    _ = db_test_create_collection(&db, "users") catch {
-        printf("BENCH_ERROR stage=create_collection error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
-        return 2;
     };
 
     const load_u: !u64 = run_load(&db, docs, batch_rows, emit_progress);
@@ -204,6 +434,48 @@ fn main() i32 {
         printf("BENCH_ERROR stage=limit_query error_id=%u\n" as *byte, lookup_u.error_id);
         return 5;
     }
+
+    cleanup();
+    _ = create_users_db(&db) catch {
+        printf("BENCH_ERROR stage=create_update_db error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
+        return 6;
+    };
+    const update_prepare_u: !u64 = run_load(&db, docs, batch_rows, false);
+    if update_prepare_u.error_id != 0u32 {
+        printf("BENCH_ERROR stage=prepare_update error_id=%u\n" as *byte, update_prepare_u.error_id);
+        return 7;
+    }
+    const update_u: !u64 = run_bulk_update(&db, docs, batch_rows, emit_progress);
+    if update_u.error_id != 0u32 {
+        printf("BENCH_ERROR stage=bulk_update error_id=%u\n" as *byte, update_u.error_id);
+        return 8;
+    }
+    _ = verify_bulk_update(&db) catch {
+        printf("BENCH_ERROR stage=bulk_update_verify error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
+        return 9;
+    };
+    printf("RESULT case=bulk_update us=%lu rows=%lu\n" as *byte, update_u.value, docs);
+
+    cleanup();
+    _ = create_users_db(&db) catch {
+        printf("BENCH_ERROR stage=create_delete_db error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
+        return 10;
+    };
+    const delete_prepare_u: !u64 = run_load(&db, docs, batch_rows, false);
+    if delete_prepare_u.error_id != 0u32 {
+        printf("BENCH_ERROR stage=prepare_delete error_id=%u\n" as *byte, delete_prepare_u.error_id);
+        return 11;
+    }
+    const delete_u: !u64 = run_bulk_delete(&db, docs, batch_rows, emit_progress);
+    if delete_u.error_id != 0u32 {
+        printf("BENCH_ERROR stage=bulk_delete error_id=%u\n" as *byte, delete_u.error_id);
+        return 12;
+    }
+    _ = verify_bulk_delete(&db) catch {
+        printf("BENCH_ERROR stage=bulk_delete_verify error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
+        return 13;
+    };
+    printf("RESULT case=bulk_delete us=%lu rows=%lu\n" as *byte, delete_u.value, docs);
     return 0;
 }
 

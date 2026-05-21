@@ -47,6 +47,8 @@ use lib.api.result.owned_row_cell_text;
 const TEST_STEM_EXEC: *const byte = "/tmp/nosqlite_exec_phase8" as *const byte;
 const TEST_STEM_WRITE: *const byte = "/tmp/nosqlite_exec_phase10" as *const byte;
 const TEST_STEM_LAZY_LIMIT: *const byte = "/tmp/nosqlite_exec_phase10_lazy_limit" as *const byte;
+const TEST_STEM_LARGE_WRITE: *const byte = "/tmp/nosqlite_exec_phase10_large_write" as *const byte;
+const TEST_STEM_LARGE_DELETE: *const byte = "/tmp/nosqlite_exec_phase10_large_delete" as *const byte;
 
 var g_exec_result_deallocs: i32 = 0;
 
@@ -94,6 +96,15 @@ fn prepare_db(db: &DbHandle) !void {
 fn prepare_empty_users_db(db: &DbHandle, stem: &const byte) !void {
     try db_test_create_at_stem(db, stem);
     try db_test_create_collection(db, "users");
+}
+
+fn prepare_bulk_users_db(db: &DbHandle, stem: &const byte, row_count: u64) !void {
+    try prepare_empty_users_db(db, stem);
+    var i: u64 = 0u64;
+    while i < row_count {
+        _ = try db_test_insert_json(db, "users", "{\"name\":\"bulk\",\"age\":20,\"active\":true}");
+        i = i + 1u64;
+    }
 }
 
 fn prepare_multi_page_users_db(db: &DbHandle, stem: &const byte) !void {
@@ -792,6 +803,83 @@ fn run_limit_warmup_keeps_followup_scan_complete() i32 {
     return 0;
 }
 
+fn run_update_delete_cover_more_than_64_rows() i32 {
+    var update_db: DbHandle = DbHandle{};
+    _ = prepare_bulk_users_db(&update_db, TEST_STEM_LARGE_WRITE, 96u64) catch {
+        return 221;
+    };
+    _ = db_exec(&update_db, "UPDATE users SET $.active = FALSE WHERE _id <= 80;") catch {
+        return 222;
+    };
+    const row80_result: QueryResult = db_query(&update_db, "SELECT _id, $.active FROM users WHERE _id = 80 LIMIT 1;") catch {
+        return 223;
+    };
+    if row80_result.row_count != 1u32 {
+        return 224;
+    }
+    const row80: &OwnedRow = query_result_row(&row80_result, 0u32) catch {
+        return 225;
+    };
+    if (owned_row_cell_u64(row80, 0u16) catch {
+        return 226;
+    }) != 80u64 {
+        return 227;
+    }
+    if (owned_row_cell_bool(row80, 1u16) catch {
+        return 228;
+    }) {
+        return 229;
+    }
+    const row81_result: QueryResult = db_query(&update_db, "SELECT _id, $.active FROM users WHERE _id = 81 LIMIT 1;") catch {
+        return 230;
+    };
+    if row81_result.row_count != 1u32 {
+        return 231;
+    }
+    const row81: &OwnedRow = query_result_row(&row81_result, 0u32) catch {
+        return 232;
+    };
+    if (owned_row_cell_u64(row81, 0u16) catch {
+        return 233;
+    }) != 81u64 {
+        return 234;
+    }
+    if !(owned_row_cell_bool(row81, 1u16) catch {
+        return 235;
+    }) {
+        return 236;
+    }
+
+    var delete_db: DbHandle = DbHandle{};
+    _ = prepare_bulk_users_db(&delete_db, TEST_STEM_LARGE_DELETE, 96u64) catch {
+        return 237;
+    };
+    _ = db_exec(&delete_db, "DELETE FROM users WHERE _id <= 80;") catch {
+        return 238;
+    };
+    const deleted_row: QueryResult = db_query(&delete_db, "SELECT _id FROM users WHERE _id = 80 LIMIT 1;") catch {
+        return 239;
+    };
+    if deleted_row.row_count != 0u32 {
+        return 240;
+    }
+    const survivor: QueryResult = db_query(&delete_db, "SELECT _id FROM users WHERE _id = 81 LIMIT 1;") catch {
+        return 241;
+    };
+    if survivor.row_count != 1u32 {
+        return 242;
+    }
+    const first_row: &OwnedRow = query_result_row(&survivor, 0u32) catch {
+        return 243;
+    };
+    if (owned_row_cell_u64(first_row, 0u16) catch {
+        return 244;
+    }) != 81u64 {
+        return 245;
+    }
+    return 0;
+}
+
 fn main() i32 {
     set_process_stack_limit_bytes(64u64 * 1024u64 * 1024u64);
 
@@ -854,6 +942,10 @@ fn main() i32 {
     const n: i32 = run_limit_warmup_keeps_followup_scan_complete();
     if n != 0 {
         return n;
+    }
+    const o: i32 = run_update_delete_cover_more_than_64_rows();
+    if o != 0 {
+        return o;
     }
     return 0;
 }

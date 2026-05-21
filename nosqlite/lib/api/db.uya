@@ -2169,7 +2169,7 @@ fn db_rebuild_primary_index(db: &DbHandle, collection_slot: u16) !void {
         return error.DbCollectionNotFound;
     }
     try db_ensure_collection_rows_loaded_in_view(db, db.current_view_slot, collection_slot);
-    try primary_btree_reset(&db.primary_indexes[slot_idx], 256u32);
+    try primary_btree_reset(&db.primary_indexes[slot_idx], db_effective_page_size(db));
     const state: &CommitViewState = try db_current_view_state(db);
     const collection: &DbCollection = &state.collections[slot_idx];
     var row_idx: u32 = 0u32;
@@ -3836,6 +3836,327 @@ fn db_update_row_doc_at_path(collection: &DbCollection, row: &DbStoredRow, progr
     try db_collection_row_set_blob_copy(collection, row, encoded_buf[0: encoded_len]);
 }
 
+fn db_plan_primary_lookup_row_slot(db: &DbHandle, view_slot: u16, collection_slot: u16, lookup_doc_id: u64, found_out: &bool, row_slot_out: &u32) !void {
+    if db == null || found_out == null || row_slot_out == null {
+        return error.DbHandleInvalid;
+    }
+    const state: &CommitViewState = try db_commit_view_state(db, view_slot);
+    const collection_idx: usize = (collection_slot as! usize) catch {
+        return error.DbCollectionNotFound;
+    };
+    if collection_idx >= DB_MAX_COLLECTIONS {
+        return error.DbCollectionNotFound;
+    }
+    const collection: &DbCollection = &state.collections[collection_idx];
+    try db_ensure_collection_rows_loaded_in_view(db, view_slot, collection_slot);
+    if lookup_doc_id > 0u64 {
+        const direct_idx_u64: u64 = lookup_doc_id - 1u64;
+        if direct_idx_u64 <= 4294967295u64 {
+            const direct_idx: u32 = direct_idx_u64 as u32;
+            if direct_idx < collection.row_count && direct_idx < collection.row_capacity {
+                const direct_row: &DbStoredRow = &collection.rows[direct_idx as usize];
+                if direct_row.present && !direct_row.tombstone && direct_row.doc_id == lookup_doc_id {
+                    found_out[0] = true;
+                    row_slot_out[0] = direct_idx;
+                    return;
+                }
+            }
+        }
+    }
+    try db_ensure_primary_index(db, collection_slot);
+    const ptr: RecordPointer = primary_btree_lookup(&db.primary_indexes[collection_idx], lookup_doc_id) catch {
+        found_out[0] = false;
+        row_slot_out[0] = 0u32;
+        return;
+    };
+    const base_page_id: u32 = db_collection_data_page_id(collection);
+    var direct_idx: u32 = NOSQLITE_COLLECTION_MAX_ROWS_PER_COLLECTION;
+    if ptr.page_id >= base_page_id {
+        const page_offset: u32 = ptr.page_id - base_page_id;
+        direct_idx = db_collection_first_row_for_page_offset(collection, page_offset) + (ptr.slot_id as u32);
+    }
+    if direct_idx < collection.row_count && direct_idx < collection.row_capacity {
+        const row: &DbStoredRow = &collection.rows[direct_idx as usize];
+        if row.present &&
+            !row.tombstone &&
+            row.doc_id == lookup_doc_id &&
+            row.record_ptr.page_id == ptr.page_id &&
+            row.record_ptr.slot_id == ptr.slot_id {
+            found_out[0] = true;
+            row_slot_out[0] = direct_idx;
+            return;
+        }
+    }
+    var i: u32 = 0u32;
+    while i < collection.row_count {
+        const row: &DbStoredRow = &collection.rows[i as usize];
+        if row.present && !row.tombstone && row.record_ptr.page_id == ptr.page_id && row.record_ptr.slot_id == ptr.slot_id {
+            found_out[0] = true;
+            row_slot_out[0] = i;
+            return;
+        }
+        i = i + 1u32;
+    }
+    found_out[0] = false;
+    row_slot_out[0] = 0u32;
+}
+
+fn db_row_matches_filter_expr(db: &DbHandle, plan: &QueryPlan, view_slot: u16, collection_slot: u16, row_slot: u32, filter_expr: i16) !bool {
+    if filter_expr < 0i16 {
+        return true;
+    }
+    const rowref: RowRef = try db_collection_row_ref(db, view_slot, collection_slot, row_slot);
+    return try db_eval_predicate(db, &plan.bound, &rowref, filter_expr);
+}
+
+fn db_txn_apply_update_row(txn: &Txn, plan: &QueryPlan, collection_slot: u16, row_slot: u32, program: &PathProgram, value_expr: i16) !bool {
+    if txn == null || txn.db == null {
+        return error.DbHandleInvalid;
+    }
+    const rowref: RowRef = try db_collection_row_ref(txn.db, txn.view_slot, collection_slot, row_slot);
+    const new_value: ExecValue = try db_eval_value(txn.db, &plan.bound, &rowref, value_expr);
+    const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+    const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
+    const row: &DbStoredRow = try db_row_at(collection, row_slot);
+    if !row.present || row.tombstone {
+        return false;
+    }
+    try db_update_row_doc_at_path(collection, row, program, &new_value);
+    if db_collection_update_max_doc_len(collection, row.doc_len) {
+        try db_collection_refresh_packed_layout(collection, db_effective_page_size(txn.db));
+    }
+    try db_collection_mark_row_dirty(collection, row_slot);
+    return true;
+}
+
+fn db_txn_apply_delete_row(txn: &Txn, collection_slot: u16, row_slot: u32) !bool {
+    if txn == null || txn.db == null {
+        return error.DbHandleInvalid;
+    }
+    const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+    const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
+    const row: &DbStoredRow = try db_row_at(collection, row_slot);
+    if !row.present || row.tombstone {
+        return false;
+    }
+    row.tombstone = true;
+    collection.may_have_tombstones = true;
+    try db_collection_mark_row_dirty(collection, row_slot);
+    return true;
+}
+
+fn db_txn_stage_update_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_slot: u16, program: &PathProgram, value_expr: i16) !u32 {
+    const root: &PlanNode = try plan_node(plan, plan.root_node);
+    if root.kind == PlanNodeKind.SEQ_SCAN {
+        try db_ensure_collection_rows_loaded_in_view(txn.db, txn.view_slot, collection_slot);
+        const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+        const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
+        var changed: u32 = 0u32;
+        var row_slot: u32 = 0u32;
+        while row_slot < collection.row_count {
+            const row: &DbStoredRow = &collection.rows[row_slot as usize];
+            if row.present && !row.tombstone {
+                if try db_txn_apply_update_row(txn, plan, collection_slot, row_slot, program, value_expr) {
+                    changed = changed + 1u32;
+                }
+            }
+            row_slot = row_slot + 1u32;
+        }
+        return changed;
+    }
+    if root.kind == PlanNodeKind.PRIMARY_LOOKUP {
+        var found: bool = false;
+        var row_slot: u32 = 0u32;
+        try db_plan_primary_lookup_row_slot(txn.db, txn.view_slot, collection_slot, root.lookup_doc_id, &found, &row_slot);
+        if found && try db_txn_apply_update_row(txn, plan, collection_slot, row_slot, program, value_expr) {
+            return 1u32;
+        }
+        return 0u32;
+    }
+    if root.kind == PlanNodeKind.INDEX_SCAN {
+        try db_ensure_secondary_index(txn.db, collection_slot, root.index_slot);
+        const index_state: &DbSecondaryIndexState = try db_secondary_index_state(txn.db, collection_slot, root.index_slot);
+        if !index_state.present {
+            return 0u32;
+        }
+        var changed: u32 = 0u32;
+        var i: u32 = 0u32;
+        while i < index_state.row_count {
+            const row_slot: u32 = index_state.row_slots[i as usize];
+            if try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr) {
+                if try db_txn_apply_update_row(txn, plan, collection_slot, row_slot, program, value_expr) {
+                    changed = changed + 1u32;
+                }
+            }
+            i = i + 1u32;
+        }
+        return changed;
+    }
+    if root.kind == PlanNodeKind.FILTER {
+        const child: &PlanNode = try plan_node(plan, root.child);
+        if child.kind == PlanNodeKind.SEQ_SCAN {
+            try db_ensure_collection_rows_loaded_in_view(txn.db, txn.view_slot, collection_slot);
+            const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+            const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
+            var changed: u32 = 0u32;
+            var row_slot: u32 = 0u32;
+            while row_slot < collection.row_count {
+                const row: &DbStoredRow = &collection.rows[row_slot as usize];
+                if row.present && !row.tombstone {
+                    if try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr) {
+                        if try db_txn_apply_update_row(txn, plan, collection_slot, row_slot, program, value_expr) {
+                            changed = changed + 1u32;
+                        }
+                    }
+                }
+                row_slot = row_slot + 1u32;
+            }
+            return changed;
+        }
+        if child.kind == PlanNodeKind.PRIMARY_LOOKUP {
+            var found: bool = false;
+            var row_slot: u32 = 0u32;
+            try db_plan_primary_lookup_row_slot(txn.db, txn.view_slot, collection_slot, child.lookup_doc_id, &found, &row_slot);
+            if !found {
+                return 0u32;
+            }
+            if !(try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr)) {
+                return 0u32;
+            }
+            if try db_txn_apply_update_row(txn, plan, collection_slot, row_slot, program, value_expr) {
+                return 1u32;
+            }
+            return 0u32;
+        }
+        if child.kind == PlanNodeKind.INDEX_SCAN {
+            try db_ensure_secondary_index(txn.db, collection_slot, child.index_slot);
+            const index_state: &DbSecondaryIndexState = try db_secondary_index_state(txn.db, collection_slot, child.index_slot);
+            if !index_state.present {
+                return 0u32;
+            }
+            var changed: u32 = 0u32;
+            var i: u32 = 0u32;
+            while i < index_state.row_count {
+                const row_slot: u32 = index_state.row_slots[i as usize];
+                if try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr) {
+                    if try db_txn_apply_update_row(txn, plan, collection_slot, row_slot, program, value_expr) {
+                        changed = changed + 1u32;
+                    }
+                }
+                i = i + 1u32;
+            }
+            return changed;
+        }
+    }
+    return error.DbUnsupportedStmt;
+}
+
+fn db_txn_stage_delete_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_slot: u16) !u32 {
+    const root: &PlanNode = try plan_node(plan, plan.root_node);
+    if root.kind == PlanNodeKind.SEQ_SCAN {
+        try db_ensure_collection_rows_loaded_in_view(txn.db, txn.view_slot, collection_slot);
+        const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+        const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
+        var changed: u32 = 0u32;
+        var row_slot: u32 = 0u32;
+        while row_slot < collection.row_count {
+            const row: &DbStoredRow = &collection.rows[row_slot as usize];
+            if row.present && !row.tombstone {
+                if try db_txn_apply_delete_row(txn, collection_slot, row_slot) {
+                    changed = changed + 1u32;
+                }
+            }
+            row_slot = row_slot + 1u32;
+        }
+        return changed;
+    }
+    if root.kind == PlanNodeKind.PRIMARY_LOOKUP {
+        var found: bool = false;
+        var row_slot: u32 = 0u32;
+        try db_plan_primary_lookup_row_slot(txn.db, txn.view_slot, collection_slot, root.lookup_doc_id, &found, &row_slot);
+        if found && try db_txn_apply_delete_row(txn, collection_slot, row_slot) {
+            return 1u32;
+        }
+        return 0u32;
+    }
+    if root.kind == PlanNodeKind.INDEX_SCAN {
+        try db_ensure_secondary_index(txn.db, collection_slot, root.index_slot);
+        const index_state: &DbSecondaryIndexState = try db_secondary_index_state(txn.db, collection_slot, root.index_slot);
+        if !index_state.present {
+            return 0u32;
+        }
+        var changed: u32 = 0u32;
+        var i: u32 = 0u32;
+        while i < index_state.row_count {
+            const row_slot: u32 = index_state.row_slots[i as usize];
+            if try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr) {
+                if try db_txn_apply_delete_row(txn, collection_slot, row_slot) {
+                    changed = changed + 1u32;
+                }
+            }
+            i = i + 1u32;
+        }
+        return changed;
+    }
+    if root.kind == PlanNodeKind.FILTER {
+        const child: &PlanNode = try plan_node(plan, root.child);
+        if child.kind == PlanNodeKind.SEQ_SCAN {
+            try db_ensure_collection_rows_loaded_in_view(txn.db, txn.view_slot, collection_slot);
+            const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+            const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
+            var changed: u32 = 0u32;
+            var row_slot: u32 = 0u32;
+            while row_slot < collection.row_count {
+                const row: &DbStoredRow = &collection.rows[row_slot as usize];
+                if row.present && !row.tombstone {
+                    if try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr) {
+                        if try db_txn_apply_delete_row(txn, collection_slot, row_slot) {
+                            changed = changed + 1u32;
+                        }
+                    }
+                }
+                row_slot = row_slot + 1u32;
+            }
+            return changed;
+        }
+        if child.kind == PlanNodeKind.PRIMARY_LOOKUP {
+            var found: bool = false;
+            var row_slot: u32 = 0u32;
+            try db_plan_primary_lookup_row_slot(txn.db, txn.view_slot, collection_slot, child.lookup_doc_id, &found, &row_slot);
+            if !found {
+                return 0u32;
+            }
+            if !(try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr)) {
+                return 0u32;
+            }
+            if try db_txn_apply_delete_row(txn, collection_slot, row_slot) {
+                return 1u32;
+            }
+            return 0u32;
+        }
+        if child.kind == PlanNodeKind.INDEX_SCAN {
+            try db_ensure_secondary_index(txn.db, collection_slot, child.index_slot);
+            const index_state: &DbSecondaryIndexState = try db_secondary_index_state(txn.db, collection_slot, child.index_slot);
+            if !index_state.present {
+                return 0u32;
+            }
+            var changed: u32 = 0u32;
+            var i: u32 = 0u32;
+            while i < index_state.row_count {
+                const row_slot: u32 = index_state.row_slots[i as usize];
+                if try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr) {
+                    if try db_txn_apply_delete_row(txn, collection_slot, row_slot) {
+                        changed = changed + 1u32;
+                    }
+                }
+                i = i + 1u32;
+            }
+            return changed;
+        }
+    }
+    return error.DbUnsupportedStmt;
+}
+
 fn db_txn_stage_update_stmt(txn: &Txn, stmt: &SqlStmt) !void {
     const query_stmt: SqlStmt = db_make_select_stmt_from_stmt(
         stmt,
@@ -3849,28 +4170,9 @@ fn db_txn_stage_update_stmt(txn: &Txn, stmt: &SqlStmt) !void {
     try bind_select_at_stem_into(db_stem_ptr(txn.db), &query_stmt, &plan.bound);
     try plan_select_into(&plan.bound, &plan);
     const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(txn.db, txn.view_slot, try db_identifier_bytes(&stmt.update_stmt.collection_name));
-    var match_rows: [u32: DB_MAX_CURSOR_ROWS] = [];
-    var match_count: u16 = 0u16;
-    try db_plan_collect(txn.db, txn.view_slot, &plan, collection_slot, plan.root_node, match_rows[0: DB_MAX_CURSOR_ROWS], &match_count);
     const program: PathProgram = try path_program_compile(sql_path_slice(&stmt.update_stmt.target_path));
-    var changed: bool = false;
-    var i: u16 = 0u16;
-    while i < match_count {
-        const row_slot: u32 = match_rows[i as usize];
-        const rowref: RowRef = try db_collection_row_ref(txn.db, txn.view_slot, collection_slot, row_slot);
-        const new_value: ExecValue = try db_eval_value(txn.db, &plan.bound, &rowref, plan.bound.projection_exprs[0]);
-        const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
-        const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
-        const row: &DbStoredRow = try db_row_at(collection, row_slot);
-        try db_update_row_doc_at_path(collection, row, &program, &new_value);
-        if db_collection_update_max_doc_len(collection, row.doc_len) {
-            try db_collection_refresh_packed_layout(collection, db_effective_page_size(txn.db));
-        }
-        try db_collection_mark_row_dirty(collection, row_slot);
-        changed = true;
-        i = i + 1u16;
-    }
-    if changed {
+    const changed: u32 = try db_txn_stage_update_stmt_apply_root(txn, &plan, collection_slot, &program, plan.bound.projection_exprs[0]);
+    if changed > 0u32 {
         txn.has_writes = true;
     }
 }
@@ -3888,22 +4190,8 @@ fn db_txn_stage_delete_stmt(txn: &Txn, stmt: &SqlStmt) !void {
     try bind_select_at_stem_into(db_stem_ptr(txn.db), &query_stmt, &plan.bound);
     try plan_select_into(&plan.bound, &plan);
     const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(txn.db, txn.view_slot, try db_identifier_bytes(&stmt.delete_stmt.collection_name));
-    var match_rows: [u32: DB_MAX_CURSOR_ROWS] = [];
-    var match_count: u16 = 0u16;
-    try db_plan_collect(txn.db, txn.view_slot, &plan, collection_slot, plan.root_node, match_rows[0: DB_MAX_CURSOR_ROWS], &match_count);
-    var changed: bool = false;
-    var i: u16 = 0u16;
-    while i < match_count {
-        const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
-        const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
-        const row: &DbStoredRow = try db_row_at(collection, match_rows[i as usize]);
-        row.tombstone = true;
-        collection.may_have_tombstones = true;
-        try db_collection_mark_row_dirty(collection, match_rows[i as usize]);
-        changed = true;
-        i = i + 1u16;
-    }
-    if changed {
+    const changed: u32 = try db_txn_stage_delete_stmt_apply_root(txn, &plan, collection_slot);
+    if changed > 0u32 {
         txn.has_writes = true;
     }
 }
@@ -4681,7 +4969,7 @@ export fn db_test_init_at_stem(db: &DbHandle, stem: &const byte) !void {
     try db_prepare_handle_runtime_at_stem(db, stem);
     var index_slot: usize = 0usize;
     while index_slot < DB_MAX_COLLECTIONS {
-        try primary_btree_reset(&db.primary_indexes[index_slot], 256u32);
+        try primary_btree_reset(&db.primary_indexes[index_slot], NOSQLITE_PAGE_SIZE_DEFAULT);
         index_slot = index_slot + 1usize;
     }
     index_slot = 0usize;
@@ -4882,7 +5170,7 @@ export fn db_test_reset_primary_index(db: &DbHandle, collection_name: &[const by
     if slot_idx >= DB_MAX_COLLECTIONS {
         return error.DbCollectionNotFound;
     }
-    try primary_btree_reset(&db.primary_indexes[slot_idx], 256u32);
+    try primary_btree_reset(&db.primary_indexes[slot_idx], db_effective_page_size(db));
     const state: &CommitViewState = try db_current_view_state(db);
     const collection: &DbCollection = try db_collection_at_in_state(state, slot);
     collection.primary_index_ready = true;
@@ -4917,7 +5205,7 @@ export fn db_test_create_collection(db: &DbHandle, name: &[const byte]) !void {
     state.collections[slot].next_doc_id = created.next_doc_id;
     state.collections[slot].primary_root_page = created.primary_root_page;
     try db_copy_name(name, state.collections[slot].name[0: 64], &state.collections[slot].name_len);
-    try primary_btree_reset(&db.primary_indexes[slot], 256u32);
+    try primary_btree_reset(&db.primary_indexes[slot], db_effective_page_size(db));
     state.collections[slot].primary_index_ready = false;
     state.collections[slot].rows_loaded = true;
     try db_collection_ensure_row_capacity(&state.collections[slot], 1u16);

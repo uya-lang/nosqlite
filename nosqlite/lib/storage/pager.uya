@@ -217,7 +217,7 @@ struct RecoveryTxnState {
 }
 
 export const WAL_BATCH_MAX_RECORDS: usize = 16384;
-export const WAL_BATCH_MAX_BYTES: usize = 1048576;
+export const WAL_BATCH_MAX_BYTES: usize = 67108864;
 const RECOVERY_STACK_PAGE_BUFFER_CAP: usize = 4;
 
 const NOSQLITE_FILE_MODE: u32 = 0o644;

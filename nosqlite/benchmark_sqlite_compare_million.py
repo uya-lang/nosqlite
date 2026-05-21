@@ -55,6 +55,14 @@ def aggregate_query_samples(samples_ns: list[int]) -> dict:
     }
 
 
+def aggregate_write_case(rows: int, elapsed_us_total: int) -> dict:
+    return {
+        "rows": rows,
+        "op_us": elapsed_us_total,
+        "rows_per_s": rows / (elapsed_us_total / 1_000_000),
+    }
+
+
 def format_us(value: float) -> str:
     text = f"{value:.2f}"
     return text.rstrip("0").rstrip(".")
@@ -117,12 +125,53 @@ def sqlite_create_schema(conn: sqlite3.Connection) -> None:
 
 def build_json_doc(doc_id: int) -> str:
     bucket = doc_id % 100
+    age = 18 + (doc_id % 41)
     active = "true" if doc_id % 2 == 0 else "false"
-    return f'{{"n":{doc_id},"bucket":{bucket},"active":{active}}}'
+    return f'{{"n":{doc_id},"bucket":{bucket},"age":{age},"active":{active}}}'
+
+
+BULK_UPDATE_AGE = 30
+
+
+def sqlite_load_docs(conn: sqlite3.Connection, docs: int, batch_rows: int) -> None:
+    inserted = 0
+    while inserted < docs:
+        current_batch = min(batch_rows, docs - inserted)
+        params = [
+            (doc_id, build_json_doc(doc_id))
+            for doc_id in range(inserted + 1, inserted + current_batch + 1)
+        ]
+        conn.execute("BEGIN")
+        try:
+            conn.executemany("INSERT INTO users(id, doc) VALUES (?, ?)", params)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        inserted += current_batch
+
+
+def sqlite_prepare_loaded_db(path: Path, docs: int, batch_rows: int) -> sqlite3.Connection:
+    cleanup_sqlite_path(path)
+    conn = sqlite_connect(path)
+    sqlite_create_schema(conn)
+    sqlite_load_docs(conn, docs, batch_rows)
+    return conn
 
 
 def run_sqlite_case_inline(docs: int, batch_rows: int, query_iters: int) -> dict:
     path = Path(tempfile.gettempdir()) / f"nosqlite_sqlite_compare_million_{os.getpid()}.db"
+    load_notes = "SQLite JSON1; journal_mode=WAL; synchronous=FULL; full fetch timed"
+    query_notes = "SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64; full fetch timed"
+    update_notes = (
+        "SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; "
+        "UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?"
+    )
+    delete_notes = (
+        "SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; "
+        "DELETE FROM users WHERE id >= ? AND id < ?"
+    )
+
     cleanup_sqlite_path(path)
     conn = sqlite_connect(path)
     try:
@@ -157,22 +206,99 @@ def run_sqlite_case_inline(docs: int, batch_rows: int, query_iters: int) -> dict
             if not rows:
                 raise RuntimeError("sqlite limit query returned no rows")
             query_samples_ns.append(ns)
-
-        return {
-            "engine": "sqlite",
-            "docs": docs,
-            "batch_rows": batch_rows,
-            "load": {
-                "rows": docs,
-                "load_us": load_us,
-                "rows_per_s": docs / (load_us / 1_000_000),
-            },
-            "limit_query": aggregate_query_samples(query_samples_ns),
-            "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64; full fetch timed",
-        }
     finally:
         conn.close()
         cleanup_sqlite_path(path)
+
+    update_conn = sqlite_prepare_loaded_db(path, docs, batch_rows)
+    try:
+        start_ns = time.perf_counter_ns()
+        updated = 0
+        while updated < docs:
+            current_batch = min(batch_rows, docs - updated)
+            batch_start = updated + 1
+            batch_end_exclusive = batch_start + current_batch
+            update_conn.execute("BEGIN")
+            try:
+                update_conn.execute(
+                    "UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?",
+                    (BULK_UPDATE_AGE, batch_start, batch_end_exclusive),
+                )
+                update_conn.execute("COMMIT")
+            except Exception:
+                update_conn.execute("ROLLBACK")
+                raise
+            updated += current_batch
+        update_us = elapsed_us(start_ns)
+
+        updated_row = update_conn.execute(
+            "SELECT id FROM users WHERE json_extract(doc, '$.age') = ? LIMIT 1",
+            (BULK_UPDATE_AGE,),
+        ).fetchone()
+        if updated_row is None:
+            raise RuntimeError("sqlite bulk update verification failed: no updated row found")
+        stale_row = update_conn.execute(
+            "SELECT id FROM users WHERE json_extract(doc, '$.age') != ? LIMIT 1",
+            (BULK_UPDATE_AGE,),
+        ).fetchone()
+        if stale_row is not None:
+            raise RuntimeError("sqlite bulk update verification failed: found stale age value")
+    finally:
+        update_conn.close()
+        cleanup_sqlite_path(path)
+
+    delete_conn = sqlite_prepare_loaded_db(path, docs, batch_rows)
+    try:
+        start_ns = time.perf_counter_ns()
+        deleted = 0
+        while deleted < docs:
+            current_batch = min(batch_rows, docs - deleted)
+            batch_start = deleted + 1
+            batch_end_exclusive = batch_start + current_batch
+            delete_conn.execute("BEGIN")
+            try:
+                delete_conn.execute(
+                    "DELETE FROM users WHERE id >= ? AND id < ?",
+                    (batch_start, batch_end_exclusive),
+                )
+                delete_conn.execute("COMMIT")
+            except Exception:
+                delete_conn.execute("ROLLBACK")
+                raise
+            deleted += current_batch
+        delete_us = elapsed_us(start_ns)
+
+        remaining = delete_conn.execute("SELECT id FROM users LIMIT 1").fetchone()
+        if remaining is not None:
+            raise RuntimeError("sqlite pk delete verification failed: expected empty table")
+    finally:
+        delete_conn.close()
+        cleanup_sqlite_path(path)
+
+    return {
+        "engine": "sqlite",
+        "docs": docs,
+        "batch_rows": batch_rows,
+        "load": {
+            "rows": docs,
+            "load_us": load_us,
+            "rows_per_s": docs / (load_us / 1_000_000),
+            "notes": load_notes,
+        },
+        "limit_query": {
+            **aggregate_query_samples(query_samples_ns),
+            "notes": query_notes,
+        },
+        "bulk_update": {
+            **aggregate_write_case(docs, update_us),
+            "notes": update_notes,
+        },
+        "bulk_delete": {
+            **aggregate_write_case(docs, delete_us),
+            "notes": delete_notes,
+        },
+        "notes": "SQLite JSON1 million-row benchmark",
+    }
 
 
 def run_sqlite_child(docs: int, batch_rows: int, query_iters: int) -> int:
@@ -182,7 +308,7 @@ def run_sqlite_child(docs: int, batch_rows: int, query_iters: int) -> int:
 
 
 def parse_nosqlite_output(stdout: str, docs: int) -> dict:
-    load_us = 0
+    result_us: dict[str, int] = {}
     query_samples_ns: list[int] = []
     info = {}
     for line in stdout.splitlines():
@@ -195,8 +321,9 @@ def parse_nosqlite_output(stdout: str, docs: int) -> dict:
             for token in line[len("RESULT "):].split():
                 key, value = token.split("=", 1)
                 payload[key] = value
-            if payload.get("case") == "bulk_load":
-                load_us = int(payload["us"])
+            case_name = payload.get("case")
+            if case_name:
+                result_us[case_name] = int(payload["us"])
         elif line.startswith("SAMPLE "):
             payload = {}
             for token in line[len("SAMPLE "):].split():
@@ -210,7 +337,10 @@ def parse_nosqlite_output(stdout: str, docs: int) -> dict:
         elif line.startswith("BENCH_ERROR "):
             raise RuntimeError(line)
 
-    if load_us <= 0 or not query_samples_ns:
+    load_us = result_us.get("bulk_load", 0)
+    update_us = result_us.get("bulk_update", 0)
+    delete_us = result_us.get("bulk_delete", 0)
+    if load_us <= 0 or update_us <= 0 or delete_us <= 0 or not query_samples_ns:
         raise RuntimeError(f"nosqlite million benchmark output incomplete:\n{stdout}")
 
     return {
@@ -221,9 +351,21 @@ def parse_nosqlite_output(stdout: str, docs: int) -> dict:
             "rows": docs,
             "load_us": load_us,
             "rows_per_s": docs / (load_us / 1_000_000),
+            "notes": "NoSQLite million-row benchmark; staged txn batches; direct JSON insert helper; durable commit timed",
         },
-        "limit_query": aggregate_query_samples(query_samples_ns),
-        "notes": "NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64; full fetch timed",
+        "limit_query": {
+            **aggregate_query_samples(query_samples_ns),
+            "notes": "NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64; full fetch timed",
+        },
+        "bulk_update": {
+            **aggregate_write_case(docs, update_us),
+            "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end",
+        },
+        "bulk_delete": {
+            **aggregate_write_case(docs, delete_us),
+            "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; DELETE FROM users WHERE _id >= start AND _id < end",
+        },
+        "notes": "NoSQLite million-row benchmark",
     }
 
 
@@ -307,7 +449,7 @@ def write_markdown(path: Path, docs: int, batch_rows: int, query_iters: int, ns:
         "",
         f"日期：{time.strftime('%Y-%m-%d')}",
         "",
-        "本报告聚焦百万条记录量级下的装载与查询性能对比。",
+        "本报告聚焦百万条记录量级下的装载、查询、批量更新与批量删除性能对比。",
         "",
         "## 运行口径",
         "",
@@ -319,10 +461,12 @@ def write_markdown(path: Path, docs: int, batch_rows: int, query_iters: int, ns:
         f"- SQLite JSON1：`{'available' if sqlite_json1_available() else 'missing'}`",
         f"- CPU：`{cpu_model()}`",
         f"- Kernel：`{kernel_version()}`",
-        "- 数据文档：`{\"n\": <id>, \"bucket\": <id % 100>, \"active\": <bool>}`",
+        "- 数据文档：`{\"n\": <id>, \"bucket\": <id % 100>, \"age\": <18 + (id % 41)>, \"active\": <bool>}`",
         "- 查询口径：`SELECT _id FROM users LIMIT 64` / `SELECT id FROM users LIMIT 64`",
+        "- 更新口径：fresh preload 后按 `batch_rows` 分段执行 durable range update；NoSQLite 执行 `UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end`，SQLite 执行 `UPDATE users SET doc = json_set(doc, '$.age', 30) WHERE id >= start AND id < end`。",
+        "- 删除口径：fresh preload 后按 `batch_rows` 分段执行 durable range delete；NoSQLite 执行 `DELETE FROM users WHERE _id >= start AND _id < end`，SQLite 执行 `DELETE FROM users WHERE id >= start AND id < end`。",
         "- limit_query 计时范围：从开始执行查询到完整取回 64 行结果，两侧统一口径。",
-        "- NoSQLite 这里先比较“批量写入后同进程 warm query”，不包含 recovery/open 延迟。",
+        "- 更新/删除各自使用独立 fresh preload 数据集，预装载不计入该 case 计时，避免 load/query cache 污染后续结果。",
         "",
         "## 摘要",
         "",
@@ -331,13 +475,15 @@ def write_markdown(path: Path, docs: int, batch_rows: int, query_iters: int, ns:
         f"| bulk_load rows/s | {ns['load']['rows_per_s']:.2f} | {sq['load']['rows_per_s']:.2f} | {ratio_text(ns['load']['rows_per_s'], sq['load']['rows_per_s'], False)} |",
         f"| limit_query p50 us | {format_us(ns['limit_query']['p50_us'])} | {format_us(sq['limit_query']['p50_us'])} | {ratio_text(ns['limit_query']['p50_ns'], sq['limit_query']['p50_ns'], True)} |",
         f"| limit_query p95 us | {format_us(ns['limit_query']['p95_us'])} | {format_us(sq['limit_query']['p95_us'])} | {ratio_text(ns['limit_query']['p95_ns'], sq['limit_query']['p95_ns'], True)} |",
+        f"| bulk_update rows/s | {ns['bulk_update']['rows_per_s']:.2f} | {sq['bulk_update']['rows_per_s']:.2f} | {ratio_text(ns['bulk_update']['rows_per_s'], sq['bulk_update']['rows_per_s'], False)} |",
+        f"| bulk_delete rows/s | {ns['bulk_delete']['rows_per_s']:.2f} | {sq['bulk_delete']['rows_per_s']:.2f} | {ratio_text(ns['bulk_delete']['rows_per_s'], sq['bulk_delete']['rows_per_s'], False)} |",
         "",
         "## 原始指标",
         "",
-        "| engine | load s | load rows/s | query p50 us | query p95 us | query qps | peak KiB | notes |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
-        f"| nosqlite | {ns['load']['load_us'] / 1_000_000:.2f} | {ns['load']['rows_per_s']:.2f} | {format_us(ns['limit_query']['p50_us'])} | {format_us(ns['limit_query']['p95_us'])} | {ns['limit_query']['qps']:.2f} | {ns['peak_memory_kib']} | {ns['notes']} |",
-        f"| sqlite | {sq['load']['load_us'] / 1_000_000:.2f} | {sq['load']['rows_per_s']:.2f} | {format_us(sq['limit_query']['p50_us'])} | {format_us(sq['limit_query']['p95_us'])} | {sq['limit_query']['qps']:.2f} | {sq['peak_memory_kib']} | {sq['notes']} |",
+        "| engine | load s | load rows/s | update s | update rows/s | delete s | delete rows/s | query p50 us | query p95 us | query qps | peak KiB | notes |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        f"| nosqlite | {ns['load']['load_us'] / 1_000_000:.2f} | {ns['load']['rows_per_s']:.2f} | {ns['bulk_update']['op_us'] / 1_000_000:.2f} | {ns['bulk_update']['rows_per_s']:.2f} | {ns['bulk_delete']['op_us'] / 1_000_000:.2f} | {ns['bulk_delete']['rows_per_s']:.2f} | {format_us(ns['limit_query']['p50_us'])} | {format_us(ns['limit_query']['p95_us'])} | {ns['limit_query']['qps']:.2f} | {ns['peak_memory_kib']} | {ns['bulk_update']['notes']}; {ns['bulk_delete']['notes']} |",
+        f"| sqlite | {sq['load']['load_us'] / 1_000_000:.2f} | {sq['load']['rows_per_s']:.2f} | {sq['bulk_update']['op_us'] / 1_000_000:.2f} | {sq['bulk_update']['rows_per_s']:.2f} | {sq['bulk_delete']['op_us'] / 1_000_000:.2f} | {sq['bulk_delete']['rows_per_s']:.2f} | {format_us(sq['limit_query']['p50_us'])} | {format_us(sq['limit_query']['p95_us'])} | {sq['limit_query']['qps']:.2f} | {sq['peak_memory_kib']} | {sq['bulk_update']['notes']}; {sq['bulk_delete']['notes']} |",
         "",
         "## 复现命令",
         "",
@@ -392,7 +538,11 @@ def main() -> int:
 
     print(
         f"MILLION_COMPARE_RESULT load_rows_per_s_nosqlite={nosqlite_result['load']['rows_per_s']:.2f} "
-        f"load_rows_per_s_sqlite={sqlite_result['load']['rows_per_s']:.2f}"
+        f"load_rows_per_s_sqlite={sqlite_result['load']['rows_per_s']:.2f} "
+        f"bulk_update_rows_per_s_nosqlite={nosqlite_result['bulk_update']['rows_per_s']:.2f} "
+        f"bulk_update_rows_per_s_sqlite={sqlite_result['bulk_update']['rows_per_s']:.2f} "
+        f"bulk_delete_rows_per_s_nosqlite={nosqlite_result['bulk_delete']['rows_per_s']:.2f} "
+        f"bulk_delete_rows_per_s_sqlite={sqlite_result['bulk_delete']['rows_per_s']:.2f}"
     )
     print(f"MILLION_COMPARE_REPORT markdown={args.write_markdown} json={args.write_json}")
     return 0
