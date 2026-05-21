@@ -1,0 +1,27 @@
+use std.runtime.entry;
+use libc.syscall;
+
+fn _fallback_isize() isize {
+    return -1 as isize;
+}
+
+fn _fallback_i64() i64 {
+    return -1;
+}
+
+export fn main() i32 {
+    const msg: &byte = "typed catch local\n";
+    const write_result: !isize = @syscall(SYS_write, 1 as i64, msg as i64, 18 as i64) as! isize;
+    const written: isize = write_result catch { _fallback_isize(); };
+    if written <= 0 as isize {
+        return 1;
+    }
+
+    const pid_result: !i64 = @syscall(SYS_getpid) as! i64;
+    const pid: i64 = pid_result catch { _fallback_i64(); };
+    if pid <= 0 {
+        return 2;
+    }
+
+    return 0;
+}

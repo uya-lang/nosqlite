@@ -1,0 +1,35 @@
+use std.runtime.entry;
+
+error ExecBoom;
+
+fn ok_value() !i32 {
+    return 7;
+}
+
+fn fail_value() !i32 {
+    return error.ExecBoom;
+}
+
+fn forward_value() !i32 {
+    const value: i32 = try ok_value();
+    if value != 7 {
+        return error.ExecBoom;
+    }
+    return try ok_value();
+}
+
+export fn main() i32 {
+    const forwarded: i32 = forward_value() catch { 0; };
+    if forwarded != 7 {
+        return 1;
+    }
+    const recovered: i32 = fail_value() catch { 9; };
+    if recovered != 9 {
+        return 2;
+    }
+    const direct: i32 = ok_value() catch { 0; };
+    if direct != 7 {
+        return 3;
+    }
+    return 0;
+}

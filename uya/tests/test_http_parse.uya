@@ -2,6 +2,7 @@
 
 use std.http.types;
 use std.http.parse.http_parse_request;
+use std.http.parse.http_decode_chunked_body_inplace;
 use std.testing.assert_eq_i32;
 use std.testing.assert_eq_u64;
 
@@ -146,6 +147,27 @@ test "parse_then_request_get_header" {
     const pr: ParseResult = try http_parse_request(buf);
     const hv: &[byte] = try request_get_header(&pr.request, &"x-test"[0: 6]);
     if hv.len != 2 || hv.ptr[0] != 'h' as byte || hv.ptr[1] != 'i' as byte {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "parse_chunked_request_and_decode_inplace" {
+    var raw: [byte: 256] = [];
+    const line: &[byte] = &"POST /chunk HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n1\r\n \r\n5\r\nworld\r\n0\r\nX-T: y\r\n\r\n"[0: 108];
+    var i: usize = 0;
+    while i < line.len {
+        raw[i] = line.ptr[i];
+        i = i + 1;
+    }
+    var pr: ParseResult = try http_parse_request(raw[0: line.len]);
+    if !request_has_chunked_transfer_encoding(&pr.request) {
+        try assert_eq_i32(0, 1);
+    }
+    _ = try http_decode_chunked_body_inplace(&pr);
+    if !slice_eq(pr.request.body, &"hello world"[0: 11]) {
+        try assert_eq_i32(0, 1);
+    }
+    if pr.consumed == 0 {
         try assert_eq_i32(0, 1);
     }
 }

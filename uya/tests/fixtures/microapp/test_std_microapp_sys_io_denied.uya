@@ -1,0 +1,17 @@
+// microapp runtime 回归：未声明 required_caps 的 SYS_IO 必须默认拒绝。
+
+use std.microapp.abi.MICROAPP_SYS_IO;
+use std.microapp.io.MICROAPP_IO_DEVICE_TIMER;
+use std.microapp.io.MICROAPP_IO_OP_READ;
+use std.microapp.io.write_stdout_bytes;
+
+export fn main() i32 {
+    const raw: !i64 = @syscall(MICROAPP_SYS_IO, MICROAPP_IO_DEVICE_TIMER as i64, MICROAPP_IO_OP_READ as i64);
+    _ = raw catch {
+        _ = write_stdout_bytes("io denied ok\n", 13) catch {
+            return 2;
+        };
+        return 0;
+    };
+    return 7;
+}

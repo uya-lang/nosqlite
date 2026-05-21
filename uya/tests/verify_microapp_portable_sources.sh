@@ -73,6 +73,8 @@ PORTABLE_SOURCES=(
     "tests/fixtures/microapp/test_std_microapp_exit_nonzero.uya"
     "tests/fixtures/microapp/test_std_microapp_fault_segv.uya"
     "tests/fixtures/microapp/test_std_microapp_io_codegen.uya"
+    "tests/fixtures/microapp/test_std_microapp_sys_io_denied.uya"
+    "tests/fixtures/microapp/test_std_microapp_sys_io_timer.uya"
     "tests/fixtures/microapp/test_std_microapp_time_runtime.uya"
 )
 

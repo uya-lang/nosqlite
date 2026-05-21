@@ -196,9 +196,12 @@ export fn test_suite_end() i32 {
 // ============================================================
 
 export mc run_test(name: expr, test_fn: expr) stmt {
+    var _failed: bool = false;
     const _result: void = test_fn() catch {
         test_fail(name);
-        return;
+        _failed = true;
     };
-    test_pass(name);
+    if !_failed {
+        test_pass(name);
+    }
 }

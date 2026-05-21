@@ -1,0 +1,13 @@
+fn nested_scope_case() void {
+    @print("A");
+    {
+        defer { @print("B"); }
+        @print("C");
+    }
+    @println("D");
+}
+
+export fn main() i32 {
+    nested_scope_case();
+    return 0;
+}

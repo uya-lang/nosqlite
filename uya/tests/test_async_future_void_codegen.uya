@@ -1,0 +1,59 @@
+use std.async;
+use std.testing.assert_eq_i32;
+
+@async_fn
+fn noop() Future<!void> {
+    return {};
+}
+
+struct VoidRunner {
+    loops: i32,
+
+    @async_fn
+    fn run(self: &Self) Future<!void> {
+        var i: i32 = 0;
+        while i < self.loops {
+            if i + 1 == self.loops {
+                return try @await noop();
+            }
+            i = i + 1;
+        }
+        return {};
+    }
+}
+
+fn future_void_is_ok(result: !void) bool {
+    result catch {
+        return false;
+    };
+    return true;
+}
+
+fn poll_ready_ok_void(f: Future<!void>) i32 {
+    const w: Waker = Waker{};
+    var polls: i32 = 0;
+    while polls < 4 {
+        const p: Poll<!void> = f.poll(&w);
+        match p {
+            .Pending(_) => {
+                polls = polls + 1;
+            },
+            .Ready(result) => {
+                if future_void_is_ok(result) == false {
+                    return -2;
+                }
+                return 0;
+            },
+        };
+    }
+    return -1;
+}
+
+test "future err void free fn compiles and polls ready" {
+    try assert_eq_i32(poll_ready_ok_void(noop()), 0);
+}
+
+test "future err void method while await compiles and polls ready" {
+    const runner: VoidRunner = VoidRunner{ loops: 2 };
+    try assert_eq_i32(poll_ready_ok_void(runner.run()), 0);
+}

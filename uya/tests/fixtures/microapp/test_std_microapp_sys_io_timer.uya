@@ -1,0 +1,14 @@
+// microapp runtime 回归：std.microapp.io timer wrapper 会推导 required_caps 并允许 SYS_IO。
+
+use std.microapp.io.read_timer;
+use std.microapp.io.write_stdout_bytes;
+
+export fn main() i32 {
+    _ = read_timer() catch {
+        return 2;
+    };
+    _ = write_stdout_bytes("io timer ok\n", 12) catch {
+        return 1;
+    };
+    return 0;
+}

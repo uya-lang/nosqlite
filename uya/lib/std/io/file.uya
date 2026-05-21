@@ -7,6 +7,7 @@ use libc.sys_close;
 use libc.sys_read;
 use libc.sys_write;
 use libc.O_RDONLY;
+use libc.O_WRONLY;
 use libc.O_RDWR;
 use libc.O_CREAT;
 use libc.O_TRUNC;
@@ -29,10 +30,6 @@ export struct FILE {
 }
 
 var std_io_fopen_fd_storage: [FILE: 128] = [];
-const STD_IO_FOPEN_W_FLAGS: i64 = 577;   // O_WRONLY | O_CREAT | O_TRUNC
-const STD_IO_FOPEN_A_FLAGS: i64 = 1089;  // O_WRONLY | O_CREAT | O_APPEND
-const STD_IO_FOPEN_W_PLUS_FLAGS: i64 = 578;   // O_RDWR | O_CREAT | O_TRUNC
-const STD_IO_FOPEN_A_PLUS_FLAGS: i64 = 1090;  // O_RDWR | O_CREAT | O_APPEND
 
 export fn file_open(path: &const byte, flags: i32, mode: u32) !File {
     const raw_fd: i32 = try sys_open(path as *const byte, flags, mode as i32);
@@ -156,6 +153,10 @@ export fn fopen(path: &const byte, mode: &const byte) &FILE {
 
     var flags: i64 = 0;
     var create_mode: i64 = 0;
+    const w_flags: i64 = O_WRONLY | O_CREAT | O_TRUNC;
+    const a_flags: i64 = O_WRONLY | O_CREAT | O_APPEND;
+    const w_plus_flags: i64 = O_RDWR | O_CREAT | O_TRUNC;
+    const a_plus_flags: i64 = O_RDWR | O_CREAT | O_APPEND;
     var i: usize = 0;
     const mode_len: usize = strlen(mode);
 
@@ -164,18 +165,18 @@ export fn fopen(path: &const byte, mode: &const byte) &FILE {
         if c == 114 as byte {  // 'r'
             flags = O_RDONLY;
         } else if c == 119 as byte {  // 'w'
-            flags = STD_IO_FOPEN_W_FLAGS;
+            flags = w_flags;
             create_mode = S_IRWXU;
         } else if c == 97 as byte {  // 'a'
-            flags = STD_IO_FOPEN_A_FLAGS;
+            flags = a_flags;
             create_mode = S_IRWXU;
         } else if c == 43 as byte {  // '+'
             if flags == O_RDONLY {
                 flags = O_RDWR;
-            } else if flags == STD_IO_FOPEN_W_FLAGS {
-                flags = STD_IO_FOPEN_W_PLUS_FLAGS;
-            } else if flags == STD_IO_FOPEN_A_FLAGS {
-                flags = STD_IO_FOPEN_A_PLUS_FLAGS;
+            } else if flags == w_flags {
+                flags = w_plus_flags;
+            } else if flags == a_flags {
+                flags = a_plus_flags;
             } else {
                 flags = O_RDWR;
             }

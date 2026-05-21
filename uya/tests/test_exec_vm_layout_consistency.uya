@@ -1,0 +1,24 @@
+use std.runtime.entry;
+
+struct Pair {
+    left: i32,
+    right: i32,
+}
+
+struct Nested {
+    pair: Pair,
+    flag: bool,
+}
+
+export fn main() i32 {
+    const pair_size: usize = @size_of(Pair);
+    const pair_align: usize = @align_of(Pair);
+    const nested_size: usize = @size_of(Nested);
+    const nested_align: usize = @align_of(Nested);
+
+    @println(pair_size as i32);
+    @println(pair_align as i32);
+    @println(nested_size as i32);
+    @println(nested_align as i32);
+    return 0;
+}

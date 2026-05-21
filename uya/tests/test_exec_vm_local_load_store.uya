@@ -1,0 +1,11 @@
+fn add_one(x: i32) i32 {
+    var y: i32 = x;
+    y = y + 1;
+    return y;
+}
+
+export fn main() i32 {
+    const result: i32 = add_one(6);
+    @println("local-load-store");
+    return result - 7;
+}

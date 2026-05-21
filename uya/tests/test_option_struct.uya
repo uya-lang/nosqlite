@@ -1,0 +1,45 @@
+use std.core.option.Option;
+use std.testing.assert_eq_bool;
+use std.testing.assert_eq_i32;
+
+struct Event {
+    kind: i32,
+    value: i32,
+}
+
+fn make_event(kind: i32, value: i32) Event {
+    return Event{ kind: kind, value: value };
+}
+
+fn maybe_event(kind: i32) Option<Event> {
+    if kind < 0 {
+        return Option<Event>.None();
+    }
+    return Option<Event>.Some(make_event(kind, kind + 10));
+}
+
+test "option struct return and local" {
+    const some: Option<Event> = maybe_event(7);
+    var sum: i32 = -1;
+    match some {
+        .Some(evt) => { sum = evt.kind + evt.value; },
+        .None(_) => { sum = -1; },
+    };
+    try assert_eq_i32(sum, 24);
+
+    const local: Option<Event> = Option<Event>.Some(make_event(2, 9));
+    var seen_value: i32 = 0;
+    match local {
+        .Some(evt) => { seen_value = evt.value; },
+        .None(_) => { seen_value = -1; },
+    };
+    try assert_eq_i32(seen_value, 9);
+
+    const none_evt: Option<Event> = maybe_event(-1);
+    var is_none: bool = false;
+    match none_evt {
+        .Some(_) => { is_none = false; },
+        .None(_) => { is_none = true; },
+    };
+    try assert_eq_bool(is_none, true);
+}

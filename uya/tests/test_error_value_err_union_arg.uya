@@ -1,0 +1,40 @@
+// error.X 作为 !T 实参传给普通函数时，C99 codegen 必须保持 err-union 语义。
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+error ArgAsErrUnion;
+
+fn echo_i32(v: !i32) !i32 {
+    return v;
+}
+
+fn ready_i32(v: !i32) Future<!i32> {
+    return Future<!i32>{ state: Poll<!i32>.Ready(v) };
+}
+
+fn wrap_error() Future<!i32> {
+    return ready_i32(error.ArgAsErrUnion);
+}
+
+test "error_value_passes_to_plain_err_union_param" {
+    var seen: i32 = 0;
+    const r: !i32 = echo_i32(error.ArgAsErrUnion);
+    const v: i32 = r catch {
+        seen = 1;
+        -7;
+    };
+    try assert_eq_i32(seen, 1);
+    try assert_eq_i32(v, -7);
+}
+
+test "error_value_passes_to_future_err_union_param" {
+    var seen: i32 = 0;
+    const r: !i32 = block_on<i32>(wrap_error());
+    const v: i32 = r catch {
+        seen = 1;
+        -9;
+    };
+    try assert_eq_i32(seen, 1);
+    try assert_eq_i32(v, -9);
+}

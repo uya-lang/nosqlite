@@ -27,6 +27,13 @@ struct ArrayStruct {
 struct Empty {
 }
 
+fn make_nested(x: i32, y: i32, count: i32) Nested {
+    return Nested{
+        point: Point{ x: x, y: y },
+        count: count,
+    };
+}
+
 test "struct equal" {
     var p1: Point = Point{ x: 10, y: 20 };
     var p2: Point = Point{ x: 10, y: 20 };
@@ -134,4 +141,10 @@ test "empty struct compare" {
     var e1: Empty = Empty{};
     var e2: Empty = Empty{};
     try expect(e1 == e2);
+}
+
+test "struct call result compare" {
+    const expected: Nested = make_nested(7, 9, 11);
+    try expect(make_nested(7, 9, 11) == expected);
+    try expect(make_nested(7, 9, 12) != expected);
 }

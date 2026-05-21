@@ -1,0 +1,71 @@
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.fmt.simplify.simplify_text;
+
+fn index_of(haystack: &[byte], needle: &[byte]) i32 {
+    if needle.len == 0 || haystack.len < needle.len {
+        return -1;
+    }
+    var i: usize = 0;
+    while i + needle.len <= haystack.len {
+        var ok: bool = true;
+        var j: usize = 0;
+        while j < needle.len {
+            if haystack.ptr[i + j] != needle.ptr[j] {
+                ok = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if ok {
+            return i as i32;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn test_simplify_return_paren_ident() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "return (x);\n" as &[byte];
+    const out: &[byte] = try simplify_text(&a, src);
+    try assert_eq_i32(index_of(out, "return x;\n" as &[byte]), 0);
+}
+
+fn test_simplify_return_paren_number() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "return (1);\n" as &[byte];
+    const out: &[byte] = try simplify_text(&a, src);
+    try assert_eq_i32(index_of(out, "return 1;\n" as &[byte]), 0);
+}
+
+fn test_simplify_idempotent() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "return (x);\n" as &[byte];
+    const out1: &[byte] = try simplify_text(&a, src);
+    const out2: &[byte] = try simplify_text(&a, out1);
+    try assert_eq_i32(index_of(out1, out2), 0);
+    try assert_eq_i32(out1.len as i32, out2.len as i32);
+}
+
+export fn main() i32 {
+    test_suite_begin("fmt simplify tests");
+    run_test("simplify return paren ident", test_simplify_return_paren_ident);
+    run_test("simplify return paren number", test_simplify_return_paren_number);
+    run_test("simplify idempotent", test_simplify_idempotent);
+    return test_suite_end();
+}

@@ -1,0 +1,23 @@
+use std.testing.assert_eq_i32;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+const POINT_ZERO: Point = Point{ x: 0, y: 0 };
+
+Point {
+    fn add(self: &Self, other: Point) Point {
+        return Point{
+            x: self.x + other.x,
+            y: self.y + other.y,
+        };
+    }
+}
+
+test "const receiver call" {
+    const shifted: Point = POINT_ZERO.add(Point{ x: 3, y: 5 });
+    try assert_eq_i32(shifted.x, 3);
+    try assert_eq_i32(shifted.y, 5);
+}

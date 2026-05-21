@@ -136,14 +136,14 @@ fn morecore(needed: usize) &ChunkHeader {
     const region_size_aligned: usize = ((@size_of(HeapRegion) + MALLOC_ALIGN - 1) / MALLOC_ALIGN) * MALLOC_ALIGN;
     const map_size: usize = alloc_size + region_size_aligned;
 
-    const result: !i64 = @syscall(SYS_mmap, 0, map_size as i64,
-                                  PROT_READ | PROT_WRITE,
-                                  MAP_PRIVATE | MAP_ANONYMOUS, 0 - 1, 0);
-    const ptr: i64 = result catch { return null; };
-    if ptr < 0 { return null; }
+    const result: !*void = sys_mmap(null as *void, map_size,
+                                    PROT_READ | PROT_WRITE,
+                                    MAP_PRIVATE | MAP_ANONYMOUS, 0 - 1, 0);
+    const mapped: *void = result catch { return null; };
+    if mapped == null { return null; }
 
-    var region: &HeapRegion = (ptr as &HeapRegion);
-    var hdr: &ChunkHeader = (((ptr as &byte) + region_size_aligned) as &ChunkHeader);
+    var region: &HeapRegion = (mapped as &HeapRegion);
+    var hdr: &ChunkHeader = (((mapped as &byte) + region_size_aligned) as &ChunkHeader);
     hdr.magic = CHUNK_MAGIC;
     hdr.size = alloc_size;
     set_free(hdr, true);

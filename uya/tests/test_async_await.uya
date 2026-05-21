@@ -53,4 +53,3 @@ test "async_await_pending_returns_pending" {
     };
     try expect(seen_pending);
 }
-

@@ -12,12 +12,12 @@ fn aligned_async() Future<!i32> {
     return 42;
 }
 
-fn test_align_of_frame_type() void {
+fn test_align_of_frame_type() !void {
     const a: i32 = @align_of(@frame(aligned_async));
-    expect(a == 64);
+    try expect(a == 64);
 }
 
-fn test_aligned_async_pool_alloc() void {
+fn test_aligned_async_pool_alloc() !void {
     const f: Future<!i32> = aligned_async();
     const w: Waker = Waker{};
     const p: Poll<!i32> = f.poll(&w);
@@ -25,8 +25,8 @@ fn test_aligned_async_pool_alloc() void {
     match p {
         .Ready(ok_val) => { result = ok_val catch { 0 - 3; }; },
         .Pending(_) => { result = 0 - 2; },
-    }
-    expect(result == 42);
+    };
+    try expect(result == 42);
 }
 
 test "align_of_frame_type" {

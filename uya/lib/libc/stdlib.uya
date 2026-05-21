@@ -11,7 +11,6 @@ use std.runtime.saved_envp;
 
 use libc.sys_stat;
 use libc.sys_readlink;
-use libc.SYS_kill;
 
 // ============================================================
 // calloc / realloc（malloc/free 来自同模块的 heap.uya）
@@ -52,7 +51,7 @@ export extern "libc" fn abort() void {
         while true {}
     }
     // 发送 SIGABRT (6) 给自己
-    _ = @syscall(SYS_kill, pid, 6);
+    _ = sys_kill(pid, 6) catch {};
     // 如果 kill 失败，直接退出
     sys_exit(1);
     while true {}

@@ -1,0 +1,28 @@
+use std.core.option.Option;
+use std.testing.assert_eq_i32;
+
+struct Slot<T> {
+    value: T,
+
+    fn duplicate(self: &Self) Slot<T> {
+        return Slot<T>{ value: self.value };
+    }
+
+    fn to_option(self: &Self) Option<T> {
+        return Option<T>.Some(self.value);
+    }
+}
+
+test "generic struct method return" {
+    const slot: Slot<i32> = Slot<i32>{ value: 11 };
+    const copy: Slot<i32> = slot.duplicate();
+    try assert_eq_i32(copy.value, 11);
+
+    const opt: Option<i32> = slot.to_option();
+    var out: i32 = -1;
+    match opt {
+        .Some(v) => { out = v; },
+        .None(_) => { out = 0; },
+    };
+    try assert_eq_i32(out, 11);
+}

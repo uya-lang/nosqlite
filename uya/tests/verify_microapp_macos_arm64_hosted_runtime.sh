@@ -32,6 +32,20 @@ dump_log_and_fail() {
     exit 1
 }
 
+assert_single_result_surface() {
+    local path="$1"
+    local expected="$2"
+    local count
+    grep -a -F -q "$expected" "$path" || dump_log_and_fail "未输出统一 result: $expected" "$path"
+    count="$(grep -a -c '^\[microapp loader\] payload result=' "$path" || true)"
+    if [ "$count" -ne 1 ]; then
+        dump_log_and_fail "payload result 行数量异常: $count" "$path"
+    fi
+    if grep -a -q '^\[microapp loader\] payload fault class=' "$path"; then
+        dump_log_and_fail "不应输出旧 fault 诊断面" "$path"
+    fi
+}
+
 pick_first_available() {
     local cmd
     for cmd in "$@"; do
@@ -56,7 +70,21 @@ if [ -z "$TARGET_GCC_BIN" ]; then
     exit 0
 fi
 
+OBJCOPY_BIN="${OBJCOPY:-}"
+if [ -z "$OBJCOPY_BIN" ] && command -v xcrun >/dev/null 2>&1; then
+    OBJCOPY_BIN="$(xcrun --find llvm-objcopy 2>/dev/null || true)"
+fi
+if [ -z "$OBJCOPY_BIN" ]; then
+    OBJCOPY_BIN="$(pick_first_available llvm-objcopy gobjcopy objcopy || true)"
+fi
+
+if [ -z "$OBJCOPY_BIN" ]; then
+    echo "microapp macos arm64 hosted runtime skipped (missing objcopy)"
+    exit 0
+fi
+
 export TARGET_GCC="$TARGET_GCC_BIN"
+export OBJCOPY="$OBJCOPY_BIN"
 
 build_case_uapp() {
     local name="$1"
@@ -64,9 +92,16 @@ build_case_uapp() {
     local uapp="$TMP_DIR/${name}.uapp"
     local build_log="$TMP_DIR/${name}.build.log"
 
+    local status=0
     rm -f "$uapp"
+    set +e
     "$ROOT_DIR/bin/uya" build --app microapp --microapp-profile macos_arm64_hardvm \
         "$ROOT_DIR/$source_rel" -o "$uapp" >"$build_log" 2>&1
+    status=$?
+    set -e
+    if [ "$status" -ne 0 ]; then
+        dump_log_and_fail "macos arm64 $name build 失败: $status" "$build_log"
+    fi
     printf '%s\n' "$uapp"
 }
 
@@ -78,9 +113,16 @@ run_case_ok() {
     local loader_log="$TMP_DIR/${name}.loader.log"
     local uapp=""
 
+    local status=0
     echo "==> macos arm64 runtime: $name"
+    set +e
     "$ROOT_DIR/bin/uya" run --app microapp --microapp-profile macos_arm64_hardvm \
         "$ROOT_DIR/$source_rel" >"$run_log" 2>&1
+    status=$?
+    set -e
+    if [ "$status" -ne 0 ]; then
+        dump_log_and_fail "macos arm64 $name run 异常退出: $status" "$run_log"
+    fi
 
     grep -a -q "$expected_text" "$run_log" || dump_log_and_fail "macos arm64 $name run 未输出期望文本: $expected_text" "$run_log"
     grep -a -q "\[microapp loader\] executed mapped payload" "$run_log" || dump_log_and_fail "macos arm64 $name run 未命中 mapped payload 执行分支" "$run_log"
@@ -150,8 +192,7 @@ run_case_fault() {
     fi
     grep -a -q "\[microapp loader\] image loaded, ticking" "$run_log" || dump_log_and_fail "macos arm64 fault run 未进入 tick" "$run_log"
     grep -a -q "\[microapp loader\] executed mapped payload" "$run_log" || dump_log_and_fail "macos arm64 fault run 未命中 mapped payload 执行分支" "$run_log"
-    grep -a -q "\[microapp loader\] payload result=fault class=segv code=1 signal=11" "$run_log" || dump_log_and_fail "macos arm64 fault run 未输出统一 fault result" "$run_log"
-    grep -a -q "\[microapp loader\] payload fault class=segv code=1 signal=11" "$run_log" || dump_log_and_fail "macos arm64 fault run 未输出 fault class 诊断" "$run_log"
+    assert_single_result_surface "$run_log" "[microapp loader] payload result=fault class=segv code=1 signal=11"
 
     uapp="$(build_case_uapp "fault_segv" "tests/fixtures/microapp/test_std_microapp_fault_segv.uya")"
     set +e
@@ -163,8 +204,7 @@ run_case_fault() {
     fi
     grep -a -q "\[microapp loader\] image loaded, ticking" "$loader_log" || dump_log_and_fail "macos arm64 fault loader 未进入 tick" "$loader_log"
     grep -a -q "\[microapp loader\] executed mapped payload" "$loader_log" || dump_log_and_fail "macos arm64 fault loader 未命中 mapped payload 执行分支" "$loader_log"
-    grep -a -q "\[microapp loader\] payload result=fault class=segv code=1 signal=11" "$loader_log" || dump_log_and_fail "macos arm64 fault loader 未输出统一 fault result" "$loader_log"
-    grep -a -q "\[microapp loader\] payload fault class=segv code=1 signal=11" "$loader_log" || dump_log_and_fail "macos arm64 fault loader 未输出 fault class 诊断" "$loader_log"
+    assert_single_result_surface "$loader_log" "[microapp loader] payload result=fault class=segv code=1 signal=11"
 }
 
 run_case_ok "hello" "examples/microapp/microcontainer_hello_source.uya" "hello microapp"

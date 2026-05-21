@@ -27,13 +27,13 @@ fn use_frame_ref(f: &@frame(child_async)) i32 {
     return 7;
 }
 
-fn test_frame_local_on_stack() void {
+fn test_frame_local_on_stack() !void {
     var frame: @frame(child_async);
     const got: i32 = use_frame_ref(&frame);
-    expect(got == 7);
+    try expect(got == 7);
 }
 
-fn test_caller_owned_inline() void {
+fn test_caller_owned_inline() !void {
     const fut: Future<!i32> = temp_then_await();
     const w: Waker = Waker{};
     const p: Poll<!i32> = fut.poll(&w);
@@ -45,8 +45,8 @@ fn test_caller_owned_inline() void {
         .Pending(_) => {
             result = 0 - 2;
         },
-    }
-    expect(result == 42);
+    };
+    try expect(result == 42);
 }
 
 test "async_frame_stack_local" {

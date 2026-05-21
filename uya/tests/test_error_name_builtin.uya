@@ -1,0 +1,46 @@
+// test_error_name_builtin.uya - 验证 @error_name 可读取语言级错误名
+
+use libc.ENOENT;
+use libc.strcmp;
+use std.testing.assert_eq_i32;
+
+error NamedFailure;
+error ExpectedOpenFailure;
+
+const SYS_open: i64 = 2;
+const O_RDONLY: i64 = 0;
+const GLOBAL_ERROR_NAME: *byte = @error_name(error.NamedFailure);
+
+fn fail_named() !i32 {
+    return error.NamedFailure;
+}
+
+test "error_name_named_error_literal" {
+    try assert_eq_i32(strcmp(@error_name(error.NamedFailure) as *const byte, "NamedFailure\0" as *const byte), 0);
+}
+
+test "error_name_named_error_global_const" {
+    try assert_eq_i32(strcmp(GLOBAL_ERROR_NAME as *const byte, "NamedFailure\0" as *const byte), 0);
+}
+
+test "error_name_named_error_matches_catch_value" {
+    _ = fail_named() catch |err| {
+        try assert_eq_i32(strcmp(@error_name(err) as *const byte, "NamedFailure\0" as *const byte), 0);
+        return;
+    };
+
+    return error.NamedFailure;
+}
+
+test "error_name_syscall_error_falls_back_unknown" {
+    const path: *byte = "/nonexistent/uya/error-name-path";
+    const result: !i64 = @syscall(SYS_open, path as i64, O_RDONLY, 0);
+
+    _ = result catch |err| {
+        try assert_eq_i32(@error_id(err) as i32, ENOENT);
+        try assert_eq_i32(strcmp(@error_name(err) as *const byte, "UnknownError\0" as *const byte), 0);
+        return;
+    };
+
+    return error.ExpectedOpenFailure;
+}

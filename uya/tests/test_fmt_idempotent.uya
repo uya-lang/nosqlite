@@ -1,0 +1,79 @@
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.fmt.fmt.format;
+
+fn slices_equal(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn count_subslice(haystack: &[byte], needle: &[byte]) i32 {
+    if needle.len == 0 || haystack.len < needle.len {
+        return 0;
+    }
+    var count: i32 = 0;
+    var i: usize = 0;
+    while i + needle.len <= haystack.len {
+        var ok: bool = true;
+        var j: usize = 0;
+        while j < needle.len {
+            if haystack.ptr[i + j] != needle.ptr[j] {
+                ok = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if ok {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    return count;
+}
+
+fn test_format_is_idempotent() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "fn main(){x=1+2;foo(x,1);}" as &[byte];
+    const f1: &[byte] = try format(&a, src);
+    const f2: &[byte] = try format(&a, f1);
+
+    try assert_eq_i32(slices_equal(f1, f2) as i32, true as i32);
+}
+
+fn test_format_comments_is_idempotent() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "// add returns sum\nfn add(a,b){\nreturn a+b; // sum\n}" as &[byte];
+    const f1: &[byte] = try format(&a, src);
+    const f2: &[byte] = try format(&a, f1);
+
+    try assert_eq_i32(slices_equal(f1, f2) as i32, true as i32);
+    try assert_eq_i32(count_subslice(f1, "// add returns sum" as &[byte]), 1);
+    try assert_eq_i32(count_subslice(f1, "// sum" as &[byte]), 1);
+}
+
+export fn main() i32 {
+    test_suite_begin("fmt idempotent tests");
+    run_test("format is idempotent", test_format_is_idempotent);
+    run_test("format comments is idempotent", test_format_comments_is_idempotent);
+    return test_suite_end();
+}

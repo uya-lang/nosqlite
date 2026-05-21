@@ -1271,7 +1271,7 @@ export fn http1_request_streaming(
     }
     
     // 发送 body（如果是 POST）
-    if req.method == Method_POST && req.body.len > 0 {
+    if req.method == Method.POST && req.body.len > 0 {
         const body_result: !void = http1_sync_write_all(fd, req.body.ptr, req.body.len);
         if body_result.error_id != 0 {
             _ = sys_close(fd) catch {};
@@ -1341,7 +1341,7 @@ export @async_fn fn http1_request_stream_async(
         woff = woff + wn;
     }
 
-    if req.method == Method_POST && req.body.len > 0 {
+    if req.method == Method.POST && req.body.len > 0 {
         var boff: usize = 0;
         while boff < req.body.len {
             const bn: usize = try @await async_fd_write_future(fd, @ptr_from_usize(@usize_from_ptr(req.body.ptr as &void) + boff) as &const byte, req.body.len - boff);

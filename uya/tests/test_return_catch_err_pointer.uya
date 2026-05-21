@@ -1,0 +1,52 @@
+// Regression: catch |err| { return err; } must return an error branch,
+// not a successful pointer payload containing the numeric error id.
+
+error CatchReturnFailure;
+
+var fallback_byte: byte = 0;
+
+fn fail_ptr() !&byte {
+    return error.CatchReturnFailure;
+}
+
+fn fail_void() !void {
+    return error.CatchReturnFailure;
+}
+
+fn propagate_ptr() !&byte {
+    const value: &byte = fail_ptr() catch |err| {
+        return err;
+    };
+    return value;
+}
+
+fn propagate_void() !void {
+    fail_void() catch |err| {
+        return err;
+    };
+}
+
+export fn main() i32 {
+    var propagated: i32 = 0;
+
+    _ = propagate_ptr() catch |err| {
+        if @error_id(err) != @error_id(error.CatchReturnFailure) {
+            return 2;
+        }
+        propagated = propagated + 1;
+        &fallback_byte;
+    };
+
+    propagate_void() catch |err| {
+        if @error_id(err) == @error_id(error.CatchReturnFailure) {
+            propagated = propagated + 1;
+        } else {
+            return 3;
+        }
+    };
+
+    if propagated == 2 {
+        return 0;
+    }
+    return 1;
+}

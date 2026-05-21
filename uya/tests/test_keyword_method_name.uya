@@ -1,0 +1,17 @@
+use std.testing.assert_eq_i32;
+
+struct Rect {
+    value: i32,
+}
+
+Rect {
+    fn union(self: &Self, other: Rect) i32 {
+        return self.value + other.value;
+    }
+}
+
+test "keyword union can be method name" {
+    const a: Rect = Rect{ value: 2 };
+    const b: Rect = Rect{ value: 5 };
+    try assert_eq_i32(a.union(b), 7);
+}

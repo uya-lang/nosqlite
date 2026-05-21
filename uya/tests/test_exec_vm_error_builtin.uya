@@ -1,0 +1,18 @@
+use std.runtime.entry;
+
+error NamedFailure;
+error OtherFailure;
+
+export fn main() i32 {
+    const direct_id: u32 = @error_id(error.NamedFailure);
+    const other_id: u32 = @error_id(error.OtherFailure);
+    if direct_id == 0 {
+        return 1;
+    }
+    if other_id == 0 || other_id == direct_id {
+        return 2;
+    }
+    @println(@error_name(error.NamedFailure));
+    @println(@error_name(error.OtherFailure));
+    return 0;
+}

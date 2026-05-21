@@ -1,0 +1,25 @@
+struct Inner {
+    x: i32,
+}
+
+struct Sink {
+    arr: [Inner: 2],
+    len: i32,
+}
+
+export fn main() i32 {
+    var sink: Sink = Sink{
+        arr: [Inner: 2] = [],
+        len: 0,
+    };
+    if sink.len != 0 {
+        return 1;
+    }
+    if sink.arr[0].x != 0 {
+        return 2;
+    }
+    if sink.arr[1].x != 0 {
+        return 3;
+    }
+    return 0;
+}

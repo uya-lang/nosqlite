@@ -7,6 +7,7 @@ use libc.heap;
 use libc.errno;
 use libc.pthread;
 use libc.syscall;
+use std;
 use std.async_frame;
 use std.mem.allocator.IAllocator;
 use std.string.strlen;
@@ -14,7 +15,11 @@ use std.string.strlen;
 /// 线程本地 async frame 分配器（通过 pthread TSD 绑定）
 var _uya_async_frame_allocator_once: pthread_once_t = pthread_once_t{ state: 0 };
 var _uya_async_frame_allocator_key: pthread_key_t = pthread_key_t{ seq: 0, destructor: null };
+var _uya_async_frame_allocator_fallback: &IAllocator = null;
 
+/// 初始化当前进程的 async frame allocator 线程本地 key。
+/// 参数：_unused - pthread_once 兼容占位参数，当前实现忽略。
+/// 返回值：始终返回 null，仅用于兼容 pthread 启动例程签名。
 fn _uya_init_async_frame_allocator_key(_unused: &void) &void {
     _ = _unused;
     _ = pthread_key_create(&_uya_async_frame_allocator_key, null as &void);
@@ -23,6 +28,7 @@ fn _uya_init_async_frame_allocator_key(_unused: &void) &void {
 
 /// 设置当前线程的 async frame 分配器
 export fn set_async_frame_allocator(alloc: &IAllocator) void {
+    _uya_async_frame_allocator_fallback = alloc;
     pthread_once(&_uya_async_frame_allocator_once, &_uya_init_async_frame_allocator_key as &void);
     if _uya_async_frame_allocator_key.seq <= 0 {
         return;
@@ -34,18 +40,23 @@ export fn set_async_frame_allocator(alloc: &IAllocator) void {
 export fn get_async_frame_allocator() &IAllocator {
     pthread_once(&_uya_async_frame_allocator_once, &_uya_init_async_frame_allocator_key as &void);
     if _uya_async_frame_allocator_key.seq <= 0 {
-        return null;
+        return _uya_async_frame_allocator_fallback;
     }
-    return pthread_getspecific(_uya_async_frame_allocator_key) as &IAllocator;
+    const tsd_alloc: &IAllocator = pthread_getspecific(_uya_async_frame_allocator_key) as &IAllocator;
+    if tsd_alloc != null {
+        return tsd_alloc;
+    }
+    return _uya_async_frame_allocator_fallback;
 }
 
 /// 供接口 box / async helper 复用的分配入口：优先当前线程的 async frame allocator。
 export fn async_box_alloc_current(size: usize) &byte {
     const header_size: usize = @size_of(usize) * 2;
     const total_size: usize = header_size + size;
-    const alloc: &IAllocator = get_async_frame_allocator();
+    const alloc_ptr: &IAllocator = get_async_frame_allocator();
     var raw_ptr: &byte = null;
-    if alloc != null {
+    if alloc_ptr != null {
+        const alloc: IAllocator = *alloc_ptr;
         const boxed: !&byte = alloc.alloc(total_size);
         raw_ptr = boxed catch {
             return null;
@@ -57,7 +68,7 @@ export fn async_box_alloc_current(size: usize) &byte {
         }
     }
     const header: &usize = raw_ptr as &usize;
-    *header = @usize_from_ptr(alloc as &void);
+    *header = @usize_from_ptr(alloc_ptr as &void);
     header[1] = size;
     return (raw_ptr as usize + header_size) as &byte;
 }
@@ -72,7 +83,8 @@ export fn async_box_free_current(ptr: &byte) void {
     const header: &usize = raw_ptr as &usize;
     const alloc_ptr: usize = *header;
     if alloc_ptr != 0 {
-        const alloc: &IAllocator = @ptr_from_usize(alloc_ptr) as &IAllocator;
+        const alloc_ref: &IAllocator = @ptr_from_usize(alloc_ptr) as &IAllocator;
+        const alloc: IAllocator = *alloc_ref;
         alloc.dealloc(raw_ptr);
         return;
     }
@@ -279,9 +291,7 @@ export fn ok<T>(value: T) !T {
 
 /// 构造 Poll<!T>.Ready(ok(value))，供自定义 `Future<!T>` 的 Ready 路径复用。
 export fn poll_ready_ok<T>(value: T) Poll<!T> {
-    const ok_value: !T = ok<T>(value);
-    const p: Poll<!T> = Poll<!T>.Ready(ok_value);
-    return p;
+    return Poll<!T>.Ready(ok<T>(value));
 }
 
 /// 构造已就绪的 `Future<!T>`。

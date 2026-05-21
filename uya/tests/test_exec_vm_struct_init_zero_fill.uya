@@ -1,0 +1,28 @@
+use std.runtime.entry;
+
+struct BufferHolder {
+    tag: i32,
+    bytes: [byte: 8],
+    tail: i32,
+}
+
+export fn main() i32 {
+    const value: BufferHolder = BufferHolder{ tag: 7 };
+    if value.tag != 7 {
+        return 1;
+    }
+    if value.tail != 0 {
+        return 2;
+    }
+    if @len(value.bytes) != 8 {
+        return 3;
+    }
+    var i: i32 = 0;
+    while i < 8 {
+        if value.bytes[i] != 0 {
+            return 4;
+        }
+        i = i + 1;
+    }
+    return 0;
+}

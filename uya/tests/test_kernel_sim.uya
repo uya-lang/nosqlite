@@ -1,6 +1,7 @@
 // End-to-end integration test for microcontainer simulator
 
 use kernel.container;
+use kernel.capability;
 use kernel.dispatch;
 use kernel.errors;
 use kernel.image;
@@ -645,6 +646,22 @@ fn build_sim_aarch64_exit_code_image(buf: &[byte], code: u32) u32 {
     return total;
 }
 
+fn sim_image_set_required_caps_and_rehash(buf: &[byte], total: u32, required_caps: u32) void {
+    w32(buf, 60, required_caps);
+    var i: u32 = 0u32;
+    while i < 32u32 {
+        buf.ptr[(28u32 + i) as usize] = 0 as byte;
+        i = i + 1u32;
+    }
+    var digest: [byte: 32] = [];
+    sha256_digest(buf[0: total as usize], digest[0: 32]);
+    i = 0u32;
+    while i < 32u32 {
+        buf.ptr[(28u32 + i) as usize] = digest[i as usize];
+        i = i + 1u32;
+    }
+}
+
 fn make_kernel() SimKernel {
     return SimKernel{
         sched: Scheduler{ slots: [], rr_cursor: 0 },
@@ -896,6 +913,7 @@ test "sim_load_image_rv32_trap_executes_print_yield_exit" {
     if st0 == ContainerState.cs_ready { is_ready = 1; }
     try assert_eq_i32(is_ready, 1);
     try assert_eq_i32(k.loaded_result_kind[0] as i32, SIM_LOADED_RESULT_NONE as i32);
+    try assert_eq_i32(k.loaded_bridge_dispatch_count[0] as i32, 2);
 
     const cid1: u32 = try sim_tick_loaded(&k);
     try assert_eq_i32(cid1 as i32, 0);
@@ -905,6 +923,7 @@ test "sim_load_image_rv32_trap_executes_print_yield_exit" {
     try assert_eq_i32(is_empty, 1);
     try assert_eq_i32(k.loaded_result_kind[0] as i32, SIM_LOADED_RESULT_EXIT as i32);
     try assert_eq_i32(k.loaded_exit_code[0], 0);
+    try assert_eq_i32(k.loaded_bridge_dispatch_count[0] as i32, 2);
 }
 
 test "sim_load_image_rv32_trap_records_nonzero_exit_code" {
@@ -962,6 +981,65 @@ test "sim_load_image_bss_page_is_zero_and_writable" {
     try assert_eq_i32(bss_ptr[0] as i32, 0);
     bss_ptr[0] = 77 as byte;
     try assert_eq_i32(bss_ptr[0] as i32, 77);
+}
+
+test "sim_load_image_applies_required_caps_to_sys_io" {
+    var k: SimKernel = make_kernel();
+    sim_kernel_init(&k);
+    var backing: [byte: 65536] = [];
+    k.host_ctx.pm.base = &backing[0];
+    k.host_ctx.pm.size = 65536;
+    var img: [byte: 256] = [];
+    const img_len: u32 = build_sim_image(img[0: 256], 4u32);
+    sim_image_set_required_caps_and_rehash(img[0: 256], img_len, KERNEL_CAP_IO_TIMER);
+
+    try sim_load_image(&k, 0u32, 16u32, img[0: img_len as usize]);
+
+    const ok: u32 = try sim_syscall(&k, 0u32, SYS_IO, KERNEL_IO_DEVICE_TIMER, KERNEL_IO_OP_WRITE);
+    try assert_eq_i32(ok as i32, 0);
+
+    var denied: i32 = 0;
+    _ = sim_syscall(&k, 0u32, SYS_IO, KERNEL_IO_DEVICE_UART, KERNEL_IO_OP_WRITE) catch |err| {
+        denied = 1;
+        0u32;
+    };
+    try assert_eq_i32(denied, 1);
+}
+
+test "sim_load_image_without_required_caps_denies_sys_io" {
+    var k: SimKernel = make_kernel();
+    sim_kernel_init(&k);
+    var backing: [byte: 65536] = [];
+    k.host_ctx.pm.base = &backing[0];
+    k.host_ctx.pm.size = 65536;
+    var img: [byte: 256] = [];
+    const img_len: u32 = build_sim_image(img[0: 256], 4u32);
+
+    try sim_load_image(&k, 0u32, 16u32, img[0: img_len as usize]);
+
+    var denied: i32 = 0;
+    _ = sim_syscall(&k, 0u32, SYS_IO, KERNEL_IO_DEVICE_TIMER, KERNEL_IO_OP_READ) catch |err| {
+        denied = 1;
+        0u32;
+    };
+    try assert_eq_i32(denied, 1);
+}
+
+test "sim_load_image_rejects_unknown_required_caps" {
+    var k: SimKernel = make_kernel();
+    sim_kernel_init(&k);
+    var backing: [byte: 65536] = [];
+    k.host_ctx.pm.base = &backing[0];
+    k.host_ctx.pm.size = 65536;
+    var img: [byte: 256] = [];
+    const img_len: u32 = build_sim_image(img[0: 256], 4u32);
+    sim_image_set_required_caps_and_rehash(img[0: 256], img_len, 1u32 << 31);
+
+    var rejected: i32 = 0;
+    _ = sim_load_image(&k, 0u32, 16u32, img[0: img_len as usize]) catch |err| {
+        rejected = 1;
+    };
+    try assert_eq_i32(rejected, 1);
 }
 
 test "sim_load_image_x86_call_gate_executes_mapped_payload" {

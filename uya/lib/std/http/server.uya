@@ -4,6 +4,7 @@
 
 use std.http.types;
 use std.http.parse.http_parse_request;
+use std.http.parse.http_decode_chunked_body_inplace;
 use libc.syscall;
 use libc.errno;
 
@@ -26,6 +27,47 @@ fn sys_write_all_conn(fd: i32, base: &byte, total: usize) !void {
             return error.ConnectionClosed;
         }
         off = off + (n as usize);
+    }
+}
+
+fn sys_writev_all_conn(fd: i32, head: &byte, head_len: usize, body: &byte, body_len: usize) !void {
+    var head_sent: usize = 0;
+    var body_sent: usize = 0;
+    while head_sent < head_len || body_sent < body_len {
+        var iov: [IOVec: 2] = [];
+        var iovcnt: i32 = 0;
+        if head_sent < head_len {
+            iov[iovcnt as usize] = IOVec{
+                iov_base: @ptr_from_usize(@usize_from_ptr(head as &void) + head_sent) as *const byte,
+                iov_len: head_len - head_sent,
+            };
+            iovcnt = iovcnt + 1;
+        }
+        if body_sent < body_len {
+            iov[iovcnt as usize] = IOVec{
+                iov_base: @ptr_from_usize(@usize_from_ptr(body as &void) + body_sent) as *const byte,
+                iov_len: body_len - body_sent,
+            };
+            iovcnt = iovcnt + 1;
+        }
+        const wr: isize = try sys_writev(fd, &iov[0], iovcnt);
+        if wr <= 0 {
+            return error.ConnectionClosed;
+        }
+        var advanced: usize = wr as usize;
+        if head_sent < head_len {
+            const head_rem: usize = head_len - head_sent;
+            if advanced >= head_rem {
+                head_sent = head_len;
+                advanced = advanced - head_rem;
+            } else {
+                head_sent = head_sent + advanced;
+                advanced = 0;
+            }
+        }
+        if advanced > 0 && body_sent < body_len {
+            body_sent = body_sent + advanced;
+        }
     }
 }
 
@@ -207,7 +249,11 @@ export fn http_conn_read_parse(conn_fd: i32, base: &byte, cap: usize, filled: &u
                 *filled = cur + (n as usize);
             }
             else => {
-                return p;
+                var pr: ParseResult = try p;
+                if request_has_chunked_transfer_encoding(&pr.request) {
+                    _ = try http_decode_chunked_body_inplace(&pr);
+                }
+                return pr;
             }
         }
     }
@@ -253,7 +299,11 @@ export fn http_conn_read_parse_nonblocking(conn_fd: i32, base: &byte, cap: usize
                 }
             }
             else => {
-                return p;
+                var pr: ParseResult = try p;
+                if request_has_chunked_transfer_encoding(&pr.request) {
+                    _ = try http_decode_chunked_body_inplace(&pr);
+                }
+                return pr;
             }
         }
     }
@@ -305,7 +355,9 @@ fn append_usize_dec_hdr(hdr: &byte, start: usize, n: usize) usize {
 fn http_send_response_impl(conn_fd: i32, status: Status, body: &[byte], close_after: bool, emit_keep_alive: bool) !void {
     var hdr: [byte: 512] = [];
     var pos: usize = 0;
-    if status == Status.OK {
+    if status == Status.SwitchingProtocols {
+        pos = copy_slice_into_hdr(&hdr[0] as &byte, pos, &"HTTP/1.1 101 Switching Protocols\r\n"[0: 34]);
+    } else if status == Status.OK {
         pos = copy_slice_into_hdr(&hdr[0] as &byte, pos, &"HTTP/1.1 200 OK\r\n"[0: 17]);
     } else if status == Status.Created {
         pos = copy_slice_into_hdr(&hdr[0] as &byte, pos, &"HTTP/1.1 201 Created\r\n"[0: 22]);
@@ -340,8 +392,7 @@ fn http_send_response_impl(conn_fd: i32, status: Status, body: &[byte], close_af
         try sys_write_all_conn(conn_fd, &hdr[0] as &byte, pos + body.len);
         return;
     }
-    try sys_write_all_conn(conn_fd, &hdr[0] as &byte, pos);
-    try sys_write_all_conn(conn_fd, body.ptr as &byte, body.len);
+    try sys_writev_all_conn(conn_fd, &hdr[0] as &byte, pos, body.ptr as &byte, body.len);
 }
 
 /// 发送 `HTTP/1.1` 响应（`Content-Type: text/plain`）；未声明 `Connection` 时客户端可按 HTTP/1.1 默认保持连接（便于 Keep-alive 测试）。

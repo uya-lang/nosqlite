@@ -87,7 +87,7 @@ fn response_has_subslice(hay: &[byte], needle: &[byte]) bool {
 fn run_epoll_client_get_ok(port: u16) void {
     const conn_res: !i32 = http_tcp_connect_loopback(port);
     const cfd: i32 = conn_res catch {
-        0 - 1
+        0 - 1;
     };
     if cfd < 0 {
         sys_exit(1);
@@ -98,7 +98,7 @@ fn run_epoll_client_get_ok(port: u16) void {
     var total: usize = 0;
     while total < 512 {
         const n: isize = sys_read(cfd, &rb[total] as *byte, 512 - total) catch {
-            0 - 1
+            -1 as isize;
         };
         if n <= 0 {
             break;
@@ -125,7 +125,7 @@ fn run_epoll_client_get_ok(port: u16) void {
 fn run_epoll_client_sleep_then_get(port: u16) void {
     const conn_res: !i32 = http_tcp_connect_loopback(port);
     const cfd: i32 = conn_res catch {
-        0 - 1
+        0 - 1;
     };
     if cfd < 0 {
         sys_exit(1);
@@ -139,7 +139,7 @@ fn run_epoll_client_sleep_then_get(port: u16) void {
     var total: usize = 0;
     while total < 512 {
         const n: isize = sys_read(cfd, &rb[total] as *byte, 512 - total) catch {
-            0 - 1
+            -1 as isize;
         };
         if n <= 0 {
             break;
@@ -219,7 +219,7 @@ fn epoll_shift_request_buffer_at_slot(srv: &EpollServer, slot: usize, consumed: 
 fn run_epoll_client_pipeline_two_gets(port: u16) void {
     const conn_res: !i32 = http_tcp_connect_loopback(port);
     const cfd: i32 = conn_res catch {
-        0 - 1
+        0 - 1;
     };
     if cfd < 0 {
         sys_exit(1);
@@ -247,7 +247,7 @@ fn run_epoll_client_pipeline_two_gets(port: u16) void {
     var saw_two: i32 = 0;
     while total < 640 {
         const n: isize = sys_read(cfd, &rb[total] as *byte, 640 - total) catch {
-            0 - 1
+            -1 as isize;
         };
         if n <= 0 {
             break;
@@ -274,7 +274,7 @@ fn run_epoll_client_pipeline_two_gets(port: u16) void {
 fn run_epoll_client_get_then_slow_read(port: u16) void {
     const conn_res: !i32 = http_tcp_connect_loopback(port);
     const cfd: i32 = conn_res catch {
-        0 - 1
+        0 - 1;
     };
     if cfd < 0 {
         sys_exit(1);
@@ -289,7 +289,7 @@ fn run_epoll_client_get_then_slow_read(port: u16) void {
         const tick: TimeSpec = TimeSpec{ tv_sec: 0, tv_nsec: 2000000 };
         _ = sys_nanosleep(&tick, &rem) catch {};
         const n: isize = sys_read(cfd, &buf[0] as *byte, 128) catch {
-            0 - 1
+            -1 as isize;
         };
         if n < 0 {
             sys_exit(2);
@@ -369,7 +369,7 @@ test "epoll_poll_listen_register_then_readable" {
     if child_pid == 0 {
         const conn_res: !i32 = http_tcp_connect_loopback(srv.port);
         const cfd: i32 = conn_res catch {
-            0 - 1
+            0 - 1;
         };
         if cfd < 0 {
             sys_exit(1);
@@ -726,11 +726,11 @@ test "epoll_drain_listen_accepts_two_connections" {
     if child_pid == 0 {
         const r1: !i32 = http_tcp_connect_loopback(srv.port);
         const c1: i32 = r1 catch {
-            0 - 1
+            0 - 1;
         };
         const r2: !i32 = http_tcp_connect_loopback(srv.port);
         const c2: i32 = r2 catch {
-            0 - 1
+            0 - 1;
         };
         if c1 < 0 || c2 < 0 {
             sys_exit(1);

@@ -1,0 +1,149 @@
+// lib/std/http/websocket_types.uya - WebSocket 公共类型与接口
+//
+// 模块路径：use std.http.websocket_types
+
+use std.async;
+
+export error WebSocketBadHandshake;
+export error WebSocketUnsupportedVersion;
+export error WebSocketMissingKey;
+export error WebSocketInvalidKey;
+export error WebSocketProtocolError;
+export error WebSocketFrameTooLarge;
+export error WebSocketMessageTooLarge;
+export error WebSocketNeedMoreData;
+export error WebSocketConnectionClosed;
+export error WebSocketMaskedServerFrame;
+export error WebSocketUnmaskedClientFrame;
+export error WebSocketUnsupportedOpcode;
+export error WebSocketUtf8Required;
+export error WebSocketControlFrameTooLarge;
+export error WebSocketFragmentedControlFrame;
+export error WebSocketContinuationMissing;
+export error WebSocketQueueFull;
+export error WebSocketHeartbeatTimeout;
+export error WebSocketExtensionsNotSupported;
+
+export const WS_GUID: &const byte = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+export const WS_MAX_HEADER_BYTES: usize = 14;
+export const WS_CONTROL_MAX_PAYLOAD: usize = 125;
+
+/// WebSocket opcode。
+/// 参数说明：无。
+/// 返回值说明：枚举值供 frame/message 层使用。
+export enum WebSocketOpcode {
+    Continuation = 0,
+    Text = 1,
+    Binary = 2,
+    Close = 8,
+    Ping = 9,
+    Pong = 10,
+}
+
+/// WebSocket 连接角色。
+/// 参数说明：无。
+/// 返回值说明：`Server` 表示服务端，`Client` 表示客户端。
+export enum WebSocketRole {
+    Server,
+    Client,
+}
+
+/// 单帧视图。
+/// 参数说明：字段均为协议层视图；`payload` 生命周期绑定到外部缓冲区。
+/// 返回值说明：无。
+export struct WebSocketFrameView {
+    fin: bool,
+    opcode: WebSocketOpcode,
+    masked: bool,
+    payload_ptr: &byte,
+    payload_len: usize,
+    mask_key: [byte: 4],
+}
+
+/// 聚合后的消息视图。
+/// 参数说明：`payload` 生命周期绑定到调用方提供的消息缓冲区。
+/// 返回值说明：无。
+export struct WebSocketMessageView {
+    opcode: WebSocketOpcode,
+    payload_ptr: &byte,
+    payload_len: usize,
+}
+
+/// 心跳策略。
+/// 参数说明：所有时间均为毫秒；`0` 表示关闭对应策略。
+/// 返回值说明：无。
+export struct WebSocketHeartbeatConfig {
+    ping_interval_ms: u32 = 0,
+    pong_timeout_ms: u32 = 0,
+    idle_timeout_ms: u32 = 0,
+}
+
+/// Upgrade / 连接接入选项。
+/// 参数说明：`subprotocols` 为服务端支持的协议名数组首元素地址，`subprotocol_count` 为数量。
+/// 返回值说明：无。
+export struct WebSocketAcceptOptions {
+    subprotocols: &const byte = null,
+    subprotocol_count: i32 = 0,
+    allow_extensions: bool = false,
+    max_frame_size: usize = 65536,
+    max_message_size: usize = 1048576,
+    auto_pong: bool = true,
+    send_queue_capacity: i32 = 16,
+    heartbeat: WebSocketHeartbeatConfig = WebSocketHeartbeatConfig{},
+}
+
+/// 自动重连策略。
+/// 参数说明：`initial_delay_ms` / `max_delay_ms` 为重连等待；`backoff_multiplier_x1000` 以千分比表达倍率。
+/// 返回值说明：无。
+export struct ReconnectPolicy {
+    enabled: bool = false,
+    max_retries: i32 = 0,
+    initial_delay_ms: u32 = 1000,
+    max_delay_ms: u32 = 30000,
+    backoff_multiplier_x1000: u32 = 2000,
+}
+
+/// WebSocket 异步连接契约。
+/// 参数说明：读写 API 由调用方提供缓冲区；排队 API 由连接对象持有消息副本。
+/// 返回值说明：返回 frame/message 视图或已写入字节数。
+export interface AsyncWebSocketConn {
+    @async_fn
+    fn read_frame(self: &Self, rx: &byte, rx_cap: usize, opcode_out: &WebSocketOpcode, fin_out: &bool, payload_len_out: &usize) Future<!usize>;
+    @async_fn
+    fn read_message(self: &Self, rx: &byte, rx_cap: usize, msg: &byte, msg_cap: usize, opcode_out: &WebSocketOpcode) Future<!usize>;
+    @async_fn
+    fn write_frame(self: &Self, opcode: WebSocketOpcode, payload: &const byte, payload_len: usize, tx: &byte, tx_cap: usize) Future<!usize>;
+    @async_fn
+    fn write_message(self: &Self, opcode: WebSocketOpcode, payload: &const byte, payload_len: usize, tx: &byte, tx_cap: usize) Future<!usize>;
+    @async_fn
+    fn ping(self: &Self, payload: &const byte, payload_len: usize, tx: &byte, tx_cap: usize) Future<!usize>;
+    @async_fn
+    fn close_with_code(self: &Self, code: u16, reason: &const byte, reason_len: usize, tx: &byte, tx_cap: usize) Future<!usize>;
+    @async_fn
+    fn enqueue_message(self: &Self, opcode: WebSocketOpcode, payload: &const byte, payload_len: usize) Future<!usize>;
+    @async_fn
+    fn flush_pending(self: &Self) Future<!usize>;
+}
+
+/// 默认 WebSocket 接入选项。
+/// 参数说明：无。
+/// 返回值说明：返回建议的 HTTP/1.1 WebSocket 默认配置。
+export fn websocket_accept_options_default() WebSocketAcceptOptions {
+    return WebSocketAcceptOptions{};
+}
+
+/// 默认自动重连策略。
+/// 参数说明：无。
+/// 返回值说明：返回“默认关闭重连”的策略对象。
+export fn websocket_reconnect_policy_default() ReconnectPolicy {
+    return ReconnectPolicy{};
+}
+
+/// 判断 opcode 是否属于控制帧。
+/// 参数说明：`opcode` 为待检查的操作码。
+/// 返回值说明：控制帧返回 `true`，否则返回 `false`。
+export fn websocket_opcode_is_control(opcode: WebSocketOpcode) bool {
+    return opcode == WebSocketOpcode.Close ||
+        opcode == WebSocketOpcode.Ping ||
+        opcode == WebSocketOpcode.Pong;
+}

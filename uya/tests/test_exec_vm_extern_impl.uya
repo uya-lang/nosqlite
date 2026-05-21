@@ -1,0 +1,28 @@
+use std.runtime.entry;
+use libc.atoi;
+use libc.isqrt;
+use libc.strcmp;
+
+export fn main() i32 {
+    const parsed_i32: i32 = atoi("12345");
+    if parsed_i32 != 12345 {
+        return 1;
+    }
+
+    const root: u64 = isqrt(81u64);
+    if root != 9u64 {
+        return 2;
+    }
+
+    const cmp_lt: i32 = strcmp("abc" as *const byte, "abd" as *const byte);
+    if cmp_lt >= 0 {
+        return 3;
+    }
+
+    const cmp_eq: i32 = strcmp("same" as *const byte, "same" as *const byte);
+    if cmp_eq != 0 {
+        return 4;
+    }
+
+    return 0;
+}

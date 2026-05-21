@@ -51,34 +51,34 @@ export fn main() i32 {
     var u1: DataUnion = DataUnion.num(42);
     const r1: i32 = test_match_ref_else_literal(&u1);
     printf("test_match_ref_else_literal (num): %d\n", r1);
-    try assert_true(r1 == 42);
+    _ = assert_true(r1 == 42) catch { return 1; };
     
     var u2: DataUnion = DataUnion.other(100);
     const r2: i32 = test_match_ref_else_literal(&u2);
     printf("test_match_ref_else_literal (other): %d\n", r2);
-    try assert_true(r2 == 100);
+    _ = assert_true(r2 == 100) catch { return 2; };
     
     // 测试2: 值类型参数（对照组）
     var u3: DataUnion = DataUnion.num(77);
     const r3: i32 = test_match_value_else(u3);
     printf("test_match_value_else: %d\n", r3);
-    try assert_true(r3 == 77);
+    _ = assert_true(r3 == 77) catch { return 3; };
     
     // 测试3: 多变体 + 引用类型
     var u4: MultiVariant = MultiVariant.a(10);
     const r4: i32 = test_match_ref_multi(&u4);
     printf("test_match_ref_multi (a): %d\n", r4);
-    try assert_true(r4 == 10);
+    _ = assert_true(r4 == 10) catch { return 4; };
     
     var u5: MultiVariant = MultiVariant.b(10);
     const r5: i32 = test_match_ref_multi(&u5);
     printf("test_match_ref_multi (b): %d\n", r5);
-    try assert_true(r5 == 20);
+    _ = assert_true(r5 == 20) catch { return 5; };
     
     var u6: MultiVariant = MultiVariant.c(10);
     const r6: i32 = test_match_ref_multi(&u6);
     printf("test_match_ref_multi (c): %d\n", r6);
-    try assert_true(r6 == 30);
+    _ = assert_true(r6 == 30) catch { return 6; };
     
     printf("=== All tests passed ===\n");
     return 0;

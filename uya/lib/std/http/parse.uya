@@ -17,6 +17,11 @@ struct NameSpan {
     end: usize,
 }
 
+struct ContentLengthInfo {
+    found: bool,
+    value: usize,
+}
+
 fn http_byte_to_lower(c: byte) byte {
     if c >= 'A' as byte && c <= 'Z' as byte {
         return (c as i32 + 32) as byte;
@@ -38,8 +43,117 @@ fn http_header_name_eq(a: &[byte], b: &[byte]) bool {
     return true;
 }
 
+fn http_header_hash_init() u64 {
+    return 14695981039346656037u64;
+}
+
+fn http_header_hash_push(hash: u64, c: byte) u64 {
+    return (hash ^ (c as u64)) * 1099511628211u64;
+}
+
+fn http_scan_byte_8(buf: &[byte], start: usize, end: usize, needle: byte) usize {
+    var i: usize = start;
+    while i + 8 <= end {
+        if buf.ptr[i] == needle {
+            return i;
+        }
+        if buf.ptr[i + 1] == needle {
+            return i + 1;
+        }
+        if buf.ptr[i + 2] == needle {
+            return i + 2;
+        }
+        if buf.ptr[i + 3] == needle {
+            return i + 3;
+        }
+        if buf.ptr[i + 4] == needle {
+            return i + 4;
+        }
+        if buf.ptr[i + 5] == needle {
+            return i + 5;
+        }
+        if buf.ptr[i + 6] == needle {
+            return i + 6;
+        }
+        if buf.ptr[i + 7] == needle {
+            return i + 7;
+        }
+        i = i + 8;
+    }
+    while i < end {
+        if buf.ptr[i] == needle {
+            return i;
+        }
+        i = i + 1;
+    }
+    return end;
+}
+
+fn http_header_kind_from_lower_name(name: &byte, name_len: usize) i32 {
+    if name_len == 14 {
+        if name[0] == 'c' as byte && name[1] == 'o' as byte && name[2] == 'n' as byte &&
+           name[3] == 't' as byte && name[4] == 'e' as byte && name[5] == 'n' as byte &&
+           name[6] == 't' as byte && name[7] == '-' as byte && name[8] == 'l' as byte &&
+           name[9] == 'e' as byte && name[10] == 'n' as byte && name[11] == 'g' as byte &&
+           name[12] == 't' as byte && name[13] == 'h' as byte {
+            return HEADER_KIND_CONTENT_LENGTH;
+        }
+    }
+    if name_len == 10 {
+        if name[0] == 'c' as byte && name[1] == 'o' as byte && name[2] == 'n' as byte &&
+           name[3] == 'n' as byte && name[4] == 'e' as byte && name[5] == 'c' as byte &&
+           name[6] == 't' as byte && name[7] == 'i' as byte && name[8] == 'o' as byte &&
+           name[9] == 'n' as byte {
+            return HEADER_KIND_CONNECTION;
+        }
+    }
+    if name_len == 17 {
+        if name[0] == 't' as byte && name[1] == 'r' as byte && name[2] == 'a' as byte &&
+           name[3] == 'n' as byte && name[4] == 's' as byte && name[5] == 'f' as byte &&
+           name[6] == 'e' as byte && name[7] == 'r' as byte && name[8] == '-' as byte &&
+           name[9] == 'e' as byte && name[10] == 'n' as byte && name[11] == 'c' as byte &&
+           name[12] == 'o' as byte && name[13] == 'd' as byte && name[14] == 'i' as byte &&
+           name[15] == 'n' as byte && name[16] == 'g' as byte {
+            return HEADER_KIND_TRANSFER_ENCODING;
+        }
+    }
+    if name_len == 12 {
+        if name[0] == 'c' as byte && name[1] == 'o' as byte && name[2] == 'n' as byte &&
+           name[3] == 't' as byte && name[4] == 'e' as byte && name[5] == 'n' as byte &&
+           name[6] == 't' as byte && name[7] == '-' as byte && name[8] == 't' as byte &&
+           name[9] == 'y' as byte && name[10] == 'p' as byte && name[11] == 'e' as byte {
+            return HEADER_KIND_CONTENT_TYPE;
+        }
+    }
+    if name_len == 4 {
+        if name[0] == 'h' as byte && name[1] == 'o' as byte && name[2] == 's' as byte && name[3] == 't' as byte {
+            return HEADER_KIND_HOST;
+        }
+    }
+    if name_len == 13 {
+        if name[0] == 'a' as byte && name[1] == 'u' as byte && name[2] == 't' as byte &&
+           name[3] == 'h' as byte && name[4] == 'o' as byte && name[5] == 'r' as byte &&
+           name[6] == 'i' as byte && name[7] == 'z' as byte && name[8] == 'a' as byte &&
+           name[9] == 't' as byte && name[10] == 'i' as byte && name[11] == 'o' as byte &&
+           name[12] == 'n' as byte {
+            return HEADER_KIND_AUTHORIZATION;
+        }
+    }
+    return HEADER_KIND_OTHER;
+}
+
 fn find_crlf(buf: &[byte], start: usize) !usize {
     var i: usize = start;
+    while i + 8 <= buf.len {
+        if buf.ptr[i] == 13 as byte && buf.ptr[i + 1] == 10 as byte { return i; }
+        if buf.ptr[i + 1] == 13 as byte && buf.ptr[i + 2] == 10 as byte { return i + 1; }
+        if buf.ptr[i + 2] == 13 as byte && buf.ptr[i + 3] == 10 as byte { return i + 2; }
+        if buf.ptr[i + 3] == 13 as byte && buf.ptr[i + 4] == 10 as byte { return i + 3; }
+        if buf.ptr[i + 4] == 13 as byte && buf.ptr[i + 5] == 10 as byte { return i + 4; }
+        if buf.ptr[i + 5] == 13 as byte && buf.ptr[i + 6] == 10 as byte { return i + 5; }
+        if buf.ptr[i + 6] == 13 as byte && buf.ptr[i + 7] == 10 as byte { return i + 6; }
+        i = i + 7;
+    }
     while i + 1 < buf.len {
         if buf.ptr[i] == 13 as byte && buf.ptr[i + 1] == 10 as byte {
             return i;
@@ -52,6 +166,16 @@ fn find_crlf(buf: &[byte], start: usize) !usize {
 /// 与 `find_crlf` 相同，但在缓冲区末尾仍未见到完整 `\r\n` 时返回 `IncompleteRequest`（流式读入更多字节后再解析）。
 fn find_crlf_or_incomplete(buf: &[byte], start: usize) !usize {
     var i: usize = start;
+    while i + 8 <= buf.len {
+        if buf.ptr[i] == 13 as byte && buf.ptr[i + 1] == 10 as byte { return i; }
+        if buf.ptr[i + 1] == 13 as byte && buf.ptr[i + 2] == 10 as byte { return i + 1; }
+        if buf.ptr[i + 2] == 13 as byte && buf.ptr[i + 3] == 10 as byte { return i + 2; }
+        if buf.ptr[i + 3] == 13 as byte && buf.ptr[i + 4] == 10 as byte { return i + 3; }
+        if buf.ptr[i + 4] == 13 as byte && buf.ptr[i + 5] == 10 as byte { return i + 4; }
+        if buf.ptr[i + 5] == 13 as byte && buf.ptr[i + 6] == 10 as byte { return i + 5; }
+        if buf.ptr[i + 6] == 13 as byte && buf.ptr[i + 7] == 10 as byte { return i + 6; }
+        i = i + 7;
+    }
     while i + 1 < buf.len {
         if buf.ptr[i] == 13 as byte && buf.ptr[i + 1] == 10 as byte {
             return i;
@@ -91,17 +215,11 @@ fn parse_http_version_minor_is_one(buf: &[byte], ver_start: usize, line_end: usi
 }
 
 fn parse_first_line(buf: &[byte], line_start: usize, line_end: usize) !FirstLineParts {
-    var sp1: usize = line_start;
-    while sp1 < line_end && buf.ptr[sp1] != ' ' as byte {
-        sp1 = sp1 + 1;
-    }
+    const sp1: usize = http_scan_byte_8(buf, line_start, line_end, ' ' as byte);
     if sp1 >= line_end {
         return error.InvalidRequest;
     }
-    var sp2: usize = sp1 + 1;
-    while sp2 < line_end && buf.ptr[sp2] != ' ' as byte {
-        sp2 = sp2 + 1;
-    }
+    const sp2: usize = http_scan_byte_8(buf, sp1 + 1, line_end, ' ' as byte);
     if sp2 >= line_end {
         return error.InvalidRequest;
     }
@@ -179,16 +297,12 @@ fn set_path_and_query(buf: &[byte], uri_start: usize, uri_len: usize, req: &Requ
     var q_start: usize = 0;
     var q_end: usize = 0;
     var q_found: i32 = 0;
-    var j: usize = 0;
-    while j < uri_len {
-        if buf.ptr[uri_start + j] == '?' as byte {
-            path_len = j;
-            q_start = uri_start + j + 1;
-            q_end = uri_start + uri_len;
-            q_found = 1;
-            break;
-        }
-        j = j + 1;
+    const qm: usize = http_scan_byte_8(buf, uri_start, uri_start + uri_len, '?' as byte);
+    if qm < uri_start + uri_len {
+        path_len = qm - uri_start;
+        q_start = qm + 1;
+        q_end = uri_start + uri_len;
+        q_found = 1;
     }
     if path_len == 0 {
         return error.InvalidRequest;
@@ -212,15 +326,12 @@ fn set_path_and_query(buf: &[byte], uri_start: usize, uri_len: usize, req: &Requ
 
 fn parse_one_header_line(buf: &[byte], line_start: usize, line_end: usize, req: &Request) !void {
     const header_cap: i32 = @len(req.headers) as i32;
-    var colon: usize = line_start;
-    while colon < line_end && buf.ptr[colon] != ':' as byte {
-        colon = colon + 1;
-    }
+    const colon: usize = http_scan_byte_8(buf, line_start, line_end, ':' as byte);
     if colon >= line_end {
         return error.InvalidRequest;
     }
     const name_len: usize = colon - line_start;
-    if name_len > @len(req.headers) as usize {
+    if name_len > @len(req.headers[0].name) {
         return error.HeaderTooLarge;
     }
     var va: usize = colon + 1;
@@ -228,7 +339,7 @@ fn parse_one_header_line(buf: &[byte], line_start: usize, line_end: usize, req: 
         va = va + 1;
     }
     const value_len: usize = line_end - va;
-    if value_len > @len(req.headers) as usize {
+    if value_len > @len(req.headers[0].value) {
         return error.HeaderTooLarge;
     }
     if req.header_count >= header_cap {
@@ -237,11 +348,16 @@ fn parse_one_header_line(buf: &[byte], line_start: usize, line_end: usize, req: 
     const hi: i32 = req.header_count;
     if hi >= 0 && hi < header_cap {
         var ni: usize = 0;
+        var name_hash: u64 = http_header_hash_init();
         while ni < name_len && ni < @len(req.headers[hi].name) {
-            req.headers[hi].name[ni] = buf.ptr[line_start + ni];
+            const lower: byte = http_byte_to_lower(buf.ptr[line_start + ni]);
+            req.headers[hi].name[ni] = lower;
+            name_hash = http_header_hash_push(name_hash, lower);
             ni = ni + 1;
         }
         req.headers[hi].name_len = name_len;
+        req.headers[hi].name_hash = name_hash;
+        req.headers[hi].name_kind = http_header_kind_from_lower_name(&req.headers[hi].name[0], name_len);
         var vi: usize = 0;
         while vi < value_len && vi < @len(req.headers[hi].value) {
             req.headers[hi].value[vi] = buf.ptr[va + vi];
@@ -255,18 +371,7 @@ fn parse_one_header_line(buf: &[byte], line_start: usize, line_end: usize, req: 
 }
 
 fn header_name_is_content_length(h: &Header) bool {
-    const exp: &[byte] = &"Content-Length"[0: 14];
-    if h.name_len != exp.len {
-        return false;
-    }
-    var i: usize = 0;
-    while i < exp.len {
-        if http_byte_to_lower(h.name[i]) != http_byte_to_lower(exp.ptr[i]) {
-            return false;
-        }
-        i = i + 1;
-    }
-    return true;
+    return h.name_kind == HEADER_KIND_CONTENT_LENGTH;
 }
 
 fn parse_decimal_from_header_value(h: &Header) usize {
@@ -287,21 +392,138 @@ fn parse_decimal_from_header_value(h: &Header) usize {
     return n;
 }
 
-fn find_content_length(req: &Request) usize {
+fn find_content_length_info(req: &Request) ContentLengthInfo {
     const header_cap: i32 = @len(req.headers) as i32;
     var hi: i32 = 0;
     while hi < req.header_count && hi >= 0 && hi < header_cap {
         const h: &Header = &req.headers[hi];
         if header_name_is_content_length(h) {
-            return parse_decimal_from_header_value(h);
+            return ContentLengthInfo{ found: true, value: parse_decimal_from_header_value(h) };
         }
         hi = hi + 1;
     }
-    return 0;
+    return ContentLengthInfo{ found: false, value: 0 };
 }
 
-/// 解析 HTTP/1.1 请求；`request.body` 为指向 `buf` 内部子切片；`consumed` 为本请求在 `buf` 中占用字节数。
-export fn http_parse_request(buf: &[byte]) !ParseResult {
+fn http_hex_digit_value(c: byte) i32 {
+    if c >= '0' as byte && c <= '9' as byte {
+        return (c as i32) - ('0' as i32);
+    }
+    if c >= 'a' as byte && c <= 'f' as byte {
+        return 10 + (c as i32) - ('a' as i32);
+    }
+    if c >= 'A' as byte && c <= 'F' as byte {
+        return 10 + (c as i32) - ('A' as i32);
+    }
+    return -1;
+}
+
+fn parse_chunk_size_line(buf: &[byte], line_start: usize, line_end: usize) !usize {
+    var value: usize = 0;
+    var saw_digit: bool = false;
+    var i: usize = line_start;
+    while i < line_end {
+        const c: byte = buf.ptr[i];
+        if c == ';' as byte || c == ' ' as byte || c == 9 as byte {
+            break;
+        }
+        const digit: i32 = http_hex_digit_value(c);
+        if digit < 0 {
+            return error.InvalidRequest;
+        }
+        saw_digit = true;
+        value = value * 16 + (digit as usize);
+        if value > MAX_BODY_SIZE as usize {
+            return error.PayloadTooLarge;
+        }
+        i = i + 1;
+    }
+    if !saw_digit {
+        return error.InvalidRequest;
+    }
+    return value;
+}
+
+fn find_chunked_body_wire_len(buf: &[byte], body_start: usize, decoded_len_out: &usize) !usize {
+    var pos: usize = body_start;
+    var decoded_len: usize = 0;
+    while true {
+        const line_end: usize = try find_crlf_or_incomplete(buf, pos);
+        const chunk_size: usize = try parse_chunk_size_line(buf, pos, line_end);
+        pos = line_end + 2;
+        if chunk_size == 0 {
+            while true {
+                const trailer_start: usize = pos;
+                const trailer_end: usize = try find_crlf_or_incomplete(buf, pos);
+                pos = trailer_end + 2;
+                if trailer_end == trailer_start {
+                    *decoded_len_out = decoded_len;
+                    return pos - body_start;
+                }
+            }
+        }
+        if decoded_len + chunk_size > MAX_BODY_SIZE as usize {
+            return error.PayloadTooLarge;
+        }
+        if pos + chunk_size + 2 > buf.len {
+            return error.IncompleteRequest;
+        }
+        if buf.ptr[pos + chunk_size] != 13 as byte || buf.ptr[pos + chunk_size + 1] != 10 as byte {
+            return error.InvalidRequest;
+        }
+        decoded_len = decoded_len + chunk_size;
+        pos = pos + chunk_size + 2;
+    }
+}
+
+export fn http_decode_chunked_body_inplace(pr: &ParseResult) !usize {
+    if pr == null {
+        return error.InvalidRequest;
+    }
+    if !request_has_chunked_transfer_encoding(&pr.request) {
+        return pr.request.body.len;
+    }
+    const wire: &[byte] = pr.request.body;
+    const body_base: &byte = wire.ptr as &byte;
+    var src: usize = 0;
+    var dst: usize = 0;
+    while true {
+        const line_end: usize = try find_crlf(wire, src);
+        const chunk_size: usize = try parse_chunk_size_line(wire, src, line_end);
+        src = line_end + 2;
+        if chunk_size == 0 {
+            while true {
+                const trailer_start: usize = src;
+                const trailer_end: usize = try find_crlf(wire, src);
+                src = trailer_end + 2;
+                if trailer_end == trailer_start {
+                    pr.request.body = body_base[0: dst];
+                    return dst;
+                }
+            }
+        }
+        if src + chunk_size + 2 > wire.len {
+            return error.IncompleteRequest;
+        }
+        if wire.ptr[src + chunk_size] != 13 as byte || wire.ptr[src + chunk_size + 1] != 10 as byte {
+            return error.InvalidRequest;
+        }
+        var i: usize = 0;
+        while i < chunk_size {
+            body_base[dst + i] = wire.ptr[src + i];
+            i = i + 1;
+        }
+        dst = dst + chunk_size;
+        src = src + chunk_size + 2;
+    }
+}
+
+/// 解析 HTTP/1.1 请求并直接填充到调用方提供的输出槽。
+/// `request.body` 为指向 `buf` 内部子切片；`consumed` 为本请求在 `buf` 中占用字节数。
+export fn http_parse_request_into(buf: &[byte], out: &ParseResult) !void {
+    if out == null {
+        return error.InvalidRequest;
+    }
     if buf.len == 0 {
         return error.IncompleteRequest;
     }
@@ -309,22 +531,15 @@ export fn http_parse_request(buf: &[byte]) !ParseResult {
     const fl: FirstLineParts = try parse_first_line(buf, 0, line1_end);
     const method_slice: &[byte] = buf[fl.method_start: fl.method_len];
     const method: Method = try parse_method_bytes(&method_slice);
-    var req: Request = Request{
-        method: Method.GET,
-        http11: true,
-        path: [],
-        path_len: 0,
-        path_params: [],
-        path_param_count: 0,
-        query: [],
-        query_count: 0,
-        headers: [],
-        header_count: 0,
-        body: buf[0: 0],
-    };
+    const req: &Request = &out.request;
     req.method = method;
     req.http11 = fl.http11;
-    try set_path_and_query(buf, fl.uri_start, fl.uri_len, &req);
+    req.path_len = 0;
+    req.path_param_count = 0;
+    req.query_count = 0;
+    req.header_count = 0;
+    req.body = buf[0: 0];
+    try set_path_and_query(buf, fl.uri_start, fl.uri_len, req);
     var pos: usize = line1_end + 2;
     while pos < buf.len {
         const le: usize = try find_crlf_or_incomplete(buf, pos);
@@ -337,20 +552,52 @@ export fn http_parse_request(buf: &[byte]) !ParseResult {
         if line_len > max_line {
             return error.HeaderTooLarge;
         }
-        try parse_one_header_line(buf, pos, le, &req);
+        try parse_one_header_line(buf, pos, le, req);
         pos = le + 2;
     }
     const body_start: usize = pos;
-    const content_length: usize = find_content_length(&req);
-    if content_length > MAX_BODY_SIZE as usize {
+    const content_length: ContentLengthInfo = find_content_length_info(req);
+    const chunked: bool = request_has_chunked_transfer_encoding(req);
+    if chunked && content_length.found {
+        return error.InvalidRequest;
+    }
+    if chunked {
+        var decoded_len: usize = 0;
+        const wire_len: usize = try find_chunked_body_wire_len(buf, body_start, &decoded_len);
+        req.body = buf[body_start: wire_len];
+        out.consumed = body_start + wire_len;
+        return;
+    }
+    if content_length.value > MAX_BODY_SIZE as usize {
         return error.PayloadTooLarge;
     }
-    if body_start + content_length > buf.len {
+    if body_start + content_length.value > buf.len {
         return error.IncompleteRequest;
     }
-    req.body = buf[body_start: content_length];
-    const consumed: usize = body_start + content_length;
-    return ParseResult{ request: req, consumed: consumed };
+    req.body = buf[body_start: content_length.value];
+    out.consumed = body_start + content_length.value;
+}
+
+/// 解析 HTTP/1.1 请求；`request.body` 为指向 `buf` 内部子切片；`consumed` 为本请求在 `buf` 中占用字节数。
+export fn http_parse_request(buf: &[byte]) !ParseResult {
+    var out: ParseResult = ParseResult{
+        request: Request{
+            method: Method.GET,
+            http11: true,
+            path: [],
+            path_len: 0,
+            path_params: [],
+            path_param_count: 0,
+            query: [],
+            query_count: 0,
+            headers: [],
+            header_count: 0,
+            body: buf[0: 0],
+        },
+        consumed: 0,
+    };
+    try http_parse_request_into(buf, &out);
+    return out;
 }
 
 fn strip_prefix_ignore_case(hay: &[byte], prefix: &[byte]) bool {

@@ -1,0 +1,47 @@
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.fmt.tokenizer.Token;
+use std.fmt.tokenizer.TokenType;
+use std.fmt.tokenizer.tokenize;
+use std.fmt.comments.Comment;
+use std.fmt.comments.CommentKind;
+use std.fmt.comments.collect_comments;
+
+fn test_collect_comments_line_and_block() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "// a\n/* b */\nfn add(a,b){return a+b;}" as &[byte];
+    const tokens: &[Token] = try tokenize(&a, src);
+    const comments: &[Comment] = collect_comments(&a, tokens);
+
+    try assert_eq_i32(comments.len as i32, 2);
+    try assert_eq_i32(comments[0].kind as i32, CommentKind.COMMENT_LINE as i32);
+    try assert_eq_i32(comments[1].kind as i32, CommentKind.COMMENT_BLOCK as i32);
+}
+
+fn test_tokenizer_emits_explicit_comment_tokens() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "// a\nfn x(){}/* z */" as &[byte];
+    const tokens: &[Token] = try tokenize(&a, src);
+
+    try assert_eq_i32(tokens[0].type as i32, TokenType.TOKEN_LINE_COMMENT as i32);
+    try assert_eq_i32(tokens[tokens.len - 1].type as i32, TokenType.TOKEN_BLOCK_COMMENT as i32);
+}
+
+export fn main() i32 {
+    test_suite_begin("fmt comment collection tests");
+    run_test("collect comments line and block", test_collect_comments_line_and_block);
+    run_test("tokenizer emits explicit comment tokens", test_tokenizer_emits_explicit_comment_tokens);
+    return test_suite_end();
+}

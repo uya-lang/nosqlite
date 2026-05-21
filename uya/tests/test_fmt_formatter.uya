@@ -1,0 +1,90 @@
+use std.runtime.entry;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.fmt.formatter.Formatter;
+use std.fmt.formatter.formatter_init;
+use std.fmt.formatter.formatter_write;
+use std.fmt.formatter.formatter_write_byte;
+use std.fmt.formatter.formatter_indent;
+use std.fmt.formatter.formatter_dedent;
+use std.fmt.formatter.formatter_write_indent;
+use std.fmt.formatter.formatter_newline;
+
+fn test_formatter_write_tracks_pos() !void {
+    var buf: [byte: 64] = [];
+    var f: Formatter = undefined;
+    formatter_init(&f, &buf[0], 64);
+
+    try formatter_write(&f, "hello" as &[byte]);
+
+    try assert_eq_i32(f.pos as i32, 5);
+    try assert_eq_i32(f.line as i32, 1);
+    try assert_eq_bool(f.at_line_start, false);
+}
+
+fn test_formatter_write_byte_tracks_line() !void {
+    var buf: [byte: 64] = [];
+    var f: Formatter = undefined;
+    formatter_init(&f, &buf[0], 64);
+
+    try formatter_write_byte(&f, '\n' as byte);
+
+    try assert_eq_i32(f.pos as i32, 1);
+    try assert_eq_i32(f.line as i32, 2);
+    try assert_eq_bool(f.at_line_start, true);
+}
+
+fn test_formatter_indent_and_dedent() !void {
+    var buf: [byte: 64] = [];
+    var f: Formatter = undefined;
+    formatter_init(&f, &buf[0], 64);
+
+    formatter_indent(&f);
+    formatter_indent(&f);
+    formatter_dedent(&f);
+
+    try assert_eq_i32(f.indent as i32, 1);
+}
+
+fn test_formatter_write_indent_writes_tabs() !void {
+    var buf: [byte: 64] = [];
+    var f: Formatter = undefined;
+    formatter_init(&f, &buf[0], 64);
+
+    formatter_indent(&f);
+    formatter_indent(&f);
+    try formatter_write_indent(&f);
+
+    try assert_eq_i32(f.pos as i32, 2);
+    try assert_eq_i32(buf[0] as i32, '\t' as i32);
+    try assert_eq_i32(buf[1] as i32, '\t' as i32);
+}
+
+fn test_formatter_newline_writes_indent() !void {
+    var buf: [byte: 64] = [];
+    var f: Formatter = undefined;
+    formatter_init(&f, &buf[0], 64);
+
+    formatter_indent(&f);
+    try formatter_write(&f, "x" as &[byte]);
+    try formatter_newline(&f);
+
+    try assert_eq_i32(f.line as i32, 2);
+    try assert_eq_i32(f.pos as i32, 3);
+    try assert_eq_i32(buf[0] as i32, 'x' as i32);
+    try assert_eq_i32(buf[1] as i32, '\n' as i32);
+    try assert_eq_i32(buf[2] as i32, '\t' as i32);
+}
+
+export fn main() i32 {
+    test_suite_begin("fmt formatter tests");
+    run_test("write tracks pos", test_formatter_write_tracks_pos);
+    run_test("write byte tracks line", test_formatter_write_byte_tracks_line);
+    run_test("indent dedent", test_formatter_indent_and_dedent);
+    run_test("write indent", test_formatter_write_indent_writes_tabs);
+    run_test("newline writes indent", test_formatter_newline_writes_indent);
+    return test_suite_end();
+}

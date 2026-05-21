@@ -21,6 +21,20 @@ dump_log_and_fail() {
     exit 1
 }
 
+assert_single_result_surface() {
+    local path="$1"
+    local expected="$2"
+    local count
+    grep -a -F -q "$expected" "$path" || dump_log_and_fail "未输出统一 result: $expected" "$path"
+    count="$(grep -a -c '^\[microapp loader\] payload result=' "$path" || true)"
+    if [ "$count" -ne 1 ]; then
+        dump_log_and_fail "payload result 行数量异常: $count" "$path"
+    fi
+    if grep -a -q '^\[microapp loader\] payload fault class=' "$path"; then
+        dump_log_and_fail "不应输出旧 fault 诊断面" "$path"
+    fi
+}
+
 UAPP_TMP_PATH="$UAPP_PATH" python3 - <<'PY'
 import os
 from hashlib import sha256
@@ -99,7 +113,7 @@ PY
 
 "$ROOT_DIR/bin/uya" run lib/std/runtime/microapp/loader_main.uya -- "$UAPP_PATH" >"$LOADER_LOG" 2>&1 || dump_log_and_fail "trap bridge loader run 失败" "$LOADER_LOG"
 
-grep -a -q '\[microapp loader\] payload result=validated bridge=trap target=rv32' "$LOADER_LOG" || dump_log_and_fail "loader 未输出 trap validated 结果" "$LOADER_LOG"
+assert_single_result_surface "$LOADER_LOG" "[microapp loader] payload result=validated bridge=trap target=rv32"
 grep -a -q '\[microapp loader\] trap bridge validated without native execution' "$LOADER_LOG" || dump_log_and_fail "loader 未解释 trap bridge 仅完成 validated" "$LOADER_LOG"
 grep -a -q '\[microapp loader\] done' "$LOADER_LOG" || dump_log_and_fail "trap bridge 路径未输出 done" "$LOADER_LOG"
 if grep -a -q '\[microapp loader\] no execution path' "$LOADER_LOG"; then

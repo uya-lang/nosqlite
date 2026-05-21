@@ -1,0 +1,13 @@
+// 预期编译失败：drop 只能由编译器在离开作用域时自动插入，不能手动调用
+
+struct S {
+  id: i32,
+  fn drop(self: S) void {
+  }
+}
+
+fn main() i32 {
+  const s: S = S{ id: 1 };
+  drop(s);
+  return 0;
+}

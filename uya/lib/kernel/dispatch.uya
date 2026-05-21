@@ -2,6 +2,7 @@
 // Spec: docs/microcontainer/syscall_abi.md §4
 
 use kernel.container;
+use kernel.capability;
 use kernel.errors;
 use kernel.mem;
 use kernel.paging;
@@ -89,6 +90,48 @@ export fn kernel_host_set_io_device_available(ctx: &KernelHostCtx, device_id: u3
     } else {
         ctx.io_available_devices = ctx.io_available_devices & ~bit;
     }
+}
+
+fn kernel_host_clear_io_policy(ctx: &KernelHostCtx, slot: u32) !void {
+    if slot >= 8u32 {
+        return error.InvalidState;
+    }
+    const allowed_devices: &u32 = kernel_host_io_devices_ref(ctx, slot);
+    const allowed_ops: &u32 = kernel_host_io_ops_ref(ctx, slot);
+    allowed_devices[0] = 0u32;
+    allowed_ops[0] = 0u32;
+}
+
+fn kernel_host_allow_io_basic_ops(ctx: &KernelHostCtx, slot: u32) !void {
+    try kernel_host_allow_io_op(ctx, slot, KERNEL_IO_OP_READ);
+    try kernel_host_allow_io_op(ctx, slot, KERNEL_IO_OP_WRITE);
+}
+
+fn kernel_host_apply_required_io_device(ctx: &KernelHostCtx, slot: u32, required_caps: u32, cap_bit: u32, device_id: u32) !void {
+    if (required_caps & cap_bit) == 0u32 {
+        return;
+    }
+    try kernel_host_allow_io_device(ctx, slot, device_id);
+    try kernel_host_set_io_device_available(ctx, device_id, 1u32);
+}
+
+/// 功能说明：将 `.uapp` 头部 `required_caps` 映射为当前槽位的 `SYS_IO` 设备与操作白名单。
+/// 参数：`ctx` — 宿主机上下文；`slot` — 容器槽位；`required_caps` — 镜像声明的能力位图。
+/// 返回：成功时无返回值；槽位非法或含未知能力位时返回错误。
+export fn kernel_host_apply_required_caps(ctx: &KernelHostCtx, slot: u32, required_caps: u32) !void {
+    if slot >= 8u32 {
+        return error.InvalidState;
+    }
+    try kernel_required_caps_validate(required_caps);
+    try kernel_host_clear_io_policy(ctx, slot);
+    if required_caps == 0u32 {
+        return;
+    }
+
+    try kernel_host_allow_io_basic_ops(ctx, slot);
+    try kernel_host_apply_required_io_device(ctx, slot, required_caps, KERNEL_CAP_IO_UART, KERNEL_IO_DEVICE_UART);
+    try kernel_host_apply_required_io_device(ctx, slot, required_caps, KERNEL_CAP_IO_GPIO, KERNEL_IO_DEVICE_GPIO);
+    try kernel_host_apply_required_io_device(ctx, slot, required_caps, KERNEL_CAP_IO_TIMER, KERNEL_IO_DEVICE_TIMER);
 }
 
 fn kernel_host_mm_enabled(ctx: &KernelHostCtx) i32 {

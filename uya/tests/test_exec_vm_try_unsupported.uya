@@ -1,0 +1,10 @@
+fn may_fail() !i32 {
+    return 7;
+}
+
+export fn main() i32 {
+    const value: i32 = may_fail() catch {
+        return 1;
+    };
+    return value - 7;
+}

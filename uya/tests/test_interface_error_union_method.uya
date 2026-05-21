@@ -76,6 +76,55 @@ fn call_future_direct(f: Future<!i32>) !i32 {
     return error.PendingNotExpected;
 }
 
+fn side_effect_void() !void {
+    return;
+}
+
+fn fail_i32() !i32 {
+    return error.PendingNotExpected;
+}
+
+fn catch_with_inner_try_void() !i32 {
+    const value: i32 = fail_i32() catch |err| {
+        _ = err;
+        try side_effect_void();
+        return 55;
+    };
+    return value;
+}
+
+struct VoidRunner {
+    counter: FallibleCounter,
+    last: i32 = 0,
+
+    fn run(self: &Self) !void {
+        const value: i32 = try self.counter.next();
+        self.last = value;
+    }
+}
+
+interface GenericFallibleCounter<T> {
+    fn next(self: &Self) !T;
+}
+
+struct GenericCounter : GenericFallibleCounter<i32> {
+    value: i32,
+
+    fn next(self: &Self) !i32 {
+        return self.value;
+    }
+}
+
+struct GenericVoidRunner {
+    counter: GenericFallibleCounter<i32>,
+    last: i32 = 0,
+
+    fn run(self: &Self) !void {
+        const value: i32 = try self.counter.next();
+        self.last = value;
+    }
+}
+
 test "interface_method_return_error_union" {
     const counter: Counter = Counter{ value: 40 };
     const direct: i32 = try call_iface(counter);
@@ -93,4 +142,17 @@ test "interface_method_return_error_union" {
 
     const future_value: i32 = try call_future_direct(ImmediateReady{});
     try assert_eq_i32(future_value, 7);
+    try assert_eq_i32(try catch_with_inner_try_void(), 55);
+
+    var runner: VoidRunner = VoidRunner{
+        counter: Counter{ value: 99 },
+    };
+    try runner.run();
+    try assert_eq_i32(runner.last, 99);
+
+    var generic_runner: GenericVoidRunner = GenericVoidRunner{
+        counter: GenericCounter{ value: 123 },
+    };
+    try generic_runner.run();
+    try assert_eq_i32(generic_runner.last, 123);
 }

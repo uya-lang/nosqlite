@@ -1,0 +1,23 @@
+use std.runtime.entry;
+
+fn add_three(a: i32, b: i32, c: i32) i32 {
+    return a + b + c;
+}
+
+fn sum_to(n: i32) i32 {
+    if n <= 0 {
+        return 0;
+    }
+    return n + sum_to(n - 1);
+}
+
+export fn main() i32 {
+    const x: i32 = add_three(2, 3, 4);
+    const y: i32 = sum_to(5);
+    if x == 9 {
+        if y == 15 {
+            return 0;
+        }
+    }
+    return 1;
+}

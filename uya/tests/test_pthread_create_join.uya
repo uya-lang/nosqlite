@@ -1,0 +1,31 @@
+// test_pthread_create_join.uya - 从 test_pthread.uya 拆出的线程创建/回收用例
+
+use std.runtime.entry;
+use libc.pthread;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.test_pass;
+use std.testing.test_fail;
+use std.testing.expect;
+
+fn thread_start(arg: &void) &void {
+    return arg;
+}
+
+fn test_pthread_create_join() !void {
+    var th: pthread_t = pthread_t{};
+    try expect(pthread_create(&th, null as &const pthread_attr_t, &thread_start as &void, null) == 0);
+    try expect(pthread_join(&th, null as & &void) == 0);
+}
+
+export fn main() i32 {
+    test_suite_begin("pthread_create_join");
+
+    test_pthread_create_join() catch {
+        test_fail("pthread_create_join");
+        return test_suite_end();
+    };
+    test_pass("pthread_create_join");
+
+    return test_suite_end();
+}

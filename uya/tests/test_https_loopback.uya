@@ -2,9 +2,22 @@
 
 use tls.https;
 use tls.x509.cert;
+use std.async;
+use std.http.types;
+use std.http.uyagin;
 use libc.unistd;
 use libc.syscall;
 use tls.crypto.rsa;
+
+struct HttpsUyaginHandler : AsyncHandler {}
+
+HttpsUyaginHandler {
+    @async_fn
+    fn handle(self: &Self, ctx: &GinContext) Future<!i32> {
+        _ = self;
+        return try @await ctx.string(Status.OK, "hello uyagin tls");
+    }
+}
 
 fn response_has_subslice(hay: &const byte, hay_len: usize, needle: &[byte]) bool {
     if needle.len == 0 || hay_len < needle.len {
@@ -114,7 +127,7 @@ export fn main() i32 {
 
     const pid: i32 = fork();
     if pid == 0 {
-        var resp: HttpsResponse = https_get(&host[0], 9, srv.port, &"/"[0: 1]) catch {
+        var resp: HttpsResponse = https_get_insecure(&host[0], 9, srv.port, &"/"[0: 1]) catch {
             _exit(2);
             return 2;
         };
@@ -142,6 +155,46 @@ export fn main() i32 {
     };
     if ((st >> 8) & 0xff) != 0 {
         return 10 + ((st >> 8) & 0xff);
+    }
+
+    var engine: Engine = uyagin_new();
+    var h: HttpsUyaginHandler = HttpsUyaginHandler{};
+    const handler: AsyncHandler = h;
+    engine.GET("/", handler) catch {
+        return 15;
+    };
+    var srv2: HttpsServer = https_server_listen(&host[0], 9, 0) catch {
+        return 16;
+    };
+    https_server_set_rsa_identity(&srv2, &host[0], 9, &host[0], 9, &host[0], 9, &leaf, &key);
+    const pid2: i32 = fork();
+    if pid2 == 0 {
+        var resp2: HttpsResponse = https_get_insecure(&host[0], 9, srv2.port, &"/"[0: 1]) catch {
+            _exit(5);
+            return 5;
+        };
+        if resp2.status != 200 {
+            _exit(6);
+            return 6;
+        }
+        if !response_has_subslice(&resp2.response[0], resp2.response_len, &"hello uyagin tls"[0: 16]) {
+            _exit(7);
+            return 7;
+        }
+        _exit(0);
+        return 0;
+    }
+    https_server_serve_uyagin_once(&srv2, &engine) catch {
+        https_server_close(&srv2);
+        return 17;
+    };
+    https_server_close(&srv2);
+    st = 0;
+    _ = sys_waitpid(pid2, &st, 0) catch {
+        return 18;
+    };
+    if ((st >> 8) & 0xff) != 0 {
+        return 20 + ((st >> 8) & 0xff);
     }
     return 0;
 }

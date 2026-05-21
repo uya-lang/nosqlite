@@ -2,7 +2,7 @@
 
 > **用途**：指导模型编写可编译的 Uya，减少与其它语言混淆与臆造语法。  
 > **自包含**：下文已写入常用规则；**不**再依赖任何外部说明文件。  
-> **语言版本**：**0.49.45** · 更新 **2026-04-22**（与 [uya.md](./uya.md) 主规范同步；补充 `@c_import` 顶层构建指令、目录递归导入 `*.c`、`.cimports.sh` sidecar 语义）
+> **语言版本**：**0.49.50** · 更新 **2026-05-14**（与 [uya.md](./uya.md) 主规范同步；新增 `@error_name(err)` 返回语言级错误名字符串，未知或 `@syscall` 错误回退 `UnknownError`）
 
 ---
 
@@ -76,9 +76,9 @@
   ```
 - **裸函数**：`@naked_fn` — 无标准序言/尾声，仅用于极底层场景，勿默认使用
 - **宏编译期**：`@mc_eval` `@mc_type` `@mc_ast` `@mc_code` `@mc_error` `@mc_get_env` `@mc_source`
-- **系统调用**：`@syscall(nr, arg1, …, arg6)`
+- **系统调用**：`@syscall(nr, arg1, …, arg6)`。若 `std.target_os == .tos_unknown`（如 Web / emcc hosted smoke），不要假设存在原生 Linux syscall backend；优先复用 `libc.sys_*` 与标准库现有封装
 - **指针与整数**：`@ptr_from_usize` `@usize_from_ptr`
-- **错误**：`@error_id(expr)` → `u32`
+- **错误**：`@error_id(expr)` → `u32`；`@error_name(expr)` → `*byte`
 - **调试打印**：`@print` `@println` — 可用于整数、浮点、`bool`、双引号字面量；**`byte` / `u8` / `i8`** 的 **`[T:N]`**、**`&[T]`**、**`*byte`** 等可按 C 字符串 **`%s`** 打印时，缓冲区须以 **`\0`** 结尾。**不要**写成 **`@println("a", x)`** 等多实参 C `printf` 风格；多段内容用**字符串插值** **`@println("a ${x}")`** 等
 - **C 构建导入**：`@c_import("path"[,"cflags"[,"ldflags"]]);` —— **顶层构建指令**，不是表达式函数。首参数可指向**单个 `.c` 文件**，或一个目录；目录模式会**递归收集全部 `*.c`**。`cflags` 只作用于该导入展开出的 C 文件，`ldflags` 在最终链接阶段聚合。若输出为单文件 `app.c`，编译器会额外生成 `app.cimports.sh`；若走 split-C / `--split-c-dir` 路径，则由 Makefile 直接处理导入的 C object。**不要**把 `@c_import(...)` 写进表达式位置、函数体内、结构体字段初始化里
 - **内联汇编**：`@asm { "模板"(输入…, -> 输出…); }`；多条指令写多个模板行。**`clobbers = [...]`** 写在 **`@asm { ... }` 闭合 `}` 之后**（若需要）。**输出变量必须在块外先声明**；**FFI 指针 `*T` 不能作为 asm 操作数**，须先转为 `&T` / `&const T` 等。指令字符串与寄存器名**随目标平台变化**，勿照搬单一体系结构示例当通用语法
@@ -220,6 +220,7 @@ errdefer { rollback(); }
 ## 13. 结构体、接口、联合体（提要）
 
 - **结构体**：`struct S { fields }`；字面量 **`S{ f: v, ... }`**；方法 `fn meth(self: &Self, ...) ...`；可实现 `struct S : I { ... }`，或在 **`S { ... }`** 块追加方法 / `drop`
+- **`drop` 特例**：只能写成 **`fn drop(self: T) void`**；它是 RAII 特殊方法，**只能由编译器在离开作用域时自动插入**，不要生成 **`drop(x)`**、**`x.drop()`**、**`T.drop(x)`**
 - **接口**：胖指针（vtable + 数据）；通过接口值调用为动态派发
 - **`union`**：标签联合体，**`match`** 穷尽变体；**`extern union`**：与 C `union` 布局一致，**无** `match`
 
@@ -284,7 +285,7 @@ export mc twice(x: expr) expr { ${x} + ${x}; }
 | `"a" ++ "b"`、`@println(... ++ ...)` | **插值** `"${a}${b}"` 或定长缓冲/格式化 API；**无** `++` 拼串 |
 | `if x is i32`、`if result is T` | **无**「`is` 类型分支」；用 **`match`**、**`catch`** 或显式比较 |
 | `try @await` 后再假设变量仍是 `!T` 并做类型判断 | **`try` 已剥离错误联合**；失败则不会执行到后续赋值，成功则绑定为 **`T`** |
-| `fn foo(err: error)` 把 `error` 当通用类型 | 用 **`!T`**、**`catch |e| { ... }`**、**`@error_id`**、**`match`** 等既有范式；**不要**臆造与 `i32` 并列的 **`error` 形参类型** |
+| `fn foo(err: error)` 把 `error` 当通用类型 | 用 **`!T`**、**`catch |e| { ... }`**、**`@error_id`**、**`@error_name`**、**`match`** 等既有范式；**不要**臆造与 `i32` 并列的 **`error` 形参类型** |
 | **`block_on(async_fn())`** 而 `async_fn` 返回 **`!Future<T>`** | 先 **`const f: Future<T> = try async_fn();`** 再 **`block_on_plain<T>(f)`**；或把异步函数改为返回 **`Future<!T>`**，用 **`block_on<T>(f)`** 得 **`!T`**（见 §4） |
 | `@println("a", x)`、`@println("e", err)` | **`@println("a ${x}")`** 等插值，或分多次 **`@println`** |
 | `export mc m(x: expr) expr { ${x} + 1 }` 体末无 **`;`** | **`export mc m(x: expr) expr { ${x} + 1; }`** — `expr` 宏体展开行**末尾分号硬性写上**（见 §16） |

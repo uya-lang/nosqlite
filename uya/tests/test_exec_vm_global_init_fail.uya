@@ -1,0 +1,10 @@
+fn fail_div(x: i32) i32 {
+    return 1 / x;
+}
+
+var boom: i32 = fail_div(0);
+
+export fn main() i32 {
+    @println("SHOULD_NOT_RUN");
+    return 0;
+}

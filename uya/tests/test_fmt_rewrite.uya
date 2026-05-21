@@ -1,0 +1,78 @@
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.fmt.rewrite.RewriteRule;
+use std.fmt.rewrite.parse_rewrite_rule;
+use std.fmt.rewrite.apply_rewrite_text;
+
+fn index_of(haystack: &[byte], needle: &[byte]) i32 {
+    if needle.len == 0 || haystack.len < needle.len {
+        return -1;
+    }
+    var i: usize = 0;
+    while i + needle.len <= haystack.len {
+        var ok: bool = true;
+        var j: usize = 0;
+        while j < needle.len {
+            if haystack.ptr[i + j] != needle.ptr[j] {
+                ok = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if ok {
+            return i as i32;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn test_parse_rewrite_rule() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const rule: RewriteRule = try parse_rewrite_rule(&a, "foo.bar -> bar" as &[byte]);
+    try assert_eq_i32(rule.from.len as i32, 7);
+    try assert_eq_i32(rule.to.len as i32, 3);
+}
+
+fn test_apply_rewrite_text() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const rule: RewriteRule = try parse_rewrite_rule(&a, "foo.bar -> bar" as &[byte]);
+    const src: &[byte] = "x = foo.bar;\nreturn foo.bar;\n" as &[byte];
+    const out: &[byte] = try apply_rewrite_text(&a, src, rule);
+
+    try assert_eq_i32(index_of(out, "x = bar;\nreturn bar;\n" as &[byte]), 0);
+}
+
+fn test_apply_rewrite_text_idempotent() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "x = foo.bar;\n" as &[byte];
+    const rule1: RewriteRule = try parse_rewrite_rule(&a, "foo.bar -> bar" as &[byte]);
+    const out1: &[byte] = try apply_rewrite_text(&a, src, rule1);
+    const rule2: RewriteRule = try parse_rewrite_rule(&a, "foo.bar -> bar" as &[byte]);
+    const out2: &[byte] = try apply_rewrite_text(&a, out1, rule2);
+
+    try assert_eq_i32(index_of(out1, out2), 0);
+    try assert_eq_i32(out1.len as i32, out2.len as i32);
+}
+
+export fn main() i32 {
+    test_suite_begin("fmt rewrite tests");
+    run_test("parse rewrite rule", test_parse_rewrite_rule);
+    run_test("apply rewrite text", test_apply_rewrite_text);
+    run_test("apply rewrite text idempotent", test_apply_rewrite_text_idempotent);
+    return test_suite_end();
+}

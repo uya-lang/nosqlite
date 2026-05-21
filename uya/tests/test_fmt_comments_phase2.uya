@@ -1,0 +1,104 @@
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.fmt.positions.Position;
+use std.fmt.positions.Span;
+use std.fmt.positions.span_before;
+use std.fmt.positions.span_after;
+use std.fmt.positions.span_contains;
+use std.fmt.comments.Comment;
+use std.fmt.comments.CommentKind;
+use std.fmt.comments.CommentGroup;
+use std.fmt.fmt.format;
+
+fn contains_bytes(haystack: &[byte], needle: &[byte]) bool {
+    if needle.len == 0 {
+        return true;
+    }
+    if haystack.len < needle.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i + needle.len <= haystack.len {
+        var ok: bool = true;
+        var j: usize = 0;
+        while j < needle.len {
+            if haystack.ptr[i + j] != needle.ptr[j] {
+                ok = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if ok {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn test_span_helpers() !void {
+    const a: Span = Span {
+        start: Position { offset: 0, line: 1, column: 1 },
+        end: Position { offset: 5, line: 1, column: 6 },
+    };
+    const b: Span = Span {
+        start: Position { offset: 6, line: 1, column: 7 },
+        end: Position { offset: 10, line: 1, column: 11 },
+    };
+    const c: Span = Span {
+        start: Position { offset: 1, line: 1, column: 2 },
+        end: Position { offset: 3, line: 1, column: 4 },
+    };
+
+    try assert_eq_bool(span_before(a, b), true);
+    try assert_eq_bool(span_after(b, a), true);
+    try assert_eq_bool(span_contains(a, c), true);
+}
+
+fn test_comment_model() !void {
+    const c: Comment = Comment {
+        kind: CommentKind.COMMENT_LINE,
+        text: "// hello" as &[byte],
+        span: Span {
+            start: Position { offset: 0, line: 1, column: 1 },
+            end: Position { offset: 8, line: 1, column: 9 },
+        },
+    };
+    var arr: [Comment: 1] = [];
+    arr[0] = c;
+    const g: CommentGroup = CommentGroup {
+        comments: &arr[0],
+        count: 1,
+    };
+
+    try assert_eq_i32(g.count as i32, 1);
+    try assert_eq_i32(g.comments[0].kind as i32, CommentKind.COMMENT_LINE as i32);
+}
+
+fn test_format_preserves_mixed_comments() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "// doc a\nfn a(){return 1;}\n/* mid */\n// doc b\nfn b(){return 2; // trailing\n}" as &[byte];
+    const out: &[byte] = try format(&a, src);
+
+    try assert_eq_i32(contains_bytes(out, "// doc a" as &[byte]) as i32, true as i32);
+    try assert_eq_i32(contains_bytes(out, "/* mid */" as &[byte]) as i32, true as i32);
+    try assert_eq_i32(contains_bytes(out, "// doc b" as &[byte]) as i32, true as i32);
+    try assert_eq_i32(contains_bytes(out, "// trailing" as &[byte]) as i32, true as i32);
+}
+
+export fn main() i32 {
+    test_suite_begin("fmt comments phase2 tests");
+    run_test("span helpers", test_span_helpers);
+    run_test("comment model", test_comment_model);
+    run_test("format preserves mixed comments", test_format_preserves_mixed_comments);
+    return test_suite_end();
+}

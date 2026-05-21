@@ -1,0 +1,64 @@
+use std.runtime.entry;
+
+use libc.FILE;
+use libc.fclose;
+use libc.fgets;
+use libc.fopen;
+use libc.fputs;
+use libc.free;
+use libc.malloc;
+use libc.printf;
+use libc.strcmp;
+
+export fn main() i32 {
+    const path: &const byte = "/uya_emcc_smoke.txt\0";
+    const payload: &const byte = "uya-emcc-payload\0";
+
+    const ptr: *byte = malloc(64usize);
+    if ptr == null {
+        printf("MALLOC_FAIL\n\0" as &const byte);
+        return 2;
+    }
+    free(ptr);
+
+    const writer: &FILE = fopen(path, "w\0" as &const byte);
+    if writer == null {
+        printf("OPEN_W_FAIL\n\0" as &const byte);
+        return 3;
+    }
+    if fputs(payload, writer) < 0 {
+        _ = fclose(writer);
+        printf("WRITE_FAIL\n\0" as &const byte);
+        return 4;
+    }
+    if fclose(writer) != 0 {
+        printf("CLOSE_W_FAIL\n\0" as &const byte);
+        return 5;
+    }
+
+    const reader: &FILE = fopen(path, "r\0" as &const byte);
+    if reader == null {
+        printf("OPEN_R_FAIL\n\0" as &const byte);
+        return 6;
+    }
+
+    var buf: [byte: 64] = [];
+    const line: &byte = fgets(&buf[0] as &byte, 64, reader);
+    if line == null as &byte {
+        _ = fclose(reader);
+        printf("READ_FAIL\n\0" as &const byte);
+        return 7;
+    }
+    if fclose(reader) != 0 {
+        printf("CLOSE_R_FAIL\n\0" as &const byte);
+        return 8;
+    }
+
+    if strcmp(line as *const byte, payload as *const byte) != 0 {
+        printf("CMP_FAIL\n\0" as &const byte);
+        return 9;
+    }
+
+    printf("EMCC_SMOKE_OK %s\n\0" as &const byte, line as &const byte);
+    return 0;
+}

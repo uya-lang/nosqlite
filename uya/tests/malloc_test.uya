@@ -189,15 +189,15 @@ fn test_realloc_null() !void {
 }
 
 // ============================================================
-// 测试 8: realloc(ptr, 0) = free(ptr)
+// 测试 8: realloc(ptr, 0) 释放 ptr，返回值由 libc 实现定义
 // ============================================================
 fn test_realloc_zero() !void {
     var ptr: &void = malloc(32);
     if (((ptr as &byte) as usize) == 0) { return error.TestFailed; }
     
     var result: &void = realloc(ptr, 0);
-    if !(((result as &byte) as usize) == 0) {
-        return error.TestFailed;
+    if (((result as &byte) as usize) != 0) {
+        free(result);
     }
 }
 

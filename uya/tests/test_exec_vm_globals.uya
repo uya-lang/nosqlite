@@ -1,0 +1,42 @@
+fn init_dep() i32 {
+    @print("A");
+    return 11;
+}
+
+var dep_counter: i32 = init_dep();
+
+fn inc_dep() i32 {
+    dep_counter = dep_counter + 1;
+    return dep_counter;
+}
+
+fn read_dep() i32 {
+    return dep_counter;
+}
+
+fn init_main() i32 {
+    @print("B");
+    return dep_counter + 5;
+}
+
+var main_counter: i32 = init_main();
+
+fn inc_main() i32 {
+    main_counter = main_counter + 3;
+    return main_counter;
+}
+
+fn read_main() i32 {
+    return main_counter;
+}
+
+export fn main() i32 {
+    @println(read_dep());
+    @println(read_main());
+    @println(read_dep());
+    @println(read_main());
+    @println(inc_dep());
+    @println(read_dep());
+    @println(inc_main());
+    return 0;
+}

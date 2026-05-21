@@ -1,0 +1,49 @@
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.run_test;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+
+struct ChainBox {
+    value: i32,
+
+    fn add(self: &Self, x: i32) Self {
+        return ChainBox{ value: self.value + x };
+    }
+
+    fn mul(self: &Self, x: i32) Self {
+        return ChainBox{ value: self.value * x };
+    }
+
+    fn tag<T>(self: &Self, extra: T) Self {
+        _ = extra;
+        return ChainBox{ value: self.value };
+    }
+
+    fn get(self: &Self) i32 {
+        return self.value;
+    }
+}
+
+fn test_struct_literal_chain() !void {
+    var box: ChainBox = ChainBox{ value: 2 };
+    box = box.add(3);
+    box = box.mul(4);
+    const v: i32 = box.get();
+    try assert_eq_i32(v, 20, "struct literal chain should keep calling methods");
+}
+
+fn test_parenthesized_chain() !void {
+    var box: ChainBox = (ChainBox{ value: 7 });
+    box = box.add(1);
+    const v: i32 = box.get();
+    try assert_eq_i32(v, 8, "parenthesized expression should continue chaining");
+}
+
+export fn main() i32 {
+    test_suite_begin("Struct Method Chain Tests");
+    run_test("struct literal chain", test_struct_literal_chain);
+    run_test("parenthesized chain", test_parenthesized_chain);
+    return test_suite_end();
+}

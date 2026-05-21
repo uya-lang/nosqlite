@@ -5,6 +5,9 @@
 
 use std;
 
+std.cfg(std.target_os == .tos_unknown, {
+}, {
+
 export const _JB_SIZE: usize = 8;
 
 export struct jmp_buf {
@@ -238,3 +241,4 @@ export extern "libc" fn jmp_buf_size() usize {
 export extern "libc" fn sigjmp_buf_size() usize {
     return @size_of(sigjmp_buf);
 }
+})

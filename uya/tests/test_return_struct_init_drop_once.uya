@@ -1,0 +1,45 @@
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+var inner_drop_count: i32 = 0;
+
+struct Inner {
+  id: i32,
+  fn drop(self: Inner) void {
+    inner_drop_count = inner_drop_count + 1;
+  }
+}
+
+struct Outer {
+  inner: Inner,
+  fn drop(self: Outer) void {
+    _ = self;
+  }
+}
+
+fn make_outer() Outer {
+  const inner: Inner = Inner{ id: 7 };
+  return Outer{ inner: inner };
+}
+
+fn test_return_struct_init_drop_once() !void {
+  inner_drop_count = 0;
+  {
+    const outer: Outer = make_outer();
+    _ = outer;
+    try assert_eq_i32(inner_drop_count, 0);
+  }
+  try assert_eq_i32(inner_drop_count, 1);
+}
+
+export fn main() i32 {
+  test_suite_begin("Return Struct Init Drop Once Tests");
+
+  run_test("return struct init drop once", test_return_struct_init_drop_once);
+
+  return test_suite_end();
+}

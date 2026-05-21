@@ -1,0 +1,28 @@
+use std.runtime.entry;
+
+interface IAdd {
+    fn add(self: &Self, x: i32) i32;
+}
+
+struct Counter : IAdd {
+    value: i32
+}
+
+Counter {
+    fn add(self: &Self, x: i32) i32 {
+        return self.value + x;
+    }
+}
+
+fn use_it(a: IAdd) i32 {
+    return a.add(10);
+}
+
+export fn main() i32 {
+    const c: Counter = Counter{ value: 5 };
+    const n: i32 = use_it(c);
+    if n != 15 {
+        return 1;
+    }
+    return 0;
+}

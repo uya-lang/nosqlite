@@ -2,6 +2,7 @@
 
 use std.async;
 use std.async_event;
+use std.async_frame.AsyncFramePool;
 use std.async_scheduler;
 use std.testing.assert_eq_i32;
 use libc.syscall;
@@ -48,6 +49,14 @@ test "scheduler_run" {
     var s: Scheduler = scheduler_new();
     const result: i32 = try scheduler_run<i32>(&s, add_async());
     try assert_eq_i32(result, 30);
+}
+
+test "scheduler_new_uses_stack_backed_frame_pool" {
+    var s: Scheduler = scheduler_new();
+    const pool: &AsyncFramePool = scheduler_frame_pool(&s);
+    try assert_eq_i32(pool.buffer != null, true);
+    try assert_eq_i32(pool.buffer_size > 0usize, true);
+    try assert_eq_i32(pool.stack_limit > 0usize, true);
 }
 
 test "scheduler_run_u32" {

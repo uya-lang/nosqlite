@@ -1,0 +1,24 @@
+// 移动语义：结构体变量写入接口字段的结构体字面量应视为 move
+// 预期：编译失败，错误信息含「已被移动」或「不能再次使用」
+
+interface IValue {
+  fn value(self: &Self) i32;
+}
+
+struct S : IValue {
+  id: i32,
+  fn value(self: &Self) i32 {
+    return self.id;
+  }
+}
+
+struct Holder {
+  item: IValue
+}
+
+fn main() i32 {
+  const s: S = S{ id: 42 };
+  const h: Holder = Holder{ item: s };
+  _ = h;
+  return s.id;
+}

@@ -1,0 +1,31 @@
+use std.async;
+use std.testing.assert_eq_i32;
+
+interface Reader {
+    fn read(self: &Self) Future<!usize>;
+}
+
+struct Dummy : Reader {
+    fn read(self: &Self) Future<!usize> {
+        _ = self;
+        return Future<!usize>{ state: Poll<!usize>.Ready(ok<usize>(7usize)) };
+    }
+}
+
+@async_fn
+fn read_async<T: Reader>(reader: &T) Future<!usize> {
+    return try @await reader.read();
+}
+
+test "generic async free function direct call codegen" {
+    const dummy: Dummy = Dummy{};
+    const future: Future<!usize> = read_async<Dummy>(&dummy);
+    const value: usize = try block_on<usize>(future);
+    try assert_eq_i32(value as i32, 7);
+}
+
+test "generic async free function block_on arg codegen" {
+    const dummy: Dummy = Dummy{};
+    const value: usize = try block_on<usize>(read_async<Dummy>(&dummy));
+    try assert_eq_i32(value as i32, 7);
+}

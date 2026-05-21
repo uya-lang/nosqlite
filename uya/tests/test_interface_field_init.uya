@@ -1,0 +1,28 @@
+use std.testing.assert_eq_i32;
+
+interface IAdd {
+    fn add(self: &Self, x: i32) i32;
+}
+
+struct Counter : IAdd {
+    value: i32,
+}
+
+Counter {
+    fn add(self: &Self, x: i32) i32 {
+        return self.value + x;
+    }
+}
+
+struct Holder {
+    cb: IAdd,
+}
+
+fn make_holder() Holder {
+    return Holder{ cb: Counter{ value: 4 } };
+}
+
+test "interface field init" {
+    const holder: Holder = make_holder();
+    try assert_eq_i32(holder.cb.add(9), 13);
+}

@@ -1,0 +1,32 @@
+var drop_seq: i32 = 0;
+
+struct DropA {
+    digit: i32,
+
+    fn drop(self: DropA) void {
+        drop_seq = drop_seq * 10 + self.digit;
+    }
+}
+
+struct DropB {
+    digit: i32,
+
+    fn drop(self: DropB) void {
+        drop_seq = drop_seq * 10 + self.digit;
+    }
+}
+
+fn drop_scope_case() void {
+    {
+        defer { drop_seq = drop_seq * 10 + 9; }
+        const a: DropA = DropA{ digit: 1 };
+        const b: DropB = DropB{ digit: 2 };
+    }
+}
+
+export fn main() i32 {
+    drop_seq = 0;
+    drop_scope_case();
+    @println(drop_seq);
+    return 0;
+}

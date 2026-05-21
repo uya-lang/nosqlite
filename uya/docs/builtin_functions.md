@@ -1,8 +1,8 @@
 # Uya 内置函数使用文档
 
-> 版本：v0.49.45（2026-04-22）  
-> 此文档为 uya.md 的详细补充说明  
-> 语言规范：0.49.45  
+> 版本：v0.49.50（2026-05-19）
+> 此文档为 uya.md 的详细补充说明
+> 语言规范：0.49.50
 > 所有内置函数均以 `@` 开头，由编译器识别，无需导入或声明；其实现阶段与运行时开销以各章节说明为准。`@c_import` 也是 `@` 前缀的编译器内建能力，但它是**顶层构建指令**，不是表达式函数
 
 ---
@@ -40,6 +40,7 @@
   - [@mc_get_env](#mc_get_env)
 - [6. 错误处理函数](#6-错误处理函数)
   - [@error_id](#error_id)
+  - [@error_name](#error_name)
 - [7. 调试打印函数](#7-调试打印函数)
   - [@print](#print)
   - [@println](#println)
@@ -1178,6 +1179,68 @@ fn main() i32 {
 
 ---
 
+### @error_name
+
+**函数签名**：
+```uya
+fn @error_name(err: error) *byte
+```
+
+**功能描述**：
+提取错误值的名称字符串。对语言级命名错误（如 `error.NamedFailure`）返回不带 `error.` 前缀的名字；对无法映射到当前编译单元命名错误表的值（例如 `@syscall` 失败路径捕获到的 errno），统一回退为 `"UnknownError"`。
+
+**参数**：
+- `err`：`error` 类型表达式
+
+**返回值**：
+- `*byte` 类型，指向 NUL 结尾的错误名字字符串
+
+**使用示例**：
+```uya
+use libc.ENOENT;
+use libc.strcmp;
+
+error NamedFailure;
+
+const SYS_open: i64 = 2;
+const O_RDONLY: i64 = 0;
+
+fn fail_named() !i32 {
+    return error.NamedFailure;
+}
+
+fn main() i32 {
+    if strcmp(@error_name(error.NamedFailure) as *const byte, "NamedFailure\0" as *const byte) != 0 {
+        return 1;
+    }
+
+    _ = fail_named() catch |err| {
+        @println(@error_name(err));
+        return 0;
+    };
+
+    const path: *byte = "/nonexistent";
+    const result: !i64 = @syscall(SYS_open, path as i64, O_RDONLY, 0);
+    _ = result catch |err| {
+        if (@error_id(err) as i32) != ENOENT {
+            return 2;
+        }
+        @println(@error_name(err));  // 输出 UnknownError
+        return 0;
+    };
+
+    return 3;
+}
+```
+
+**注意事项**：
+- 参数必须是 `error` 类型，不能直接传 `!T`；若手里是错误联合值，需先 `catch |err|` 或 `match` 取出错误值
+- 返回值仅保证对语言级命名错误给出稳定名字，且结果**不带** `error.` 前缀
+- 对 `@syscall` 失败路径或其它未知错误值，当前实现统一返回 `"UnknownError"`
+- 若需要系统 errno 的本地化/平台描述，请继续使用 `libc.strerror((@error_id(err) as! i32).value)`
+
+---
+
 ## 7. 调试打印函数
 
 ### @print
@@ -1818,6 +1881,10 @@ fn unsafe_fetch_add(ptr: &i32, value: i32) i32 {
 @vector.load(ptr)
 @vector.store(ptr, v)
 @vector.select(m, a, b)
+@vector.reduce_add(v)
+@vector.reduce_mul(v)
+@vector.reduce_min(v)
+@vector.reduce_max(v)
 @vector.any(m)
 @vector.all(m)
 ```
@@ -1829,6 +1896,9 @@ fn unsafe_fetch_add(ptr: &i32, value: i32) i32 {
 - `@vector.store(ptr, v)`（**0.49.34**）：将 **`v`**（**`@vector(T,N)`**）按 **`sizeof(@vector(T,N))`** 写入 **`ptr`**（**`&T`**，**`T`** 与 **`v`** 元素类型一致；**`byte`/`u8`** 同 **`load`**）；**结果为 `void`**；**调用方**须保证可写范围足够
 - `@vector.select(m, a, b)`（**0.49.35**）：**`m`** 为 **`@mask(N)`**，**`a`**、**`b`** 为**完全相同**的 **`@vector(T,N)`**，且 **`N`** 与掩码通道数一致；逐通道 **`m` 为真取 `a`，否则取 `b`**；结果为 **`@vector(T,N)`**；目标向量类型须由上下文确定（与 **`splat`** / **`load`** 相同）
 - `@vector.reduce_add(v)`（**0.49.36**）：**`v`** 为 **`@vector(T,N)`**，**`T`** 为 **`i8`–`i64`、`u8`–`u64`、`f32`、`f64`**；返回标量 **`T`**，为 **`v`** 各通道之和（**`+`** 与标量同语义，含整数包装/溢出）
+- `@vector.reduce_mul(v)`（**0.49.38**）：**`v`** 为 **`@vector(T,N)`**，**`T`** 为 **`i8`–`i64`、`u8`–`u64`、`f32`、`f64`**；返回标量 **`T`**，为 **`v`** 各通道之积（**`*`** 与标量同语义，含整数包装/溢出）
+- `@vector.reduce_min(v)`（**0.49.39**）：**`v`** 为 **`@vector(T,N)`**，**`T`** 为 **`i8`–`i64`、`u8`–`u64`、`f32`、`f64`**；返回标量 **`T`**，为 **`v`** 各通道最小值
+- `@vector.reduce_max(v)`（**0.49.39**）：**`v`** 为 **`@vector(T,N)`**，**`T`** 为 **`i8`–`i64`、`u8`–`u64`、`f32`、`f64`**；返回标量 **`T`**，为 **`v`** 各通道最大值
 - `@vector.any(m)`：掩码任一通道为 true 时返回 `bool true`
 - `@vector.all(m)`：掩码所有通道为 true 时返回 `bool true`
 
@@ -1858,7 +1928,7 @@ if @vector.any(lt) {
 - `@vector.splat(x)` 的参数类型须与目标向量元素类型一致或可隐式转换；无后缀浮点字面量为 `f64`，填入 `f32` 向量须使用 `f32` 后缀（如 `1.0f32`）
 - `@vector.splat(x)` 的目标向量类型必须能由上下文唯一确定（含与同一代数/比较表达式中另一侧 `@vector` 操作数对齐推断，以及 **`return` 与函数返回 `@vector` / `!@vector` 成功载荷** 对齐推断，见 uya.md 0.49.8、0.49.9）
 - 第一阶段允许标量回退 lowering，不承诺立刻映射真实硬件寄存器
-- **`@vector.load` / `@vector.store` / `@vector.select`** 已于 **0.49.33** / **0.49.34** / **0.49.35** 纳入；**`@vector.reduce_add`** 已于 **0.49.36** 纳入；第一阶段仍不引入 **`shuffle`** 及其它 **`reduce_*`**
+- **`@vector.load` / `@vector.store` / `@vector.select`** 已于 **0.49.33** / **0.49.34** / **0.49.35** 纳入；**`@vector.reduce_add` / `@vector.reduce_mul` / `@vector.reduce_min` / `@vector.reduce_max`** 已于 **0.49.36** / **0.49.38** / **0.49.39** / **0.49.39** 纳入；第一阶段仍不引入 **`shuffle`**
 
 ---
 
@@ -1919,6 +1989,7 @@ const both: @mask(4) = lt & eq;
 | | `@mc_error` | ✓ | - | 🚧 语法解析完成 |
 | | `@mc_get_env` | ✓ | - | 🚧 语法解析完成 |
 | **错误处理** | `@error_id` | ✓ | ✓ | ✅ 已实现 |
+| | `@error_name` | ✓ | ✓ | ✅ 已实现 |
 | **调试打印** | `@print` | - | ✓ | ✅ 已实现 |
 | | `@println` | - | ✓ | ✅ 已实现 |
 | **异步编程** | `@async_fn` | ✓ | ✓ | 🚧 最小闭环已实现 |
@@ -1932,6 +2003,9 @@ const both: @mask(4) = lt & eq;
 | | `@vector.store` | ✓ | ✓ | 📋 规范支持（0.49.34） |
 | | `@vector.select` | ✓ | ✓ | 📋 规范支持（0.49.35） |
 | | `@vector.reduce_add` | ✓ | ✓ | 📋 规范支持（0.49.36） |
+| | `@vector.reduce_mul` | ✓ | ✓ | 📋 规范支持（0.49.38） |
+| | `@vector.reduce_min` | ✓ | ✓ | 📋 规范支持（0.49.39） |
+| | `@vector.reduce_max` | ✓ | ✓ | 📋 规范支持（0.49.39） |
 | | `@vector.any` | ✓ | ✓ | 📋 规范支持 |
 | | `@vector.all` | ✓ | ✓ | 📋 规范支持 |
 
@@ -1945,7 +2019,7 @@ Uya 内置函数遵循以下命名惯例：
    - `@len`, `@max`, `@min`
 
 2. **复合概念**：使用 snake_case（下划线分隔）
-   - `@size_of`, `@align_of`, `@error_id`, `@async_fn`
+   - `@size_of`, `@align_of`, `@error_id`, `@error_name`, `@async_fn`
    - `@va_start`, `@va_end`, `@va_arg`, `@va_copy`（可变参数栈访问）
    - `@src_name`, `@src_path`, `@src_line`, `@src_col`, `@func_name`
    - `@mc_eval`, `@mc_type`, `@mc_ast`, `@mc_code`, `@mc_error`, `@mc_get_env`
@@ -1965,7 +2039,7 @@ Uya 内置函数遵循以下命名惯例：
 |------|----------|
 | **编译期展开** | `@size_of`, `@align_of`, `@len(数组)`, `@max`, `@min`, `@src_*`, `@func_name`, `@va_start`, `@va_end`, `@va_arg`, `@va_copy`, `@error_id(error.X)` |
 | **零运行时开销** | 上述函数在编译时完全求值或展开为 C 宏 |
-| **运行时访问** | `@len(切片)` → 访问切片的 `.len` 字段；`@error_id(err)` → 读取错误值的 `.error_id` 字段 |
+| **运行时访问** | `@len(切片)` → 访问切片的 `.len` 字段；`@error_id(err)` → 读取错误值的 `.error_id` 字段；`@error_name(err)` → 运行时查表返回名字字符串 |
 | **可变参数** | `@params` → 零抽象开销，直接映射到 C va_list；`@va_start`/`@va_end`/`@va_arg`/`@va_copy` → 展开为 C 宏 |
 | **SIMD 向量** | `@vector` / `@mask` 在语义层由编译器识别；第一阶段允许标量回退 lowering，先保证语义正确 |
 
@@ -2048,6 +2122,8 @@ fn buffer_info<T>() void {
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v0.49.50 | 2026-05-14 | 新增错误处理内置函数：`@error_name`；对语言级命名错误返回不带 `error.` 前缀的名字；未知或 `@syscall` 错误回退 `UnknownError`；新增 `tests/test_error_name_builtin.uya` |
+| v0.49.49 | 2026-05-12 | 与 **uya.md 0.49.49** 同步：本次仅更新规范同步版本号与日期；`drop` 手动调用禁令属于语言 RAII 规则，内置函数条目无增删 |
 | v0.49.45 | 2026-04-22 | 新增顶层构建指令 `@c_import("path", cflags?, ldflags?)` 文档；同步单文件 `.c + .cimports.sh`、目录递归导入 `*.c`、split-C Makefile 集成与测试入口说明 |
 | v0.49.43 | 2026-03-26 | 与 **uya.md 0.49.43** 同步：字符串字面量赋 **`[byte:N]`** / **`&[const byte]`**、成员访问链左值、**`&[const T]`** 切片语法说明（见主文档规范变更 **0.49.43**）；内置函数条目无增删 |
 | v0.49.42 | 2026-03-22 | 与 **uya.md 0.49.42** 同步：词法 **`\\xHH`** / **`\\uXXXX`**（见主文档 §1.4）；内置函数条目无增删 |
@@ -2109,4 +2185,4 @@ fn buffer_info<T>() void {
 
 ---
 
-**本文档由 Uya 编译器团队维护，最后更新：2026-04-22（0.49.45）**
+**本文档由 Uya 编译器团队维护，最后更新：2026-05-14（0.49.50）**

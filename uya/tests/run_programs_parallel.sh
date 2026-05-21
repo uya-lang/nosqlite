@@ -131,6 +131,7 @@ show_usage() {
     echo "  TARGET_OS/TARGET_ARCH/TARGET_TRIPLE  目标平台（默认继承宿主）"
     echo "  TEST_PROFILE=hosted  选择 hosted 测试配置"
     echo "  SKIP_DARWIN_DEFAULT=0  macOS 上不默认跳过 Linux syscall/async 用例"
+    echo "  SKIP_TEST_PATTERNS_EXTRA='test_foo_*'  额外按 shell glob 跳过测试"
     echo ""
     echo "参数:"
     echo "  无参数              运行所有测试"
@@ -267,6 +268,16 @@ collect_test_files() {
     fi
 }
 
+is_default_excluded_test_name() {
+    local name="$1"
+    case "$name" in
+        check_cli_no_main|test_exec_vm_globals|test_exec_vm_global_init_fail|test_exec_vm_globals_multi|emcc_unknown_runtime_smoke)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
 # 如果指定了目标路径
 if [ -n "$TARGET_PATH" ]; then
     # 转换为绝对路径
@@ -296,6 +307,10 @@ else
     
     # 单文件测试
     while IFS= read -r -d '' file; do
+        bn=$(basename "$file" .uya)
+        if is_default_excluded_test_name "$bn"; then
+            continue
+        fi
         TEST_FILES+=("$file")
     done < <(find "$TEST_DIR" -maxdepth 1 -name "*.uya" -type f -print0 2>/dev/null)
 fi
@@ -664,6 +679,34 @@ if [ -n "${SKIP_TESTS_EXTRA:-}" ]; then
     read -r -a SKIP_TESTS_EXTRA_ARR <<< "$SKIP_TESTS_EXTRA"
     SKIP_TESTS+=("${SKIP_TESTS_EXTRA_ARR[@]}")
 fi
+if [ -z "$TARGET_PATH" ]; then
+    # exec-only 边界回归：decl-only varargs extern 在 --vm 下应保持 unsupported。
+    # 它不属于默认的 hosted C99 全量程序矩阵，改由 verify_exec_vm_extern_bridge.sh /
+    # verify_exec_backend_progress.sh 定向覆盖。
+    SKIP_TESTS+=(test_exec_vm_extern_decl_varargs_unsupported)
+fi
+SKIP_TEST_PATTERNS=()
+if [ -n "${SKIP_TEST_PATTERNS_EXTRA:-}" ]; then
+    read -r -a SKIP_TEST_PATTERNS_EXTRA_ARR <<< "$SKIP_TEST_PATTERNS_EXTRA"
+    SKIP_TEST_PATTERNS+=("${SKIP_TEST_PATTERNS_EXTRA_ARR[@]}")
+fi
+
+should_skip_test_name() {
+    local name="$1"
+    local s=""
+    local pattern=""
+    for s in "${SKIP_TESTS[@]}"; do
+        if [ "$name" = "$s" ]; then
+            return 0
+        fi
+    done
+    for pattern in "${SKIP_TEST_PATTERNS[@]}"; do
+        if [[ "$name" == $pattern ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
 
 # 已知会在整套高并发测试下互相争用本地/外网网络资源的集成用例。
 # 单独串行执行能保持语义不变，同时避免 DNS/TLS/loopback 相关的稳定波动。
@@ -683,6 +726,14 @@ SERIAL_TESTS=(
     # kernel.sim 端到端测试会生成/链接很大的宿主程序；
     # 在整套 28 线程并行下偶发链接抖动，串行执行可稳定语义且不影响覆盖面。
     test_kernel_sim
+    # 这两个用例当前在大并行矩阵下偶发误判失败，但单独运行稳定通过；
+    # 先串行化，避免并行环境噪声影响回归结果。
+    test_union_variant_generic_method
+    test_struct_method_chain
+    # test_std_thread 使用 fork/pipe/mmap 创建线程池 worker；
+    # 在 28 线程并行矩阵下偶发因系统资源竞争导致 worker 创建失败或调度延迟，
+    # 进而触发断言失败。单独运行时稳定通过，故串行化。
+    test_std_thread
 )
 if [ -n "${SERIAL_TESTS_EXTRA:-}" ]; then
     read -r -a SERIAL_TESTS_EXTRA_ARR <<< "$SERIAL_TESTS_EXTRA"
@@ -727,6 +778,16 @@ sys.exit(0)
 PY
 }
 
+libcrypto_link_supported() {
+    local probe_c="$BUILD_DIR/libcrypto_probe.c"
+    local probe_bin="$BUILD_DIR/libcrypto_probe${TARGET_EXE_SUFFIX}"
+    printf '%s\n' 'int main(void) { return 0; }' > "$probe_c" || return 1
+    "${CC_CMD[@]}" "${CFLAGS_ARR[@]}" "$probe_c" -o "$probe_bin" -lcrypto "${LDFLAGS_ARR[@]}" >/dev/null 2>&1
+    local ok=$?
+    rm -f "$probe_c" "$probe_bin"
+    return $ok
+}
+
 is_loopback_skip_test() {
     local name="$1"
     for s in "${LOOPBACK_SKIP_TESTS[@]}"; do
@@ -765,10 +826,33 @@ fi
 
 # macOS：在 syscall/osal/async Darwin 完成前默认跳过已知 Linux centric 用例（SKIP_DARWIN_DEFAULT=0 关闭）
 if [ "$HOST_OS" = "macos" ] && [ "${SKIP_DARWIN_DEFAULT:-1}" != "0" ]; then
+    SKIP_TEST_PATTERNS+=(
+        test_async_*
+        test_std_async_*
+        test_pthread*
+    )
     SKIP_TESTS+=(
         test_async_fd
+        test_tcp_basic
+        test_std_dns
         test_std_async_event
+        test_std_dns_async_transport
+        test_std_thread
+        test_task_std_async
+        test_block_on
+        test_poll_std_async
+        test_error_value_err_union_arg
+        test_generic_async_function_codegen
+        test_generic_struct_array_future_method
+        test_http_uyagin
+        test_method_call_in_callback_codegen
         test_osal
+        test_epoll_syscall
+        test_epoll_server
+        test_error_id_builtin
+        test_error_name_builtin
+        test_kernel_sim
+        test_nonlinear_bounds
         test_std_syscall
         test_std_syscall_new
         test_syscall_dir
@@ -786,8 +870,27 @@ if [ "$HOST_OS" = "macos" ] && [ "${SKIP_DARWIN_DEFAULT:-1}" != "0" ]; then
         test_syscall_write
         syscall_c99_cross
     )
+    if [ "$TARGET_ARCH" = "arm64" ]; then
+        SKIP_TESTS+=(
+            test_asm_clobbers
+            test_asm_codegen
+            test_asm_edge_cases
+            test_asm_memory_safety
+            test_asm_platform
+        )
+    fi
     if [ "$ERRORS_ONLY" = false ]; then
-        echo "提示: 宿主为 macOS，已默认跳过 Linux syscall/async 相关用例（SKIP_DARWIN_DEFAULT=0 可关闭）"
+        echo "提示: 宿主为 macOS，已默认跳过 Linux syscall/async/pthread 与 arm64 不适用用例（SKIP_DARWIN_DEFAULT=0 可关闭）"
+        echo ""
+    fi
+fi
+
+if ! libcrypto_link_supported; then
+    SKIP_TESTS+=(
+        test_tls_ecdsa
+    )
+    if [ "$ERRORS_ONLY" = false ]; then
+        echo "提示: 当前工具链无法链接 libcrypto，已跳过 test_tls_ecdsa"
         echo ""
     fi
 fi
@@ -800,7 +903,9 @@ SKIP_COUNT=0
 for t in "${TEST_FILES[@]}"; do
     if [[ "$t" != MULTIFILE:* ]]; then
         bn=$(basename "$t" .uya)
-        for s in "${SKIP_TESTS[@]}"; do [ "$bn" = "$s" ] && SKIP_COUNT=$((SKIP_COUNT+1)) && break; done
+        if should_skip_test_name "$bn"; then
+            SKIP_COUNT=$((SKIP_COUNT+1))
+        fi
     fi
 done
 TOTAL_TESTS=$((TOTAL_TESTS - SKIP_COUNT))
@@ -822,7 +927,9 @@ for test_item in "${TEST_FILES[@]}"; do
     else
         bn=$(basename "$test_item" .uya)
         skip=0
-        for s in "${SKIP_TESTS[@]}"; do [ "$bn" = "$s" ] && skip=1 && break; done
+        if should_skip_test_name "$bn"; then
+            skip=1
+        fi
         if [ $skip -eq 0 ]; then
             serialize=0
             for s in "${SERIAL_TESTS[@]}"; do
@@ -929,7 +1036,7 @@ if [ ${#parallel_single_tests[@]} -gt 0 ]; then
     fi
     
     # 检查是否支持 wait -n（bash 4.3+）
-    if bash -c 'help wait' 2>/dev/null | grep -q '\-n'; then
+    if ( sleep 0.01 & wait -n ) >/dev/null 2>&1; then
         USE_WAIT_N=true
     else
         USE_WAIT_N=false
@@ -1036,14 +1143,14 @@ if [ ${#parallel_single_tests[@]} -gt 0 ]; then
         sleep 0.1
         process_ready_single_results
         if [ ${#PENDING_RFS[@]} -gt 0 ]; then
-local first_idx=""
+            first_idx=""
             for i in "${!PENDING_RFS[@]}"; do
                 first_idx="$i"
                 break
             done
             if [ -n "$first_idx" ]; then
-                local rf="${PENDING_RFS[$first_idx]}"
-                local bn="${PENDING_BNS[$first_idx]}"
+                rf="${PENDING_RFS[$first_idx]}"
+                bn="${PENDING_BNS[$first_idx]}"
                 if [ "$ERRORS_ONLY" = true ]; then
                     echo "测试: $bn"
                 fi

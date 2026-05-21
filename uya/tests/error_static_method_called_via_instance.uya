@@ -1,0 +1,12 @@
+struct Factory {}
+
+Factory {
+    fn build() i32 {
+        return 1;
+    }
+}
+
+fn main() i32 {
+    const f: Factory = Factory{};
+    return f.build();
+}

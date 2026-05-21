@@ -1,0 +1,126 @@
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.fmt.import_sort.sort_use_lines;
+
+fn contains_bytes(haystack: &[byte], needle: &[byte]) bool {
+    if needle.len == 0 {
+        return true;
+    }
+    if haystack.len < needle.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i + needle.len <= haystack.len {
+        var ok: bool = true;
+        var j: usize = 0;
+        while j < needle.len {
+            if haystack.ptr[i + j] != needle.ptr[j] {
+                ok = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if ok {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn index_of(haystack: &[byte], needle: &[byte]) i32 {
+    if needle.len == 0 || haystack.len < needle.len {
+        return -1;
+    }
+    var i: usize = 0;
+    while i + needle.len <= haystack.len {
+        var ok: bool = true;
+        var j: usize = 0;
+        while j < needle.len {
+            if haystack.ptr[i + j] != needle.ptr[j] {
+                ok = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if ok {
+            return i as i32;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn test_sort_use_lines_std_first() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "use tls.https;\nuse std.runtime.entry;\nuse libc.syscall;\n" as &[byte];
+    const out: &[byte] = try sort_use_lines(&a, src);
+
+    try assert_eq_i32(index_of(out, "use std.runtime.entry;\nuse libc.syscall;\nuse tls.https;\n" as &[byte]), 0);
+}
+
+fn test_sort_use_lines_alpha_within_group() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "use std.testing.run_test;\nuse std.runtime.entry;\nuse std.mem.arena;\n" as &[byte];
+    const out: &[byte] = try sort_use_lines(&a, src);
+
+    try assert_eq_i32(index_of(out, "use std.mem.arena;\nuse std.runtime.entry;\nuse std.testing.run_test;\n" as &[byte]), 0);
+}
+
+fn test_sort_use_lines_dedup() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "use std.runtime.entry;\nuse std.runtime.entry;\nuse tls.https;\n" as &[byte];
+    const out: &[byte] = try sort_use_lines(&a, src);
+
+    try assert_eq_i32(index_of(out, "use std.runtime.entry;\nuse tls.https;\n" as &[byte]), 0);
+    try assert_eq_i32(index_of(out, "use std.runtime.entry;\nuse std.runtime.entry;" as &[byte]), -1);
+}
+
+fn slices_equal(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn test_sort_use_lines_idempotent() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "use tls.https;\nuse std.runtime.entry;\nuse libc.syscall;\n" as &[byte];
+    const out1: &[byte] = try sort_use_lines(&a, src);
+    const out2: &[byte] = try sort_use_lines(&a, out1);
+
+    try assert_eq_i32(slices_equal(out1, out2) as i32, true as i32);
+}
+
+export fn main() i32 {
+    test_suite_begin("fmt import sort tests");
+    run_test("sort use lines std first", test_sort_use_lines_std_first);
+    run_test("sort use lines alpha within group", test_sort_use_lines_alpha_within_group);
+    run_test("sort use lines dedup", test_sort_use_lines_dedup);
+    run_test("sort use lines idempotent", test_sort_use_lines_idempotent);
+    return test_suite_end();
+}

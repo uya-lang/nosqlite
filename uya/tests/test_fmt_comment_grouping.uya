@@ -1,0 +1,66 @@
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.fmt.tokenizer.Token;
+use std.fmt.tokenizer.tokenize;
+use std.fmt.comments.Comment;
+use std.fmt.comments.CommentGroup;
+use std.fmt.comments.collect_comments;
+use std.fmt.comments.group_comments;
+
+fn test_group_adjacent_line_comments() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "// a\n// b\nfn x(){}" as &[byte];
+    const tokens: &[Token] = try tokenize(&a, src);
+    const comments: &[Comment] = collect_comments(&a, tokens);
+    const groups: &[CommentGroup] = group_comments(&a, comments);
+
+    try assert_eq_i32(comments.len as i32, 2);
+    try assert_eq_i32(groups.len as i32, 1);
+    try assert_eq_i32(groups[0].count as i32, 2);
+}
+
+fn test_group_separated_comments() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "// a\n\n// b\nfn x(){}" as &[byte];
+    const tokens: &[Token] = try tokenize(&a, src);
+    const comments: &[Comment] = collect_comments(&a, tokens);
+    const groups: &[CommentGroup] = group_comments(&a, comments);
+
+    try assert_eq_i32(comments.len as i32, 2);
+    try assert_eq_i32(groups.len as i32, 2);
+    try assert_eq_i32(groups[0].count as i32, 1);
+    try assert_eq_i32(groups[1].count as i32, 1);
+}
+
+fn test_group_block_and_line_comments() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "/* a */\n// b\nfn x(){}" as &[byte];
+    const tokens: &[Token] = try tokenize(&a, src);
+    const comments: &[Comment] = collect_comments(&a, tokens);
+    const groups: &[CommentGroup] = group_comments(&a, comments);
+
+    try assert_eq_i32(groups.len as i32, 1);
+    try assert_eq_i32(groups[0].count as i32, 2);
+}
+
+export fn main() i32 {
+    test_suite_begin("fmt comment grouping tests");
+    run_test("group adjacent line comments", test_group_adjacent_line_comments);
+    run_test("group separated comments", test_group_separated_comments);
+    run_test("group block and line comments", test_group_block_and_line_comments);
+    return test_suite_end();
+}

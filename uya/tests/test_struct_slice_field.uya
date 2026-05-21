@@ -12,6 +12,21 @@ struct Data {
     tag: i32,
 }
 
+struct ByteData {
+    bytes: &[byte],
+    len: usize,
+}
+
+fn sum_bytes(data: &[byte]) i32 {
+    var sum: i32 = 0;
+    var i: usize = 0;
+    while i < data.len {
+        sum = sum + data.ptr[i] as i32;
+        i = i + 1;
+    }
+    return sum;
+}
+
 fn test_slice_field_init() !void {
     var arr: [i32: 5] = [1, 2, 3, 4, 5];
     const s: &[i32] = arr[0:3];
@@ -51,6 +66,16 @@ fn test_fat_pointer() !void {
     try expect(@align_of(&[i32]) == @align_of(usize));
 }
 
+fn test_byte_slice_field_reslice() !void {
+    var raw: [byte: 4] = [1 as byte, 2 as byte, 3 as byte, 0 as byte];
+    var data: ByteData = ByteData{ bytes: raw[0:4], len: 3 };
+    const view: &[byte] = data.bytes[0:data.len];
+    const ptr_view: &[byte] = data.bytes.ptr[0:data.len];
+    try assert_eq_i32((view.len as! i32).value, 3);
+    try assert_eq_i32(sum_bytes(view), 6);
+    try assert_eq_i32(sum_bytes(ptr_view), 6);
+}
+
 export fn main() i32 {
     test_suite_begin("Struct Slice Field Tests");
     run_test("slice field init", test_slice_field_init);
@@ -58,5 +83,6 @@ export fn main() i32 {
     run_test("slice field size", test_slice_field_size);
     run_test("slice field align", test_slice_field_align);
     run_test("fat pointer", test_fat_pointer);
+    run_test("byte slice field reslice", test_byte_slice_field_reslice);
     return test_suite_end();
 }

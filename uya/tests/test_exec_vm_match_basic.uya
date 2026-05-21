@@ -1,0 +1,33 @@
+use std.runtime.entry;
+
+fn classify(x: i32) i32 {
+    return match x {
+        0 => 10,
+        1 => 20,
+        else => 30,
+    };
+}
+
+fn flag_name(flag: bool) i32 {
+    return match flag {
+        true => 1,
+        false => 2,
+        else => 3,
+    };
+}
+
+export fn main() i32 {
+    if classify(1) != 20 {
+        return 1;
+    }
+    if classify(7) != 30 {
+        return 2;
+    }
+    if flag_name(true) != 1 {
+        return 3;
+    }
+    if flag_name(false) != 2 {
+        return 4;
+    }
+    return 0;
+}

@@ -1,0 +1,37 @@
+use std.runtime.entry;
+use libc.strcmp;
+
+struct BufferBox {
+    buf: [byte: 8],
+    ptr: &byte,
+}
+
+var g_suffix: [byte: 2] = [];
+
+fn seed(box: &BufferBox) void {
+    box.buf[0] = 104 as byte;
+    box.buf[1] = 105 as byte;
+    box.buf[2] = 0;
+    box.ptr = &box.buf[0];
+    box.ptr[1] = 111 as byte;
+
+    g_suffix[0] = 33 as byte;
+    g_suffix[1] = 0;
+}
+
+export fn main() i32 {
+    var box: BufferBox = BufferBox{ buf: [], ptr: null };
+    seed(&box);
+
+    if strcmp(&box.buf[0] as *const byte, "ho" as *const byte) != 0 {
+        return 1;
+    }
+    if box.ptr[0] != 104 as byte || box.ptr[1] != 111 as byte {
+        return 2;
+    }
+    if strcmp(&g_suffix[0] as *const byte, "!" as *const byte) != 0 {
+        return 3;
+    }
+
+    return 0;
+}

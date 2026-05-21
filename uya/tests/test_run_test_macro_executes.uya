@@ -1,0 +1,19 @@
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+var g_run_test_executed: i32 = 0;
+
+fn mark_executed() !void {
+    g_run_test_executed = 1;
+}
+
+export fn main() i32 {
+    test_suite_begin("run_test macro executes");
+    run_test("executes callback", mark_executed);
+    const result: i32 = test_suite_end();
+    if g_run_test_executed != 1 {
+        return 42;
+    }
+    return result;
+}

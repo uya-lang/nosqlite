@@ -1,0 +1,28 @@
+use std.crypto.sha1.sha1_digest;
+use std.testing.assert_eq_i32;
+
+fn expect_bytes_eq(got: &[byte], want: &[byte]) !void {
+    if got.len != want.len {
+        try assert_eq_i32(0, 1);
+    }
+    var i: usize = 0;
+    while i < got.len {
+        if got.ptr[i] != want.ptr[i] {
+            try assert_eq_i32(0, 1);
+        }
+        i = i + 1;
+    }
+}
+
+test "sha1_digest_abc" {
+    const src: &[byte] = &"abc"[0: 3];
+    const want: [byte: 20] = [
+        0xa9 as byte, 0x99 as byte, 0x3e as byte, 0x36 as byte, 0x47 as byte,
+        0x06 as byte, 0x81 as byte, 0x6a as byte, 0xba as byte, 0x3e as byte,
+        0x25 as byte, 0x71 as byte, 0x78 as byte, 0x50 as byte, 0xc2 as byte,
+        0x6c as byte, 0x9c as byte, 0xd0 as byte, 0xd8 as byte, 0x9d as byte,
+    ];
+    var got: [byte: 20] = [];
+    sha1_digest(src, got[0: 20]);
+    try expect_bytes_eq(got[0: 20], want[0: 20]);
+}

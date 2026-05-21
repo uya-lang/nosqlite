@@ -1,0 +1,52 @@
+// test_pthread_api_cancel.uya - 从 test_pthread_api.uya 拆出的线程取消 API 用例
+
+use std.runtime.entry;
+use libc.pthread;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.test_pass;
+use std.testing.test_fail;
+use std.testing.expect;
+
+var _cancel_started: atomic i32 = 0;
+
+fn api_cancel_thread(arg: &void) &void {
+    _ = arg;
+    _cancel_started = 1;
+    while true {
+        pthread_testcancel();
+        _ = pthread_yield();
+    }
+    return null;
+}
+
+fn test_pthread_cancel_api() !void {
+    _cancel_started = 0;
+
+    var th: pthread_t = pthread_t{};
+    try expect(pthread_create(&th, null as &const pthread_attr_t, &api_cancel_thread as &void, null) == 0);
+
+    while _cancel_started == 0 {
+        _ = pthread_yield();
+    }
+
+    try expect(pthread_cancel(&th) == 0);
+
+    var result: &void = null;
+    try expect(pthread_join(&th, &result) == 0);
+    try expect(result == PTHREAD_CANCELED);
+
+    pthread_testcancel();
+}
+
+export fn main() i32 {
+    test_suite_begin("pthread_api_cancel");
+
+    test_pthread_cancel_api() catch {
+        test_fail("pthread_cancel_api");
+        return test_suite_end();
+    };
+    test_pass("pthread_cancel_api");
+
+    return test_suite_end();
+}

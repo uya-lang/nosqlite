@@ -5,8 +5,12 @@ use tls.ssl.context;
 use tls.x509.cert.Cert;
 use tls.x509.trust_store;
 use tls.crypto.rsa.RsaPrivateKey;
+use std.async.block_on;
 use std.http.server;
 use std.http.types;
+use std.http.parse.http_parse_request;
+use std.http.parse.http_decode_chunked_body_inplace;
+use std.http.uyagin;
 use std.net.dns;
 use libc.stdio;
 use libc.unistd;
@@ -835,6 +839,102 @@ export fn https_server_serve_once(srv: &HttpsServer, body: &[byte]) !void {
     _ = sys_close(cfd) catch {};
 }
 
+fn https_open_uyagin_capture_file() !i32 {
+    var path: [byte: 128] = [0:128];
+    var pos: usize = 0;
+    pos = https_copy_slice(&path[0], pos, &"/tmp/uya_https_uyagin_capture_"[0: 30]);
+    const pid: i64 = try sys_getpid();
+    pos = https_append_u64_dec(&path[0], pos, pid as u64);
+    path[pos] = 0;
+    const fd: i32 = try sys_open(&path[0] as *const byte, (O_CREAT | O_TRUNC | O_RDWR) as i32, 0o600);
+    _ = sys_unlink(&path[0] as *const byte) catch {};
+    return fd;
+}
+
+fn https_read_uyagin_request(fd: i32, ctx: &SslContext, plain_buf: &byte, plain_cap: usize) !ParseResult {
+    var plain_filled: usize = 0;
+    var in_cipher: [byte: HTTPS_HS_BUF] = [0:HTTPS_HS_BUF];
+    while true {
+        const parsed: !ParseResult = http_parse_request(plain_buf[0: plain_filled]);
+        match parsed {
+            error.IncompleteRequest => {},
+            else => {
+                var pr: ParseResult = try parsed;
+                if request_has_chunked_transfer_encoding(&pr.request) {
+                    _ = try http_decode_chunked_body_inplace(&pr);
+                }
+                return pr;
+            },
+        };
+        if plain_filled >= plain_cap {
+            return error.PayloadTooLarge;
+        }
+        var in_len: usize = 0;
+        try https_read_tls_record_exact(fd, &in_cipher[0], HTTPS_HS_BUF, &in_len);
+        var produced: usize = 0;
+        var consumed: usize = 0;
+        try ssl_read(ctx, &in_cipher[0], in_len, &plain_buf[plain_filled], plain_cap - plain_filled, &produced, &consumed);
+        if produced == 0 && consumed == 0 {
+            return error.ConnectionClosed;
+        }
+        plain_filled = plain_filled + produced;
+    }
+}
+
+export fn https_server_serve_uyagin_once(srv: &HttpsServer, engine: &Engine) !i32 {
+    if srv == null || engine == null {
+        return error.InvalidRequest;
+    }
+    const cfd: i32 = try https_accept_one(srv.listen_fd);
+    defer { _ = sys_close(cfd) catch {}; }
+
+    var hs: HandshakeCtx = HandshakeCtx{};
+    var rec: RecordCtx = RecordCtx{};
+    var ssl_ctx: SslContext = SslContext{ role: HS_ROLE_SERVER, hs: &hs, rec: &rec };
+    ssl_init(&ssl_ctx);
+    if https_server_identity_configured {
+        ssl_server_add_identity(&ssl_ctx, &https_server_identity_name[0], https_server_identity_name_len, &https_server_identity_san[0], https_server_identity_san_len, &https_server_identity_cn[0], https_server_identity_cn_len) catch {
+            return error.TlsBadInput;
+        };
+        ssl_server_set_identity_credentials(&ssl_ctx, 0, https_server_identity_cert, https_server_identity_rsa_key) catch {
+            return error.TlsBadInput;
+        };
+        ssl_set_peer_identity(&ssl_ctx, &https_server_identity_san[0], https_server_identity_san_len, &https_server_identity_cn[0], https_server_identity_cn_len);
+    } else {
+        ssl_set_peer_identity(&ssl_ctx, &srv.hostname[0], srv.hostname_len, &srv.hostname[0], srv.hostname_len);
+    }
+    try https_server_handshake(cfd, &ssl_ctx);
+
+    var plain_req: [byte: HTTP_CONN_READ_CAP] = [];
+    const parsed_req: ParseResult = try https_read_uyagin_request(cfd, &ssl_ctx, &plain_req[0] as &byte, HTTP_CONN_READ_CAP);
+
+    const capture_fd: i32 = try https_open_uyagin_capture_file();
+    defer { _ = sys_close(capture_fd) catch {}; }
+
+    var request_arena_storage: [byte: UYAGIN_REQUEST_ARENA_CAP] = [];
+    var request_arena: RequestArena = RequestArena{};
+    request_arena.bind(&request_arena_storage[0] as &byte, UYAGIN_REQUEST_ARENA_CAP);
+    request_arena.begin();
+    var http_ctx: GinContext = uyagin_context_new_with_request_arena(capture_fd, &parsed_req.request, false, request_arena.allocator(), &request_arena);
+    const handled: i32 = try block_on<i32>(engine.handle(&http_ctx));
+    _ = handled;
+    request_arena.reset();
+
+    _ = try sys_lseek(capture_fd, 0i64, SEEK_SET);
+    var resp_plain: [byte: HTTPS_IO_BUF] = [0:HTTPS_IO_BUF];
+    var out_cipher: [byte: HTTPS_HS_BUF] = [0:HTTPS_HS_BUF];
+    while true {
+        const rn: isize = try sys_read(capture_fd, &resp_plain[0] as *byte, HTTPS_IO_BUF);
+        if rn <= 0 {
+            break;
+        }
+        var out_len: usize = 0;
+        try ssl_write(&ssl_ctx, &resp_plain[0], rn as usize, &out_cipher[0], HTTPS_HS_BUF, &out_len);
+        try https_write_all(cfd, &out_cipher[0], out_len);
+    }
+    return 1;
+}
+
 // 内部使用的 https_get 实现，带配置
 fn https_get_internal(
     host: &const byte,
@@ -875,13 +975,41 @@ fn https_get_internal(
     
     // 配置证书验证
     ssl_set_insecure_skip_verify(&ctx, !verify);
-    
-    // TODO: 加载系统根证书（生产环境应该实现）
-    // 当前实现：如果启用验证但没有根证书，会记录警告但仍尝试连接
-    if verify {
-        https_debug(&"[HTTPS] Certificate verification enabled (trust store TBD)\n"[0: 55]);
+    ssl_set_skip_hostname_verify(&ctx, !config.verify_hostname);
+
+    var system_trust_store: TrustStore = TrustStore{};
+    var active_trust_store: &TrustStore = config.trust_store;
+    if verify && active_trust_store == null as &TrustStore {
+        const loaded: bool = trust_store_load_system(&system_trust_store);
+        if !loaded {
+            _ = sys_close(fd) catch {};
+            return error.TlsCertificateVerificationFailed;
+        }
+        active_trust_store = &system_trust_store;
     }
-    
+    if verify && active_trust_store != null as &TrustStore {
+        ssl_set_peer_chain(
+            &ctx,
+            null as &const Cert,
+            null as &const Cert,
+            0,
+            trust_store_get_certs(active_trust_store),
+            trust_store_get_count(active_trust_store),
+            KU_DIGITAL_SIGNATURE,
+        );
+        if !config.verify_hostname && trust_store_get_count(active_trust_store) == 1usize {
+            ssl_set_peer_chain(
+                &ctx,
+                trust_store_get_certs(active_trust_store),
+                null as &const Cert,
+                0usize,
+                trust_store_get_certs(active_trust_store),
+                trust_store_get_count(active_trust_store),
+                KU_DIGITAL_SIGNATURE,
+            );
+        }
+    }
+
     // SNI 和证书校验基于原始 hostname
     ssl_set_hostname(&ctx, host, host_len);
     ssl_set_peer_identity(&ctx, host, host_len, host, host_len);

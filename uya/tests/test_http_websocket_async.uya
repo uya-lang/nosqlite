@@ -1,0 +1,190 @@
+use std.async;
+use std.async_event;
+use std.async_scheduler;
+use std.http.server;
+use std.http.websocket_async;
+use std.http.websocket_types;
+use std.testing.assert_eq_i32;
+use std.testing.assert_true;
+
+fn bytes_eq_raw(a: &byte, b: &byte, n: usize) bool {
+    var i: usize = 0;
+    while i < n {
+        if a[i] != b[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn new_opts() WebSocketAcceptOptions {
+    return websocket_accept_options_default();
+}
+
+fn make_pair(client_out: &WebSocketConn, server_out: &WebSocketConn) !void {
+    const cfg: ServerConfig = ServerConfig{
+        mode: ServerMode.Blocking,
+        max_connections: 128,
+        port: 0,
+        host: [],
+    };
+    var srv: HttpServer = try http_server_listen(&cfg);
+    errdefer { http_server_close(&srv); }
+    const client_fd: i32 = try http_tcp_connect_loopback(srv.port);
+    var accepted: Conn = try http_server_accept(&srv);
+    http_server_close(&srv);
+    const server_fd: i32 = accepted.fd;
+    accepted.fd = -1;
+
+    var client_io: WebSocketFdTransport = websocket_fd_transport_owned(client_fd);
+    var server_io: WebSocketFdTransport = websocket_fd_transport_owned(server_fd);
+    const opts: WebSocketAcceptOptions = new_opts();
+    client_out[0] = websocket_conn_new(&client_io, WebSocketRole.Client, &opts);
+    server_out[0] = websocket_conn_new(&server_io, WebSocketRole.Server, &opts);
+}
+
+fn run_with_loop_usize(f: Future<!usize>) !usize {
+    const result: !usize = block_on<usize>(f);
+    return try result;
+}
+
+test "websocket_async_loopback_frame_roundtrip" {
+    var client: WebSocketConn = websocket_conn_empty();
+    var server: WebSocketConn = websocket_conn_empty();
+    try make_pair(&client, &server);
+
+    var payload: [byte: 6] = "hello";
+    var tx: [byte: 64] = [];
+    var rx: [byte: 64] = [];
+    var opcode: WebSocketOpcode = WebSocketOpcode.Binary;
+    var fin: bool = false;
+    var payload_len: usize = 0;
+
+    const sent: usize = try run_with_loop_usize(websocket_conn_write_frame(&client, WebSocketOpcode.Text, &payload[0], 5, &tx[0], 64));
+    const got: usize = try run_with_loop_usize(websocket_conn_read_frame(&server, &rx[0], 64, &opcode, &fin, &payload_len));
+    try assert_true(sent > 0);
+    try assert_true(got > 0);
+    try assert_true(fin);
+    try assert_eq_i32(1, opcode as i32);
+    try assert_eq_i32(5, payload_len as i32);
+    try assert_true(bytes_eq_raw(&rx[0], &payload[0], 5));
+}
+
+test "websocket_async_read_message_aggregates_fragments" {
+    var client: WebSocketConn = websocket_conn_empty();
+    var server: WebSocketConn = websocket_conn_empty();
+    try make_pair(&client, &server);
+
+    var payload: [byte: 201] = [0: 201];
+    var i: usize = 0;
+    while i < 200 {
+        payload[i] = ((i % (26 as usize)) + (65 as usize)) as byte;
+        i = i + 1;
+    }
+
+    var tx: [byte: 32] = [];
+    var rx: [byte: 256] = [];
+    var msg_buf: [byte: 256] = [];
+    var opcode: WebSocketOpcode = WebSocketOpcode.Binary;
+
+    _ = try run_with_loop_usize(websocket_conn_write_message(&client, WebSocketOpcode.Text, &payload[0], 200, &tx[0], 32));
+    const got_res: !usize = run_with_loop_usize(websocket_conn_read_message(&server, &rx[0], 256, &msg_buf[0], 256, &opcode));
+    match got_res {
+        error.WebSocketProtocolError => { try assert_eq_i32(901, 0); }
+        error.WebSocketContinuationMissing => { try assert_eq_i32(902, 0); }
+        error.WebSocketMessageTooLarge => { try assert_eq_i32(903, 0); }
+        error.WebSocketUtf8Required => { try assert_eq_i32(904, 0); }
+        error.WebSocketConnectionClosed => { try assert_eq_i32(905, 0); }
+        else => {}
+    }
+    const got: usize = try got_res;
+    try assert_eq_i32(200, got as i32);
+    try assert_eq_i32(1, opcode as i32);
+    try assert_true(bytes_eq_raw(&msg_buf[0], &payload[0], 200));
+}
+
+test "websocket_async_close_then_read_and_write_fail" {
+    var client: WebSocketConn = websocket_conn_empty();
+    var server: WebSocketConn = websocket_conn_empty();
+    try make_pair(&client, &server);
+
+    var tx: [byte: 64] = [];
+    var rx: [byte: 64] = [];
+    var msg_buf: [byte: 64] = [];
+    var opcode: WebSocketOpcode = WebSocketOpcode.Binary;
+
+    _ = try run_with_loop_usize(websocket_conn_close_with_code(&client, 1000 as u16, null as &const byte, 0, &tx[0], 64));
+    const read_result: !usize = run_with_loop_usize(websocket_conn_read_message(&server, &rx[0], 64, &msg_buf[0], 64, &opcode));
+    if read_result.error_id == 0u32 {
+        try assert_eq_i32(read_result.value as i32, -901);
+    }
+
+    var payload: [byte: 3] = [65, 66, 67];
+    const write_result: !usize = run_with_loop_usize(websocket_conn_write_message(&server, WebSocketOpcode.Binary, &payload[0], 3, &tx[0], 64));
+    if write_result.error_id == 0u32 {
+        try assert_eq_i32(write_result.value as i32, -902);
+    }
+}
+
+test "websocket_async_auto_pong" {
+    var client: WebSocketConn = websocket_conn_empty();
+    var server: WebSocketConn = websocket_conn_empty();
+    try make_pair(&client, &server);
+
+    var ping_payload: [byte: 2] = [79, 75];
+    var text_payload: [byte: 3] = [65, 66, 67];
+    var tx_client: [byte: 64] = [];
+    var tx_server: [byte: 64] = [];
+    var rx_server: [byte: 128] = [];
+    var rx_client: [byte: 128] = [];
+    var msg_buf: [byte: 64] = [];
+    var msg_opcode: WebSocketOpcode = WebSocketOpcode.Binary;
+    var pong_opcode: WebSocketOpcode = WebSocketOpcode.Binary;
+    var pong_fin: bool = false;
+    var pong_len: usize = 0;
+
+    _ = try run_with_loop_usize(websocket_conn_write_frame(&client, WebSocketOpcode.Ping, &ping_payload[0], 2, &tx_client[0], 64));
+    _ = try run_with_loop_usize(websocket_conn_write_message(&client, WebSocketOpcode.Text, &text_payload[0], 3, &tx_client[0], 64));
+    const got: usize = try run_with_loop_usize(websocket_conn_read_message(&server, &rx_server[0], 128, &msg_buf[0], 64, &msg_opcode));
+    try assert_eq_i32(3, got as i32);
+    try assert_eq_i32(1, msg_opcode as i32);
+    try assert_true(bytes_eq_raw(&msg_buf[0], &text_payload[0], 3));
+
+    _ = try run_with_loop_usize(websocket_conn_read_frame(&client, &rx_client[0], 128, &pong_opcode, &pong_fin, &pong_len));
+    try assert_true(pong_fin);
+    try assert_eq_i32(10, pong_opcode as i32);
+    try assert_true(bytes_eq_raw(&rx_client[0], &ping_payload[0], 2));
+    _ = tx_server;
+}
+
+test "websocket_async_enqueue_and_flush" {
+    var client: WebSocketConn = websocket_conn_empty();
+    var server: WebSocketConn = websocket_conn_empty();
+    try make_pair(&client, &server);
+
+    var msg1: [byte: 6] = "hello";
+    var msg2: [byte: 6] = "world";
+    var rx: [byte: 128] = [];
+    var msg_buf: [byte: 128] = [];
+    var opcode: WebSocketOpcode = WebSocketOpcode.Binary;
+
+    _ = try run_with_loop_usize(websocket_conn_enqueue_message(&client, WebSocketOpcode.Text, &msg1[0], 5));
+    _ = try run_with_loop_usize(websocket_conn_enqueue_message(&client, WebSocketOpcode.Text, &msg2[0], 5));
+    _ = try run_with_loop_usize(websocket_conn_flush_pending(&client));
+
+    const got1: usize = try run_with_loop_usize(websocket_conn_read_message(&server, &rx[0], 128, &msg_buf[0], 128, &opcode));
+    try assert_eq_i32(5, got1 as i32);
+    try assert_eq_i32(1, opcode as i32);
+    try assert_true(bytes_eq_raw(&msg_buf[0], &msg1[0], 5));
+
+    const got2: usize = try run_with_loop_usize(websocket_conn_read_message(&server, &rx[0], 128, &msg_buf[0], 128, &opcode));
+    try assert_eq_i32(5, got2 as i32);
+    try assert_eq_i32(1, opcode as i32);
+    if !bytes_eq_raw(&msg_buf[0], &msg2[0], 5) {
+        if bytes_eq_raw(&msg_buf[0], &msg1[0], 5) {
+            try assert_eq_i32(911, 0);
+        }
+        try assert_eq_i32(msg_buf[0] as i32, -912);
+    }
+}

@@ -8,6 +8,8 @@ use std.io.file_close;
 use std.io.file_open;
 use std.io.file_read;
 use std.io.file_write;
+use libc.O_CREAT;
+use libc.O_WRONLY;
 use libc.unlink;
 
 const TEST_PATH: *const byte = "/tmp/uya_std_io_file_trait.txt" as *const byte;
@@ -26,7 +28,7 @@ test "std_io_file_open_close_dev_null" {
 test "std_io_file_write_read_roundtrip" {
     _ = unlink(TEST_PATH);
     {
-        var wf: File = try file_open(TEST_PATH, 65, 0o644);
+        var wf: File = try file_open(TEST_PATH, (O_WRONLY | O_CREAT) as i32, 0o644);
         errdefer {
             _ = file_close(&wf) catch {};
             _ = unlink(TEST_PATH);

@@ -1,4 +1,4 @@
-// test_pthread_api.uya - pthread 公共 API 回归测试
+// test_pthread_api.uya - pthread API 快速回归（线程生命周期相关已拆到独立文件）
 
 use std.runtime.entry;
 use libc.pthread;
@@ -8,24 +8,8 @@ use std.testing.test_pass;
 use std.testing.test_fail;
 use std.testing.expect;
 
-var _cancel_started: atomic i32 = 0;
-
-fn api_thread_start(arg: &void) &void {
-    pthread_exit(arg);
-    return null;
-}
-
-fn api_cancel_thread(arg: &void) &void {
-    _ = arg;
-    _cancel_started = 1;
-    while true {
-        pthread_testcancel();
-        _ = pthread_yield();
-    }
-    return null;
-}
-
 var _once_hits: i32 = 0;
+
 fn api_once_init(arg: &void) &void {
     _ = arg;
     _once_hits = _once_hits + 1;
@@ -67,33 +51,6 @@ fn test_pthread_attr_api() !void {
 
     try expect(pthread_attr_setstacksize(&attr, 4096) == 22);
     try expect(pthread_attr_setdetachstate(&attr, 2) == 22);
-    try expect(pthread_attr_destroy(&attr) == 0);
-}
-
-fn test_pthread_create_join_api() !void {
-    var attr: pthread_attr_t = pthread_attr_t{};
-    try expect(pthread_attr_init(&attr) == 0);
-
-    var th: pthread_t = pthread_t{};
-    var marker: i32 = 7;
-    const arg: &void = (&marker) as &void;
-    try expect(pthread_create(&th, &attr, &api_thread_start as &void, arg) == 0);
-
-    var result: &void = null;
-    try expect(pthread_join(&th, &result) == 0);
-    try expect(result == arg);
-    try expect(pthread_attr_destroy(&attr) == 0);
-}
-
-fn test_pthread_detach_api() !void {
-    var attr: pthread_attr_t = pthread_attr_t{};
-    try expect(pthread_attr_init(&attr) == 0);
-    try expect(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0);
-
-    var th: pthread_t = pthread_t{};
-    try expect(pthread_create(&th, &attr, &api_thread_start as &void, null) == 0);
-    try expect(pthread_join(&th, null as & &void) == 22);
-
     try expect(pthread_attr_destroy(&attr) == 0);
 }
 
@@ -149,25 +106,6 @@ fn test_pthread_key_api() !void {
     try expect(pthread_key_delete(&key) == 0);
 }
 
-fn test_pthread_cancel_api() !void {
-    _cancel_started = 0;
-
-    var th: pthread_t = pthread_t{};
-    try expect(pthread_create(&th, null as &const pthread_attr_t, &api_cancel_thread as &void, null) == 0);
-
-    while _cancel_started == 0 {
-        _ = pthread_yield();
-    }
-
-    try expect(pthread_cancel(&th) == 0);
-
-    var result: &void = null;
-    try expect(pthread_join(&th, &result) == 0);
-    try expect(result == PTHREAD_CANCELED);
-
-    pthread_testcancel();
-}
-
 export fn main() i32 {
     test_suite_begin("pthread_api");
 
@@ -189,18 +127,6 @@ export fn main() i32 {
     };
     test_pass("pthread_attr_api");
 
-    test_pthread_create_join_api() catch {
-        test_fail("pthread_create_join_api");
-        return test_suite_end();
-    };
-    test_pass("pthread_create_join_api");
-
-    test_pthread_detach_api() catch {
-        test_fail("pthread_detach_api");
-        return test_suite_end();
-    };
-    test_pass("pthread_detach_api");
-
     test_pthread_mutex_api() catch {
         test_fail("pthread_mutex_api");
         return test_suite_end();
@@ -218,12 +144,6 @@ export fn main() i32 {
         return test_suite_end();
     };
     test_pass("pthread_key_api");
-
-    test_pthread_cancel_api() catch {
-        test_fail("pthread_cancel_api");
-        return test_suite_end();
-    };
-    test_pass("pthread_cancel_api");
 
     return test_suite_end();
 }

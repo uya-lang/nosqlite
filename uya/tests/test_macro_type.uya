@@ -8,7 +8,7 @@ use std.testing.run_test;
 
 // 简单测试：type 返回类型
 mc int_type() type {
-    i32
+    @mc_code(@mc_ast(i32));
 }
 
 fn test_type_macro() !void {

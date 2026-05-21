@@ -1,0 +1,207 @@
+use std.http.parse.http_parse_request;
+use std.http.server;
+use std.http.websocket_async;
+use std.http.websocket_handshake;
+use std.http.websocket_types;
+use std.async;
+use libc.syscall;
+use std.testing.assert_eq_i32;
+use std.testing.assert_true;
+
+fn parse_req(src: &[byte]) !Request {
+    const pr: ParseResult = try http_parse_request(src);
+    return pr.request;
+}
+
+fn slice_eq(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn slice_has(hay: &[byte], needle: &[byte]) bool {
+    if hay.len < needle.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i + needle.len <= hay.len {
+        var ok: bool = true;
+        var j: usize = 0;
+        while j < needle.len {
+            if hay.ptr[i + j] != needle.ptr[j] {
+                ok = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if ok {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn bytes_eq_raw(a: &byte, b: &byte, n: usize) bool {
+    var i: usize = 0;
+    while i < n {
+        if a[i] != b[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn make_tcp_pair(client_fd_out: &i32, server_fd_out: &i32) !void {
+    const cfg: ServerConfig = ServerConfig{
+        mode: ServerMode.Blocking,
+        max_connections: 32,
+        port: 0,
+        host: [],
+    };
+    var srv: HttpServer = try http_server_listen(&cfg);
+    errdefer { http_server_close(&srv); }
+    const client_fd: i32 = try http_tcp_connect_loopback(srv.port);
+    var accepted: Conn = try http_server_accept(&srv);
+    http_server_close(&srv);
+    client_fd_out[0] = client_fd;
+    server_fd_out[0] = accepted.fd;
+    accepted.fd = -1;
+}
+
+fn run_with_loop_usize(f: Future<!usize>) !usize {
+    const result: !usize = block_on<usize>(f);
+    return try result;
+}
+
+test "websocket_handshake_success_and_accept" {
+    const raw: &[byte] = &"GET /ws HTTP/1.1\r\nHost: example.com\r\nConnection: keep-alive, Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"[0: 171];
+    const req: Request = try parse_req(raw);
+    try assert_true(websocket_request_is_upgrade(&req));
+    try websocket_validate_upgrade_request(&req);
+
+    var out: [byte: 64] = [];
+    const key: &[byte] = &"dGhlIHNhbXBsZSBub25jZQ=="[0: 24];
+    const n: usize = try websocket_compute_accept(key, &out[0], 64);
+    const want: &[byte] = &"s3pPLMBiTxaQ9kYGzzhZRbK+xOo="[0: 28];
+    if !slice_eq(out[0: n], want) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "websocket_handshake_missing_key" {
+    const raw: &[byte] = &"GET /ws HTTP/1.1\r\nHost: example.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\r\n"[0: 115];
+    const req: Request = try parse_req(raw);
+    const result: !void = websocket_validate_upgrade_request(&req);
+    match result {
+        error.WebSocketMissingKey => {}
+        else => { try assert_eq_i32(0, 1); }
+    }
+}
+
+test "websocket_handshake_rejects_wrong_version" {
+    const raw: &[byte] = &"GET /ws HTTP/1.1\r\nHost: example.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 12\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"[0: 159];
+    const req: Request = try parse_req(raw);
+    const result: !void = websocket_validate_upgrade_request(&req);
+    match result {
+        error.WebSocketUnsupportedVersion => {}
+        else => { try assert_eq_i32(0, 1); }
+    }
+}
+
+test "websocket_handshake_header_case_insensitive" {
+    const raw: &[byte] = &"GET /ws HTTP/1.1\r\nHost: example.com\r\ncoNNection: UpGrade\r\nuPgrade: WebSocket\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"[0: 167];
+    const req: Request = try parse_req(raw);
+    try assert_true(websocket_request_is_upgrade(&req));
+    try websocket_validate_upgrade_request(&req);
+}
+
+test "websocket_handshake_pick_subprotocol" {
+    const raw: &[byte] = &"GET /ws HTTP/1.1\r\nHost: example.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: chat, superchat\r\n\r\n"[0: 208];
+    const req: Request = try parse_req(raw);
+    var supported: [&const byte: 2] = ["graphql-ws", "superchat"];
+    const picked: &[const byte] = try websocket_pick_subprotocol(&req, &supported[0], 2);
+    if !slice_eq(picked, &"superchat"[0: 9]) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "websocket_handshake_pick_subprotocol_missing" {
+    const raw: &[byte] = &"GET /ws HTTP/1.1\r\nHost: example.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: chat, superchat\r\n\r\n"[0: 208];
+    const req: Request = try parse_req(raw);
+    var supported: [&const byte: 1] = ["json"];
+    const picked: &[const byte] = try websocket_pick_subprotocol(&req, &supported[0], 1);
+    try assert_eq_i32(0, picked.len as i32);
+}
+
+test "websocket_accept_from_http_writes_response_and_roundtrips" {
+    const raw: &[byte] = &"GET /ws HTTP/1.1\r\nHost: example.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: chat\r\n\r\n"[0: 195];
+    const req: Request = try parse_req(raw);
+
+    var supported: [&const byte: 1] = ["chat"];
+    var opts: WebSocketAcceptOptions = websocket_accept_options_default();
+    opts.subprotocols = &supported[0] as &const byte;
+    opts.subprotocol_count = 1;
+
+    var client_fd: i32 = -1;
+    var server_fd: i32 = -1;
+    try make_tcp_pair(&client_fd, &server_fd);
+
+    var server_ws: WebSocketConn = try websocket_accept_from_http(server_fd, &req, &opts);
+    server_fd = -1;
+
+    var resp: [byte: 256] = [];
+    const rn: isize = try sys_read(client_fd, &resp[0], 256);
+    if rn <= 0 {
+        try assert_eq_i32(0, 1);
+    }
+    const resp_slice: &[byte] = resp[0: rn as usize];
+    try assert_true(slice_has(resp_slice, &"HTTP/1.1 101 Switching Protocols"[0: 32]));
+    try assert_true(slice_has(resp_slice, &"Sec-WebSocket-Protocol: chat"[0: 28]));
+
+    var client_io: WebSocketFdTransport = websocket_fd_transport_owned(client_fd);
+    var client_ws: WebSocketConn = websocket_conn_new(&client_io, WebSocketRole.Client, &opts);
+
+    var payload: [byte: 6] = "hello";
+    var tx: [byte: 64] = [];
+    var rx: [byte: 128] = [];
+    var msg: [byte: 128] = [];
+    var opcode: WebSocketOpcode = WebSocketOpcode.Binary;
+
+    _ = try run_with_loop_usize(websocket_conn_write_message(&client_ws, WebSocketOpcode.Text, &payload[0], 5, &tx[0], 64));
+    const got: usize = try run_with_loop_usize(websocket_conn_read_message(&server_ws, &rx[0], 128, &msg[0], 128, &opcode));
+    try assert_eq_i32(5, got as i32);
+    try assert_eq_i32(WebSocketOpcode.Text as i32, opcode as i32);
+    try assert_true(bytes_eq_raw(&msg[0], &payload[0], 5));
+}
+
+test "websocket_accept_from_http_rejects_extensions_when_disabled" {
+    const raw: &[byte] = &"GET /ws HTTP/1.1\r\nHost: example.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n"[0: 222];
+    const req: Request = try parse_req(raw);
+    var opts: WebSocketAcceptOptions = websocket_accept_options_default();
+
+    var client_fd: i32 = -1;
+    var server_fd: i32 = -1;
+    try make_tcp_pair(&client_fd, &server_fd);
+    defer { _ = sys_close(client_fd) catch {}; }
+    defer {
+        if server_fd >= 0 {
+            _ = sys_close(server_fd) catch {};
+        }
+    }
+
+    const result: !WebSocketConn = websocket_accept_from_http(server_fd, &req, &opts);
+    match result {
+        error.WebSocketExtensionsNotSupported => {}
+        else => { try assert_eq_i32(0, 1); }
+    }
+}

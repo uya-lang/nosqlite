@@ -9,13 +9,12 @@ export fn main() i32 {
     // 打印消息（使用 SYS_write）
     const SYS_write: i64 = 1;
     const msg: *byte = "Exiting via @syscall...\n";
-    @syscall(SYS_write, 1, msg as i64, 24);
+    _ = @syscall(SYS_write, 1, msg as i64, 24) catch {};
     
     // 调用 SYS_exit(0)
     // 注意：这个调用不会返回（noreturn）
-    @syscall(SYS_exit, 0);
+    _ = @syscall(SYS_exit, 0) catch {};
     
     // 理论上不会执行到这里
     return 1;
 }
-

@@ -3,6 +3,7 @@
 
 use std.async_frame.AsyncFramePool;
 use std.async_frame.async_frame_pool_init;
+use std.async_frame.async_frame_pool_init_with_buffer;
 use std.async_frame.async_frame_pool_alloc_aligned;
 use std.async_frame.async_frame_pool_free_aligned;
 use std.async_frame.async_frame_pool_stats;
@@ -15,7 +16,7 @@ fn dummy_async() Future<!i32> {
     return 1;
 }
 
-fn test_pool_stats() void {
+fn test_pool_stats() !void {
     // 强制生成 async frame descriptor 表
     const _f: Future<!i32> = dummy_async();
     _ = _f;
@@ -44,13 +45,52 @@ fn test_pool_stats() void {
     async_frame_pool_stats(&pool, &total_alloc, &total_free, &full_count, &heap_fallback);
 
     // 至少应该成功分配了 4096 次（单桶容量）
-    expect(total_alloc >= 4096);
+    try expect(total_alloc >= 4096);
     // 因为开启了 debug_heap_fallback，超出的分配应该触发 fallback
-    expect(heap_fallback >= 1);
+    try expect(heap_fallback >= 1);
     // 释放次数应该等于分配次数（立即释放路径）
-    expect(total_free == total_alloc);
+    try expect(total_free == total_alloc);
+}
+
+fn ptr_in_range(base: &byte, size: usize, ptr: &byte) bool {
+    if base == null || ptr == null || size == 0 {
+        return false;
+    }
+    const base_addr: usize = @usize_from_ptr(base as &void);
+    const ptr_addr: usize = @usize_from_ptr(ptr as &void);
+    return ptr_addr >= base_addr && ptr_addr < base_addr + size;
+}
+
+fn test_pool_buffer_prefers_stack_and_large_heap() !void {
+    var storage: [byte: 256] = [];
+    var pool: AsyncFramePool = AsyncFramePool{};
+    async_frame_pool_init_with_buffer(&pool, &storage[0] as &byte, 256usize, 1, 64usize);
+
+    const small_ptr: &byte = async_frame_pool_alloc_aligned(&pool, 32usize, 8usize);
+    try expect(small_ptr != null);
+    try expect(ptr_in_range(&storage[0] as &byte, 256usize, small_ptr));
+
+    const large_ptr: &byte = async_frame_pool_alloc_aligned(&pool, 96usize, 8usize);
+    try expect(large_ptr != null);
+    try expect(!ptr_in_range(&storage[0] as &byte, 256usize, large_ptr));
+
+    async_frame_pool_free_aligned(&pool, small_ptr, 32usize, 8usize);
+    async_frame_pool_free_aligned(&pool, large_ptr, 96usize, 8usize);
+
+    var total_alloc: i32 = 0;
+    var total_free: i32 = 0;
+    var full_count: i32 = 0;
+    var heap_fallback: i32 = 0;
+    async_frame_pool_stats(&pool, &total_alloc, &total_free, &full_count, &heap_fallback);
+    try expect(total_alloc >= 1);
+    try expect(total_free >= 1);
+    try expect(heap_fallback >= 1);
 }
 
 test "async_frame_pool_stats" {
     run_test("async_frame_pool_stats", test_pool_stats);
+}
+
+test "async_frame_pool_buffer_prefers_stack_and_large_heap" {
+    run_test("async_frame_pool_buffer_prefers_stack_and_large_heap", test_pool_buffer_prefers_stack_and_large_heap);
 }

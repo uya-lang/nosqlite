@@ -5,6 +5,9 @@ use std.runtime.entry;
 use std.testing.test_suite_begin;
 use std.testing.test_suite_end;
 use std.testing.run_test;
+use std.testing.assert_eq_i32;
+
+error MacroBranchTaken;
 
 mc block_stmt() stmt {
     @mc_code(@mc_ast({
@@ -23,7 +26,7 @@ mc block_with_params(a: expr, b: expr) stmt {
 mc if_stmt(cond: expr) stmt {
     @mc_code(@mc_ast(
         if ${cond} {
-            return 1;
+            return error.MacroBranchTaken;
         }
     ));
 }
@@ -53,26 +56,23 @@ mc while_count(limit: expr) expr {
 mc nested_if_in_block(a: expr, b: expr) stmt {
     @mc_code(@mc_ast({
         if ${a} > ${b} {
-            return 1;
+            return error.MacroBranchTaken;
         }
         if ${a} < ${b} {
-            return 2;
+            return error.MacroBranchTaken;
         }
     }));
 }
 
-fn test_macro_complex_stmt() i32 {
+fn test_macro_complex_stmt() !void {
     block_stmt();
     block_with_params(10, 5);
     if_stmt(0 == 1);
     declare_const_block(42);
     declare_var_block(100);
     const while_result: i32 = while_count(5);
-    if while_result != 5 {
-        return 11;
-    }
+    try assert_eq_i32(while_result, 5);
     nested_if_in_block(5, 5);
-    return 0;
 }
 
 export fn main() i32 {

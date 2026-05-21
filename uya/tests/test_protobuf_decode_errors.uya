@@ -26,6 +26,7 @@ export fn main() i32 {
     var got_trunc: bool = false;
     pb_read_varint_u64(&c1) catch {
         got_trunc = true;
+        0u64;
     };
     if !got_trunc {
         return 1;
@@ -41,6 +42,7 @@ export fn main() i32 {
     var got_inv: bool = false;
     pb_read_varint_u64(&c2) catch {
         got_inv = true;
+        0u64;
     };
     if !got_inv {
         return 2;

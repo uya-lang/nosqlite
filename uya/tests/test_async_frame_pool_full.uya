@@ -27,17 +27,19 @@ fn tiny_async() !Future<i32> {
 
 fn test_pool_full_returns_error() !void {
     var failing: FailingAlloc = FailingAlloc{};
-    set_async_frame_allocator(&failing as &IAllocator);
+    var alloc: IAllocator = failing;
+    set_async_frame_allocator(&alloc);
     const r: !Future<i32> = tiny_async();
     var got_pool_full: bool = false;
     const f: Future<i32> = r catch |err| {
         if @error_id(err) != @error_id(error.AsyncFramePoolFull) {
             abort();
         }
+        got_pool_full = true;
         return;
     };
     _ = f;
-    try assert_true(false);
+    try assert_true(got_pool_full);
 }
 
 export fn main() i32 {

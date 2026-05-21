@@ -22,6 +22,9 @@ export error ConnectionClosed;
 export error ReadWouldBlock;
 export error IncompleteRequest;
 export error RouterFull;
+export error RouteConflict;
+export error RouteParamConflict;
+export error RouteWildcardNotTail;
 
 // ============================================================
 // 常量
@@ -36,6 +39,13 @@ export const MAX_BODY_SIZE: i32 = 65536;
 export const MAX_MULTIPART_PARTS: i32 = 16;
 /// 路由表最大条数（与 RouteEntry 数组一致，勿在业务代码中写死字面量）
 export const MAX_ROUTES: i32 = 32;
+export const HEADER_KIND_OTHER: i32 = 0;
+export const HEADER_KIND_CONTENT_LENGTH: i32 = 1;
+export const HEADER_KIND_CONNECTION: i32 = 2;
+export const HEADER_KIND_TRANSFER_ENCODING: i32 = 3;
+export const HEADER_KIND_CONTENT_TYPE: i32 = 4;
+export const HEADER_KIND_HOST: i32 = 5;
+export const HEADER_KIND_AUTHORIZATION: i32 = 6;
 
 // ============================================================
 // HTTP 方法
@@ -89,6 +99,7 @@ fn method_from_str(s: &const byte, len: usize) Method {
 // ============================================================
 
 export enum Status {
+    SwitchingProtocols = 101,
     OK = 200,
     Created = 201,
     NoContent = 204,
@@ -127,6 +138,8 @@ export struct HttpKvSlice {
 export struct Header {
     name: [byte: MAX_HEADER_SIZE],
     name_len: usize,
+    name_hash: u64,
+    name_kind: i32,
     value: [byte: MAX_HEADER_VALUE_SIZE],
     value_len: usize,
 }
@@ -273,6 +286,122 @@ fn http_byte_to_lower_ty(c: byte) byte {
     return c;
 }
 
+fn http_header_hash_init_ty() u64 {
+    return 14695981039346656037u64;
+}
+
+fn http_header_hash_push_ty(hash: u64, c: byte) u64 {
+    return (hash ^ (c as u64)) * 1099511628211u64;
+}
+
+fn request_header_kind_for_name(name: &[byte]) i32 {
+    if name.len == 14 {
+        if http_byte_to_lower_ty(name.ptr[0]) == 'c' as byte &&
+           http_byte_to_lower_ty(name.ptr[1]) == 'o' as byte &&
+           http_byte_to_lower_ty(name.ptr[2]) == 'n' as byte &&
+           http_byte_to_lower_ty(name.ptr[3]) == 't' as byte &&
+           http_byte_to_lower_ty(name.ptr[4]) == 'e' as byte &&
+           http_byte_to_lower_ty(name.ptr[5]) == 'n' as byte &&
+           http_byte_to_lower_ty(name.ptr[6]) == 't' as byte &&
+           http_byte_to_lower_ty(name.ptr[7]) == '-' as byte &&
+           http_byte_to_lower_ty(name.ptr[8]) == 'l' as byte &&
+           http_byte_to_lower_ty(name.ptr[9]) == 'e' as byte &&
+           http_byte_to_lower_ty(name.ptr[10]) == 'n' as byte &&
+           http_byte_to_lower_ty(name.ptr[11]) == 'g' as byte &&
+           http_byte_to_lower_ty(name.ptr[12]) == 't' as byte &&
+           http_byte_to_lower_ty(name.ptr[13]) == 'h' as byte {
+            return HEADER_KIND_CONTENT_LENGTH;
+        }
+    }
+    if name.len == 10 {
+        if http_byte_to_lower_ty(name.ptr[0]) == 'c' as byte &&
+           http_byte_to_lower_ty(name.ptr[1]) == 'o' as byte &&
+           http_byte_to_lower_ty(name.ptr[2]) == 'n' as byte &&
+           http_byte_to_lower_ty(name.ptr[3]) == 'n' as byte &&
+           http_byte_to_lower_ty(name.ptr[4]) == 'e' as byte &&
+           http_byte_to_lower_ty(name.ptr[5]) == 'c' as byte &&
+           http_byte_to_lower_ty(name.ptr[6]) == 't' as byte &&
+           http_byte_to_lower_ty(name.ptr[7]) == 'i' as byte &&
+           http_byte_to_lower_ty(name.ptr[8]) == 'o' as byte &&
+           http_byte_to_lower_ty(name.ptr[9]) == 'n' as byte {
+            return HEADER_KIND_CONNECTION;
+        }
+    }
+    if name.len == 17 {
+        if http_byte_to_lower_ty(name.ptr[0]) == 't' as byte &&
+           http_byte_to_lower_ty(name.ptr[1]) == 'r' as byte &&
+           http_byte_to_lower_ty(name.ptr[2]) == 'a' as byte &&
+           http_byte_to_lower_ty(name.ptr[3]) == 'n' as byte &&
+           http_byte_to_lower_ty(name.ptr[4]) == 's' as byte &&
+           http_byte_to_lower_ty(name.ptr[5]) == 'f' as byte &&
+           http_byte_to_lower_ty(name.ptr[6]) == 'e' as byte &&
+           http_byte_to_lower_ty(name.ptr[7]) == 'r' as byte &&
+           http_byte_to_lower_ty(name.ptr[8]) == '-' as byte &&
+           http_byte_to_lower_ty(name.ptr[9]) == 'e' as byte &&
+           http_byte_to_lower_ty(name.ptr[10]) == 'n' as byte &&
+           http_byte_to_lower_ty(name.ptr[11]) == 'c' as byte &&
+           http_byte_to_lower_ty(name.ptr[12]) == 'o' as byte &&
+           http_byte_to_lower_ty(name.ptr[13]) == 'd' as byte &&
+           http_byte_to_lower_ty(name.ptr[14]) == 'i' as byte &&
+           http_byte_to_lower_ty(name.ptr[15]) == 'n' as byte &&
+           http_byte_to_lower_ty(name.ptr[16]) == 'g' as byte {
+            return HEADER_KIND_TRANSFER_ENCODING;
+        }
+    }
+    if name.len == 12 {
+        if http_byte_to_lower_ty(name.ptr[0]) == 'c' as byte &&
+           http_byte_to_lower_ty(name.ptr[1]) == 'o' as byte &&
+           http_byte_to_lower_ty(name.ptr[2]) == 'n' as byte &&
+           http_byte_to_lower_ty(name.ptr[3]) == 't' as byte &&
+           http_byte_to_lower_ty(name.ptr[4]) == 'e' as byte &&
+           http_byte_to_lower_ty(name.ptr[5]) == 'n' as byte &&
+           http_byte_to_lower_ty(name.ptr[6]) == 't' as byte &&
+           http_byte_to_lower_ty(name.ptr[7]) == '-' as byte &&
+           http_byte_to_lower_ty(name.ptr[8]) == 't' as byte &&
+           http_byte_to_lower_ty(name.ptr[9]) == 'y' as byte &&
+           http_byte_to_lower_ty(name.ptr[10]) == 'p' as byte &&
+           http_byte_to_lower_ty(name.ptr[11]) == 'e' as byte {
+            return HEADER_KIND_CONTENT_TYPE;
+        }
+    }
+    if name.len == 4 {
+        if http_byte_to_lower_ty(name.ptr[0]) == 'h' as byte &&
+           http_byte_to_lower_ty(name.ptr[1]) == 'o' as byte &&
+           http_byte_to_lower_ty(name.ptr[2]) == 's' as byte &&
+           http_byte_to_lower_ty(name.ptr[3]) == 't' as byte {
+            return HEADER_KIND_HOST;
+        }
+    }
+    if name.len == 13 {
+        if http_byte_to_lower_ty(name.ptr[0]) == 'a' as byte &&
+           http_byte_to_lower_ty(name.ptr[1]) == 'u' as byte &&
+           http_byte_to_lower_ty(name.ptr[2]) == 't' as byte &&
+           http_byte_to_lower_ty(name.ptr[3]) == 'h' as byte &&
+           http_byte_to_lower_ty(name.ptr[4]) == 'o' as byte &&
+           http_byte_to_lower_ty(name.ptr[5]) == 'r' as byte &&
+           http_byte_to_lower_ty(name.ptr[6]) == 'i' as byte &&
+           http_byte_to_lower_ty(name.ptr[7]) == 'z' as byte &&
+           http_byte_to_lower_ty(name.ptr[8]) == 'a' as byte &&
+           http_byte_to_lower_ty(name.ptr[9]) == 't' as byte &&
+           http_byte_to_lower_ty(name.ptr[10]) == 'i' as byte &&
+           http_byte_to_lower_ty(name.ptr[11]) == 'o' as byte &&
+           http_byte_to_lower_ty(name.ptr[12]) == 'n' as byte {
+            return HEADER_KIND_AUTHORIZATION;
+        }
+    }
+    return HEADER_KIND_OTHER;
+}
+
+fn request_header_lookup_hash(name: &[byte]) u64 {
+    var hash: u64 = http_header_hash_init_ty();
+    var i: usize = 0;
+    while i < name.len {
+        hash = http_header_hash_push_ty(hash, http_byte_to_lower_ty(name.ptr[i]));
+        i = i + 1;
+    }
+    return hash;
+}
+
 fn request_header_name_eq_ci(h: &Header, name: &[byte]) bool {
     if h.name_len != name.len {
         return false;
@@ -287,6 +416,13 @@ fn request_header_name_eq_ci(h: &Header, name: &[byte]) bool {
     return true;
 }
 
+fn request_header_name_eq_ci_lit(h: &Header, name: &[byte], expected_kind: i32) bool {
+    if expected_kind != HEADER_KIND_OTHER && h.name_kind != 0 && h.name_kind != expected_kind {
+        return false;
+    }
+    return request_header_name_eq_ci(h, name);
+}
+
 /// 按 **HTTP 头名大小写不敏感** 查找；值切片指向 `req.headers` 内缓冲区（与 `Request` 同生命周期）。
 /// 未找到时返回 `error.InvalidRequest`。
 export fn request_get_header(req: &Request, name: &[byte]) !&[byte] {
@@ -294,11 +430,25 @@ export fn request_get_header(req: &Request, name: &[byte]) !&[byte] {
     if req.header_count < 0 || req.header_count > header_cap {
         return error.InvalidRequest;
     }
+    const name_hash: u64 = request_header_lookup_hash(name);
+    const name_kind: i32 = request_header_kind_for_name(name);
     var hi: i32 = 0;
     while hi < req.header_count && hi < header_cap {
         if hi >= 0 && hi < header_cap {
             const h: &Header = &req.headers[hi];
-            if request_header_name_eq_ci(h, name) {
+            if h.name_len == name.len && h.name_hash != 0u64 && h.name_hash == name_hash {
+                if name_kind != HEADER_KIND_OTHER && h.name_kind != HEADER_KIND_OTHER && h.name_kind != name_kind {
+                    hi = hi + 1;
+                    continue;
+                }
+                if request_header_name_eq_ci(h, name) {
+                    const vb: &byte = &h.value[0] as &byte;
+                    return vb[0: h.value_len];
+                }
+            } else if name_kind != HEADER_KIND_OTHER && h.name_kind == name_kind && request_header_name_eq_ci(h, name) {
+                const vb: &byte = &h.value[0] as &byte;
+                return vb[0: h.value_len];
+            } else if request_header_name_eq_ci(h, name) {
                 const vb: &byte = &h.value[0] as &byte;
                 return vb[0: h.value_len];
             }
@@ -346,6 +496,31 @@ fn header_value_has_connection_token_ci(value: &[byte], tok: &[byte]) bool {
         if i < value.len && value.ptr[i] == ',' as byte {
             i = i + 1;
         }
+    }
+    return false;
+}
+
+fn header_value_has_token_ci(value: &[byte], tok: &[byte]) bool {
+    return header_value_has_connection_token_ci(value, tok);
+}
+
+export fn request_has_chunked_transfer_encoding(req: &Request) bool {
+    const val: &[byte] = request_get_header(req, &"Transfer-Encoding"[0: 17]) catch {
+        return false;
+    };
+    return header_value_has_token_ci(val, &"chunked"[0: 7]);
+}
+
+export fn request_has_content_length(req: &Request) bool {
+    const header_cap: i32 = @len(req.headers) as i32;
+    const lit: &[byte] = &"Content-Length"[0: 14];
+    var hi: i32 = 0;
+    while hi < req.header_count && hi < header_cap {
+        const h: &Header = &req.headers[hi];
+        if h.name_kind == HEADER_KIND_CONTENT_LENGTH || request_header_name_eq_ci_lit(h, lit, HEADER_KIND_CONTENT_LENGTH) {
+            return true;
+        }
+        hi = hi + 1;
     }
     return false;
 }

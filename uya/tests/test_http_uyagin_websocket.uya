@@ -1,0 +1,313 @@
+use std.async;
+use std.async_scheduler;
+use std.http.server;
+use std.http.types;
+use std.http.uyagin;
+use std.http.uyagin_websocket;
+use std.http.websocket_async;
+use std.http.websocket_frame;
+use std.http.websocket_types;
+use libc.unistd;
+use libc.syscall;
+use std.testing.assert_eq_i32;
+use std.testing.assert_true;
+
+fn slice_has(hay: &[byte], needle: &[byte]) bool {
+    if hay.len < needle.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i + needle.len <= hay.len {
+        var ok: bool = true;
+        var j: usize = 0;
+        while j < needle.len {
+            if hay.ptr[i + j] != needle.ptr[j] {
+                ok = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if ok {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn bytes_eq_raw(a: &byte, b: &byte, n: usize) bool {
+    var i: usize = 0;
+    while i < n {
+        if a[i] != b[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn write_all_fd(fd: i32, data: &[byte]) !void {
+    var total: usize = 0;
+    while total < data.len {
+        const wn: isize = try sys_write(fd, data.ptr + total, data.len - total);
+        if wn <= 0 {
+            return error.ConnectionClosed;
+        }
+        total = total + (wn as usize);
+    }
+}
+
+fn run_with_loop_usize(f: Future<!usize>) !usize {
+    const result: !usize = block_on<usize>(f);
+    return try result;
+}
+
+fn wait_child_ok(pid: i32) !void {
+    var st: i32 = 0;
+    _ = try sys_waitpid(pid, &st, 0);
+    const code: i32 = (st >> 8) & 0xff;
+    try assert_eq_i32(0, code);
+}
+
+var test_read_len: usize = 0;
+var test_read_payload: [byte: 128] = [];
+var test_read_opcode: WebSocketOpcode = WebSocketOpcode.Binary;
+
+fn sync_ws_write_message(ws: &WebSocketConn, opcode: WebSocketOpcode, payload: &byte, payload_len: usize) !void {
+    var frame: [byte: 256] = [];
+    var mask: [byte: 4] = [0: 4];
+    const frame_len: usize = try websocket_encode_frame_raw(
+        WebSocketRole.Server,
+        true,
+        opcode,
+        payload as &const byte,
+        payload_len,
+        mask,
+        &frame[0],
+        256,
+    );
+    try write_all_fd(ws.borrow_fd(), frame[0: frame_len]);
+}
+
+struct EchoUpgradeHandler : AsyncHandler {}
+
+EchoUpgradeHandler {
+    @async_fn
+    fn handle(self: &Self, ctx: &GinContext) Future<!i32> {
+        _ = self;
+        var opts: WebSocketAcceptOptions = websocket_accept_options_default();
+        var ws: WebSocketConn = try uyagin_websocket_upgrade_sync(ctx, &opts);
+        var rx: [byte: 128] = [];
+        var msg: [byte: 128] = [];
+        var opcode: WebSocketOpcode = WebSocketOpcode.Binary;
+        const n: usize = try @await ws.read_message(&rx[0], 128, &msg[0], 128, &opcode);
+        test_read_len = n;
+        test_read_opcode = opcode;
+        var i: usize = 0;
+        while i < n && i < 128 {
+            test_read_payload[i] = msg[i];
+            i = i + 1;
+        }
+        try sync_ws_write_message(&ws, opcode, &msg[0], n);
+        return 0;
+    }
+}
+
+struct UpgradeRequiredHandler : AsyncHandler {}
+
+UpgradeRequiredHandler {
+    @async_fn
+    fn handle(self: &Self, ctx: &GinContext) Future<!i32> {
+        _ = self;
+        var opts: WebSocketAcceptOptions = websocket_accept_options_default();
+        const upgraded: !WebSocketConn = uyagin_websocket_upgrade_sync(ctx, &opts);
+        if upgraded.error_id != 0u32 {
+            return try @await ctx.string(Status.BadRequest, "upgrade required");
+        }
+        return error.InvalidRequest;
+    }
+}
+
+struct UpgradeGuardHandler : AsyncHandler {}
+
+UpgradeGuardHandler {
+    @async_fn
+    fn handle(self: &Self, ctx: &GinContext) Future<!i32> {
+        _ = self;
+        var opts: WebSocketAcceptOptions = websocket_accept_options_default();
+        var ws: WebSocketConn = try uyagin_websocket_upgrade_sync(ctx, &opts);
+        _ = ws;
+        return 0;
+    }
+}
+
+test "uyagin_websocket_upgrade_echo_roundtrip" {
+    var engine: Engine = uyagin_new();
+    var handler_impl: EchoUpgradeHandler = EchoUpgradeHandler{};
+    const handler: AsyncHandler = handler_impl;
+    try engine.GET("/ws", handler);
+    test_read_len = 0;
+    test_read_opcode = WebSocketOpcode.Binary;
+
+    const cfg: ServerConfig = ServerConfig{
+        mode: ServerMode.Blocking,
+        max_connections: 32,
+        port: 0,
+        host: [],
+    };
+    var srv: HttpServer = try http_server_listen(&cfg);
+    const pid: i32 = fork();
+    if pid == 0 {
+        const client_fd: i32 = try http_tcp_connect_loopback(srv.port);
+        const req: &[byte] = &"GET /ws HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"[0: 162];
+        write_all_fd(client_fd, req) catch {
+            _exit(11);
+            return;
+        };
+        var resp: [byte: 256] = [];
+        const rn: isize = sys_read(client_fd, &resp[0], 256) catch {
+            _exit(12);
+            return;
+        };
+        if rn <= 0 || !slice_has(resp[0: rn as usize], &"HTTP/1.1 101 Switching Protocols"[0: 32]) {
+            _exit(13);
+            return;
+        }
+        var opts: WebSocketAcceptOptions = websocket_accept_options_default();
+        var client_io: WebSocketFdTransport = websocket_fd_transport_owned(client_fd);
+        var ws: WebSocketConn = websocket_conn_new(&client_io, WebSocketRole.Client, &opts);
+        var tx: [byte: 128] = [];
+        var rx: [byte: 128] = [];
+        var msg: [byte: 128] = [];
+        var payload: [byte: 6] = "hello";
+        var opcode: WebSocketOpcode = WebSocketOpcode.Binary;
+        _ = run_with_loop_usize(websocket_conn_write_message(&ws, WebSocketOpcode.Text, &payload[0], 5, &tx[0], 128)) catch {
+            _exit(14);
+            return;
+        };
+        const got: usize = run_with_loop_usize(websocket_conn_read_message(&ws, &rx[0], 128, &msg[0], 128, &opcode)) catch {
+            _exit(15);
+            return;
+        };
+        if got != 5 || opcode != WebSocketOpcode.Text || !bytes_eq_raw(&msg[0], &payload[0], 5) {
+            _exit(16);
+            return;
+        }
+        _exit(0);
+        return;
+    }
+
+    var accepted: Conn = try http_server_accept(&srv);
+    http_server_close(&srv);
+    var scheduler: Scheduler = Scheduler{};
+    scheduler_init(&scheduler);
+    const server_fd: i32 = accepted.fd;
+    accepted.fd = -1;
+    _ = try scheduler_run<!i32>(&scheduler, uyagin_serve_conn(&engine, server_fd, &scheduler));
+    try wait_child_ok(pid);
+    try assert_eq_i32(5, test_read_len as i32);
+    try assert_eq_i32(WebSocketOpcode.Text as i32, test_read_opcode as i32);
+    var want: [byte: 5] = [104, 101, 108, 108, 111];
+    try assert_true(bytes_eq_raw(&test_read_payload[0], &want[0], 5));
+}
+
+test "uyagin_websocket_upgrade_failure_can_fallback_http" {
+    var engine: Engine = uyagin_new();
+    var handler_impl: UpgradeRequiredHandler = UpgradeRequiredHandler{};
+    const handler: AsyncHandler = handler_impl;
+    try engine.GET("/ws", handler);
+
+    const cfg: ServerConfig = ServerConfig{
+        mode: ServerMode.Blocking,
+        max_connections: 32,
+        port: 0,
+        host: [],
+    };
+    var srv: HttpServer = try http_server_listen(&cfg);
+    const pid: i32 = fork();
+    if pid == 0 {
+        const client_fd: i32 = try http_tcp_connect_loopback(srv.port);
+        const req: &[byte] = &"GET /ws HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"[0: 56];
+        write_all_fd(client_fd, req) catch {
+            _exit(21);
+            return;
+        };
+        var resp: [byte: 256] = [];
+        const rn: isize = sys_read(client_fd, &resp[0], 256) catch {
+            _exit(22);
+            return;
+        };
+        if rn <= 0 {
+            _exit(23);
+            return;
+        }
+        if !slice_has(resp[0: rn as usize], &"HTTP/1.1 400 Bad Request"[0: 24]) || !slice_has(resp[0: rn as usize], &"upgrade required"[0: 16]) {
+            _exit(24);
+            return;
+        }
+        _exit(0);
+        return;
+    }
+
+    var accepted: Conn = try http_server_accept(&srv);
+    http_server_close(&srv);
+    var scheduler: Scheduler = Scheduler{};
+    scheduler_init(&scheduler);
+    const server_fd: i32 = accepted.fd;
+    accepted.fd = -1;
+    _ = try scheduler_run<!i32>(&scheduler, uyagin_serve_conn(&engine, server_fd, &scheduler));
+    try wait_child_ok(pid);
+}
+
+test "uyagin_websocket_upgrade_prevents_framework_http_fallback" {
+    var engine: Engine = uyagin_new();
+    var handler_impl: UpgradeGuardHandler = UpgradeGuardHandler{};
+    const handler: AsyncHandler = handler_impl;
+    try engine.GET("/ws", handler);
+
+    const cfg: ServerConfig = ServerConfig{
+        mode: ServerMode.Blocking,
+        max_connections: 32,
+        port: 0,
+        host: [],
+    };
+    var srv: HttpServer = try http_server_listen(&cfg);
+    const pid: i32 = fork();
+    if pid == 0 {
+        const client_fd: i32 = try http_tcp_connect_loopback(srv.port);
+        const req: &[byte] = &"GET /ws HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"[0: 162];
+        write_all_fd(client_fd, req) catch {
+            _exit(31);
+            return;
+        };
+        var resp: [byte: 256] = [];
+        const rn: isize = sys_read(client_fd, &resp[0], 256) catch {
+            _exit(32);
+            return;
+        };
+        if rn <= 0 {
+            _exit(33);
+            return;
+        }
+        const resp_slice: &[byte] = resp[0: rn as usize];
+        if !slice_has(resp_slice, &"HTTP/1.1 101 Switching Protocols"[0: 32]) {
+            _exit(34);
+            return;
+        }
+        if slice_has(resp_slice, &"HTTP/1.1 200 OK"[0: 15]) || slice_has(resp_slice, &"should-not-write"[0: 16]) {
+            _exit(35);
+            return;
+        }
+        _exit(0);
+        return;
+    }
+
+    var accepted: Conn = try http_server_accept(&srv);
+    http_server_close(&srv);
+    var scheduler: Scheduler = Scheduler{};
+    scheduler_init(&scheduler);
+    const server_fd: i32 = accepted.fd;
+    accepted.fd = -1;
+    _ = try scheduler_run<!i32>(&scheduler, uyagin_serve_conn(&engine, server_fd, &scheduler));
+    try wait_child_ok(pid);
+}

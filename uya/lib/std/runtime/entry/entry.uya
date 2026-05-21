@@ -40,7 +40,8 @@ const ENTRY_RLIMIT_STACK: i32 = 3;
 const ENTRY_DEFAULT_STACK_LIMIT_BYTES: u64 = 65536u64 * 1024u64;
 
 // 将主线程 RLIMIT_STACK 软/硬上限设为 limit_bytes。应在 main_main 开头尽早调用；设置失败时忽略。
-// Linux：仅用 @syscall，syscall 号按 arch 与 lib/libc/syscall.uya 一致；不 use libc（避免 entry 与种子/依赖环）；非 Linux 暂不设置。
+// Linux：仅用 @syscall，syscall 号按 arch 与 lib/libc/syscall.uya 一致；不 use libc（避免 entry 与种子/依赖环）。
+// 其它目标（包括 Web 构建使用的 unknown target）保持 no-op，避免把宿主 syscall 路径带进生成代码。
 export fn set_process_stack_limit_bytes(limit_bytes: u64) void {
     var rlim: EntryRLimit = EntryRLimit {
         rlim_cur: limit_bytes,
@@ -49,19 +50,23 @@ export fn set_process_stack_limit_bytes(limit_bytes: u64) void {
     std.cfg(std.target_os == .tos_linux, {
         std.cfg(std.target_arch == .ta_x86_64, {
             const SYS_setrlimit_x86_64: i64 = 160;
-            _ = @syscall(SYS_setrlimit_x86_64, ENTRY_RLIMIT_STACK as i64, &rlim as i64);
+            const setrlimit_result_x86_64: !i64 = @syscall(SYS_setrlimit_x86_64, ENTRY_RLIMIT_STACK as i64, &rlim as i64);
+            setrlimit_result_x86_64 catch { 0i64; };
         }, {
             std.cfg(std.target_arch == .ta_arm64, {
                 const SYS_setrlimit_arm64: i64 = 164;
-                _ = @syscall(SYS_setrlimit_arm64, ENTRY_RLIMIT_STACK as i64, &rlim as i64);
+                const setrlimit_result_arm64: !i64 = @syscall(SYS_setrlimit_arm64, ENTRY_RLIMIT_STACK as i64, &rlim as i64);
+                setrlimit_result_arm64 catch { 0i64; };
             }, {
                 std.cfg(std.target_arch == .ta_arm, {
                     const SYS_setrlimit_arm: i64 = 75;
-                    _ = @syscall(SYS_setrlimit_arm, ENTRY_RLIMIT_STACK as i64, &rlim as i64);
+                    const setrlimit_result_arm: !i64 = @syscall(SYS_setrlimit_arm, ENTRY_RLIMIT_STACK as i64, &rlim as i64);
+                    setrlimit_result_arm catch { 0i64; };
                 }, {
                     std.cfg(std.target_arch == .ta_riscv64, {
                         const SYS_setrlimit_riscv64: i64 = 164;
-                        _ = @syscall(SYS_setrlimit_riscv64, ENTRY_RLIMIT_STACK as i64, &rlim as i64);
+                        const setrlimit_result_riscv64: !i64 = @syscall(SYS_setrlimit_riscv64, ENTRY_RLIMIT_STACK as i64, &rlim as i64);
+                        setrlimit_result_riscv64 catch { 0i64; };
                     }, {})
                 })
             })
@@ -94,7 +99,10 @@ export extern fn main(argc: i32, argv: & &byte) i32 {
 
     // 直接执行 split-C 产物时没有 `uya test` 的 shell `ulimit` 包装。
     // 这里对齐编译器现有默认值，尽早把主线程栈抬到 64MB，避免集成 runner 在默认栈下崩溃。
-    set_process_stack_limit_bytes(ENTRY_DEFAULT_STACK_LIMIT_BYTES);
+    // Web/unknown target 不做此调优，避免拉入宿主 syscall。
+    std.cfg(std.target_os == .tos_linux, {
+        set_process_stack_limit_bytes(ENTRY_DEFAULT_STACK_LIMIT_BYTES);
+    }, {})
 
     // 调用应用程序主程序（export fn main() → main_main()）
     return main_main();

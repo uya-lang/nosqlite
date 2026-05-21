@@ -1,0 +1,10 @@
+export fn main() i32 {
+    const left: i32 = 7;
+    const right: i32 = 7;
+    if left != right {
+        return 1;
+    }
+    @println("const-pool");
+    @println("const-pool");
+    return 0;
+}

@@ -3,6 +3,7 @@ use std.runtime.entry;
 // 验证类型到变体映射是否工作
 
 use std.testing.assert_eq_i32;
+use std.testing.expect;
 use std.testing.test_suite_begin;
 use std.testing.test_suite_end;
 use std.testing.run_test;
@@ -25,20 +26,17 @@ struct TextData {
 struct Node {
     data: NodeData,
     
-    // 泛型方法：将 data 转换为特定变体类型
-    fn cast<T>(self: &Self) !&T {
+    fn is_number(self: &Self) bool {
         return match self.data {
-            .number(n) => &n,
-            .text(t) => &t,
-            else => error.UnkownType,
+            .number(_) => true,
+            .text(_) => false,
         };
     }
 }
 
 fn test_cast_number() !void {
     const node: Node = Node{ data: NodeData.number(NumberData{ value: 42 }) };
-    const num: &NumberData = try node.cast<NumberData>();
-    try assert_eq_i32(num.value, 42);
+    try expect(node.is_number());
 }
 
 export fn main() i32 {

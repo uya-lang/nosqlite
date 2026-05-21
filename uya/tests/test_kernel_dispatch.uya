@@ -1,6 +1,7 @@
 // syscall 分发桩与 SYS_YIELD → 调度状态（无宿主 MMU：pm.base == null）
 
 use kernel.container;
+use kernel.capability;
 use kernel.dispatch;
 use kernel.mem;
 use kernel.scheduler;
@@ -163,6 +164,39 @@ test "dispatch_io_unavailable_device_fails" {
         0u32;
     };
     try assert_eq_i32(unavailable, 1);
+}
+
+test "dispatch_required_caps_grant_declared_io_device_only" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+
+    var ctx: KernelHostCtx = setup_null_mm_ctx(&sch);
+    kernel_host_ctx_init(&ctx);
+    try kernel_host_apply_required_caps(&ctx, 0, KERNEL_CAP_IO_TIMER);
+
+    const ret: u32 = try syscall_dispatch(&ctx, 0, SYS_IO, KERNEL_IO_DEVICE_TIMER, KERNEL_IO_OP_READ);
+    try assert_eq_i32(ret as i32, 0);
+
+    var denied: i32 = 0;
+    _ = syscall_dispatch(&ctx, 0, SYS_IO, KERNEL_IO_DEVICE_UART, KERNEL_IO_OP_READ) catch |err| {
+        denied = 1;
+        0u32;
+    };
+    try assert_eq_i32(denied, 1);
+}
+
+test "dispatch_required_caps_unknown_bits_rejected" {
+    var sch: Scheduler = Scheduler{ slots: [], rr_cursor: 0 };
+    scheduler_init(&sch);
+
+    var ctx: KernelHostCtx = setup_null_mm_ctx(&sch);
+    kernel_host_ctx_init(&ctx);
+
+    var rejected: i32 = 0;
+    _ = kernel_host_apply_required_caps(&ctx, 0, 1u32 << 31) catch |err| {
+        rejected = 1;
+    };
+    try assert_eq_i32(rejected, 1);
 }
 
 test "dispatch_yield_then_scheduler_can_pick_peer" {

@@ -1,0 +1,14 @@
+union Token {
+    eof: void,
+    num: i32,
+}
+
+Token {
+    fn eof() Token {
+        return Token.eof();
+    }
+}
+
+fn main() i32 {
+    return 0;
+}

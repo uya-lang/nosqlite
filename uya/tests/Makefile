@@ -15,7 +15,9 @@ TEST_DIR = .
 PARALLEL_JOBS ?= 8
 
 # 收集测试文件
-TEST_FILES = $(wildcard $(TEST_DIR)/*.uya)
+# emcc_unknown_runtime_smoke 只供 tests-emcc 专用链路使用，不纳入默认宿主回归。
+EXCLUDED_TEST_FILES = $(TEST_DIR)/emcc_unknown_runtime_smoke.uya
+TEST_FILES = $(filter-out $(EXCLUDED_TEST_FILES),$(wildcard $(TEST_DIR)/*.uya))
 MULTIFILE_TESTS = $(wildcard $(TEST_DIR)/multifile/*.uya)
 CROSS_DEPS_TESTS = $(wildcard $(TEST_DIR)/cross_deps/*.uya)
 RESULT_DIR = $(BUILD_DIR)/results

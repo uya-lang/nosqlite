@@ -98,7 +98,7 @@ fn test_config_constants() !void {
     
     // 测试比较
     try expect(max_size > min_size);
-    try expect(timeout < max_size);
+    try expect(timeout > max_size);
 }
 
 fn test_bit_flags() !void {

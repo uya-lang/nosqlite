@@ -115,7 +115,7 @@ fn _test_va_copy_wrapper(first: i32, ...) i32 {
     @va_end(&ap2);
     
     // 两个应该读取相同的值
-    try expect(v1 == v2);
+    _ = expect(v1 == v2) catch { return 0 - 1; };
     return v2;
 }
 
@@ -139,14 +139,14 @@ fn _test_va_copy_independent(first: i32, ...) i32 {
     const v2: i32 = @va_arg(ap1, i32);
     const v3: i32 = @va_arg(ap1, i32);
     
-    // ap2 从第一个可变参数读取（应该等于 v1）
+    // ap2 从复制时的当前位置读取（应等于 ap1 的下一个值，也就是 v2）
     const v1_copy: i32 = @va_arg(ap2, i32);
     
     @va_end(&ap1);
     @va_end(&ap2);
     
-    // 验证 ap2 读取的是第一个值
-    try expect(v1_copy == v1);
+    // 验证 ap2 从复制时的当前位置继续读取
+    _ = expect(v1_copy == v2) catch { return 0 - 1; };
     
     return v1 + v2 + v3;
 }

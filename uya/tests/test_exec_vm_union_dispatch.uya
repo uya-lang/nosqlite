@@ -1,0 +1,21 @@
+use std.runtime.entry;
+
+union IntOrFlag {
+    number: i32,
+    flag: bool,
+}
+
+fn read_union(value: IntOrFlag) i32 {
+    return match value {
+        .number(n) => n,
+        else => 0i32,
+    };
+}
+
+export fn main() i32 {
+    const boxed: IntOrFlag = IntOrFlag.number(42);
+    if read_union(boxed) != 42 {
+        return 1;
+    }
+    return 0;
+}

@@ -1,0 +1,12 @@
+use exec_vm_global_chain.dep_a.counter_a;
+
+fn init_b() i32 {
+    return counter_a + 5;
+}
+
+export var counter_b: i32 = init_b();
+
+export fn inc_b() i32 {
+    counter_b = counter_b + 3;
+    return counter_b;
+}

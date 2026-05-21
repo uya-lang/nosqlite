@@ -1,0 +1,15 @@
+struct Clash {}
+
+Clash {
+    fn ping() i32 {
+        return 1;
+    }
+
+    fn ping(self: &Self) i32 {
+        return 2;
+    }
+}
+
+fn main() i32 {
+    return 0;
+}

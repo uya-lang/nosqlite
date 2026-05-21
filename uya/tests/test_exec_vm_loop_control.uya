@@ -1,0 +1,20 @@
+use std.runtime.entry;
+
+export fn main() i32 {
+    var i: i32 = 0;
+    var sum: i32 = 0;
+    while i < 8 {
+        i = i + 1;
+        if i == 2 {
+            continue;
+        }
+        if i == 7 {
+            break;
+        }
+        sum = sum + i;
+    }
+    if sum == 19 {
+        return 0;
+    }
+    return 1;
+}

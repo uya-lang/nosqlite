@@ -1,0 +1,56 @@
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.fmt.fmt.format;
+use std.fmt.fmt.is_formatted;
+
+fn byte_at(s: &[byte], i: usize) i32 {
+    return s.ptr[i] as i32;
+}
+
+fn test_format_returns_expected_prefix() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "fn add(a,b){return a+b;}" as &[byte];
+    const out: &[byte] = try format(&a, src);
+
+    try assert_eq_i32(byte_at(out, 0), 'f' as i32);
+    try assert_eq_i32(byte_at(out, 1), 'n' as i32);
+    try assert_eq_i32(byte_at(out, 2), ' ' as i32);
+    try assert_eq_i32(byte_at(out, 8), ',' as i32);
+    try assert_eq_i32(byte_at(out, 9), ' ' as i32);
+}
+
+fn test_is_formatted_false_for_unformatted_input() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "fn add(a,b){return a+b;}" as &[byte];
+    const ok: bool = try is_formatted(&a, src);
+    try assert_eq_i32(ok as i32, false as i32);
+}
+
+fn test_is_formatted_true_for_formatted_input() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "fn add(a, b) {\n\treturn a + b;\n}" as &[byte];
+    const ok: bool = try is_formatted(&a, src);
+    try assert_eq_i32(ok as i32, true as i32);
+}
+
+export fn main() i32 {
+    test_suite_begin("fmt api tests");
+    run_test("format expected prefix", test_format_returns_expected_prefix);
+    run_test("is formatted false", test_is_formatted_false_for_unformatted_input);
+    run_test("is formatted true", test_is_formatted_true_for_formatted_input);
+    return test_suite_end();
+}

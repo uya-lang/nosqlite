@@ -1,0 +1,28 @@
+use std.testing.assert_eq_i32;
+
+interface HasId {
+    fn id(self: &Self) i32;
+}
+
+struct Widget : HasId {
+    value: i32,
+}
+
+Widget {
+    fn id(self: &Self) i32 {
+        return self.value;
+    }
+}
+
+struct Holder<T: HasId> {
+    item: T,
+}
+
+fn holder_new<T: HasId>(item: T) Holder<T> {
+    return Holder<T>{ item: item };
+}
+
+test "generic factory return with constraint" {
+    const holder: Holder<Widget> = holder_new<Widget>(Widget{ value: 42 });
+    try assert_eq_i32(holder.item.id(), 42);
+}

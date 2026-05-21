@@ -1,0 +1,45 @@
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+union Token {
+    eof: void,
+    num: i32,
+}
+
+Token {
+    fn eof_token() Token {
+        return Token.eof();
+    }
+
+    fn from_num(v: i32) Token {
+        return Token.num(v);
+    }
+
+    fn is_eof(self: &Self) bool {
+        return match *self {
+            .eof(_) => true,
+            .num(_) => false,
+        };
+    }
+}
+
+fn test_union_static_eof() !void {
+    const t: Token = Token.eof_token();
+    try expect(t.is_eof());
+}
+
+fn test_union_static_value() !void {
+    const t: Token = Token.from_num(9);
+    try expect(!t.is_eof());
+}
+
+export fn main() i32 {
+    test_suite_begin("Static Method Union Tests");
+    run_test("union eof", test_union_static_eof);
+    run_test("union value", test_union_static_value);
+    return test_suite_end();
+}

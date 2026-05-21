@@ -1,0 +1,41 @@
+// test_pthread_api_create_join.uya - 从 test_pthread_api.uya 拆出的线程创建/回收 API 用例
+
+use std.runtime.entry;
+use libc.pthread;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.test_pass;
+use std.testing.test_fail;
+use std.testing.expect;
+
+fn api_thread_start(arg: &void) &void {
+    pthread_exit(arg);
+    return null;
+}
+
+fn test_pthread_create_join_api() !void {
+    var attr: pthread_attr_t = pthread_attr_t{};
+    try expect(pthread_attr_init(&attr) == 0);
+
+    var th: pthread_t = pthread_t{};
+    var marker: i32 = 7;
+    const arg: &void = (&marker) as &void;
+    try expect(pthread_create(&th, &attr, &api_thread_start as &void, arg) == 0);
+
+    var result: &void = null;
+    try expect(pthread_join(&th, &result) == 0);
+    try expect(result == arg);
+    try expect(pthread_attr_destroy(&attr) == 0);
+}
+
+export fn main() i32 {
+    test_suite_begin("pthread_api_create_join");
+
+    test_pthread_create_join_api() catch {
+        test_fail("pthread_create_join_api");
+        return test_suite_end();
+    };
+    test_pass("pthread_create_join_api");
+
+    return test_suite_end();
+}

@@ -2,6 +2,7 @@
 
 use tls.common;
 use tls.x509.cert;
+use tls.x509.cert.cert_check_validity;
 use tls.crypto.sha256;
 use tls.crypto.rsa;
 use tls.base.mpi;
@@ -124,21 +125,20 @@ export fn verify_chain_rsa(
         return error.TlsBadInput;
     }
     
-    // TODO: 证书有效期验证（需要正确处理 const 限定）
-    // 暂时跳过有效期检查，仅验证证书链结构
-    _ = leaf;
-    _ = chain;
-    _ = chain_len;
+    var leaf_copy: Cert = leaf[0];
+    cert_check_validity(&leaf_copy) catch {
+        return error.TlsHandshakeFailure;
+    };
 
     // 逐级检查 CA 基本约束 / keyUsage
     if chain_len > 0 {
         var i: usize = 0;
         while i < chain_len {
-            var child: &const Cert = leaf;
-            if i > 0 {
-                child = &chain[i - 1];
-            }
             var parent: &const Cert = &chain[i];
+            var parent_copy: Cert = parent[0];
+            cert_check_validity(&parent_copy) catch {
+                return error.TlsHandshakeFailure;
+            };
 
             if parent.rsa_n_len == 0 || parent.rsa_e_len == 0 {
                 return error.TlsBadInput;

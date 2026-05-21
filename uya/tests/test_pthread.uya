@@ -1,49 +1,27 @@
-// test_pthread.uya - pthread 模块基础测试（零 libpthread 依赖）
+// test_pthread.uya - pthread 模块快速回归（线程生命周期/亲和性已拆到独立文件）
 
 use std.runtime.entry;
 use libc.pthread;
-use libc.syscall;
 use std.testing.test_suite_begin;
 use std.testing.test_suite_end;
 use std.testing.test_pass;
 use std.testing.test_fail;
 use std.testing.expect;
 
-// 线程启动函数：void* (*)(void*) 兼容
-fn thread_start(arg: &void) &void {
-    return arg;
-}
-
-// 对「另一 pthread 句柄」做 get/setaffinity 时，目标线程必须仍在运行；用 release 标志让子线程在测试完成前不退出（符合内核 sched_* 对有效 task 的要求）。
-var _affinity_release: atomic i32 = 0;
-// 子线程已进入入口并即将/已进入 yield 循环后再由父线程调 sched_*，压测下避免 clone 刚返回即 query 另一 task 的竞态。
-var _affinity_started: atomic i32 = 0;
-
-// 大 cpu_set_t 放 BSS，避免在 main 深调用链下栈上双份 128B 与其它局部叠出边界（压测偶发 SIGSEGV）
-var _affinity_cpuset_a: cpu_set_t = cpu_set_t{ bits0: 0, bits1: 0, bits2: 0, bits3: 0, bits4: 0, bits5: 0, bits6: 0, bits7: 0, bits8: 0, bits9: 0, bits10: 0, bits11: 0, bits12: 0, bits13: 0, bits14: 0, bits15: 0 };
-var _affinity_cpuset_b: cpu_set_t = cpu_set_t{ bits0: 0, bits1: 0, bits2: 0, bits3: 0, bits4: 0, bits5: 0, bits6: 0, bits7: 0, bits8: 0, bits9: 0, bits10: 0, bits11: 0, bits12: 0, bits13: 0, bits14: 0, bits15: 0 };
-
-fn thread_start_affinity_hold(arg: &void) &void {
-    _affinity_started = 1;
-    while _affinity_release == 0 {
-        _ = pthread_yield();
-    }
-    return arg;
-}
-
-// 测试 pthread_once 的初始化函数
 var _once_init_called: i32 = 0;
+
 fn init_routine(arg: &void) &void {
     _ = arg;
     _once_init_called = _once_init_called + 1;
+    return null;
 }
 
 fn test_pthread_once() !void {
+    _once_init_called = 0;
     var once: pthread_once_t = pthread_once_t{};
     pthread_once(&once, &init_routine as &void);
     try expect(_once_init_called == 1);
 
-    // 再次调用，不应该重新初始化
     pthread_once(&once, &init_routine as &void);
     try expect(_once_init_called == 1);
 }
@@ -54,14 +32,6 @@ fn test_pthread_mutex_init_destroy() !void {
     try expect(init_ret == 0);
     const destroy_ret: i32 = pthread_mutex_destroy(&mutex);
     try expect(destroy_ret == 0);
-}
-
-fn test_pthread_create_join() !void {
-    var th: pthread_t = pthread_t{};
-    const create_ret: i32 = pthread_create(&th, null as &const pthread_attr_t, &thread_start as &void, null);
-    try expect(create_ret == 0);
-    const join_ret: i32 = pthread_join(&th, null as & &void);
-    try expect(join_ret == 0);
 }
 
 fn test_pthread_mutex_lock_unlock() !void {
@@ -77,21 +47,7 @@ fn test_pthread_self_equal() !void {
     try expect(pthread_equal(self, self) != 0);
 }
 
-fn test_pthread_detach() !void {
-    var th: pthread_t = pthread_t{};
-    try expect(pthread_create(&th, null as &const pthread_attr_t, &thread_start as &void, null) == 0);
-
-    // 测试 detach
-    const detach_ret: i32 = pthread_detach(&th);
-    try expect(detach_ret == 0);
-
-    // 分离的线程不能再次 join
-    const join_ret: i32 = pthread_join(&th, null as & &void);
-    try expect(join_ret == 22);
-}
-
 fn test_pthread_yield() !void {
-    // 测试 pthread_yield 不崩溃
     const ret: i32 = pthread_yield();
     try expect(ret == 0);
 }
@@ -100,10 +56,8 @@ fn test_pthread_mutex_timedlock() !void {
     var mutex: pthread_mutex_t = pthread_mutex_t{};
     try expect(pthread_mutex_init(&mutex, null as &const pthread_mutexattr_t) == 0);
 
-    // 尝试带超时加锁（当前简化实现会立即返回 ETIMEDOUT）
     var timeout: timespec = timespec{ tv_sec: 0, tv_nsec: 1000 };
     const ret: i32 = pthread_mutex_timedlock(&mutex, &timeout);
-    // 简化实现可能成功或超时，都不应该返回错误码
     try expect(ret == 0 || ret == 110);
 
     pthread_mutex_destroy(&mutex);
@@ -116,9 +70,8 @@ fn test_pthread_cond_timedwait() !void {
     try expect(pthread_mutex_init(&mutex, null as &const pthread_mutexattr_t) == 0);
 
     pthread_mutex_lock(&mutex);
-    var timeout: timespec = timespec{ tv_sec: 0, tv_nsec: 1000000 };  // 1ms 超时
+    var timeout: timespec = timespec{ tv_sec: 0, tv_nsec: 1000000 };
     const ret: i32 = pthread_cond_timedwait(&cond, &mutex, &timeout);
-    // 应该超时返回 ETIMEDOUT (110)，因为没有线程调用 signal
     try expect(ret == 110);
 
     pthread_mutex_unlock(&mutex);
@@ -129,24 +82,20 @@ fn test_pthread_cond_timedwait() !void {
 fn test_pthread_spinlock() !void {
     var spin: pthread_spinlock_t = pthread_spinlock_t{ lock: 0 };
     try expect(pthread_spin_init(&spin, 0) == 0);
-    // 简化测试：不实际加锁，避免忙等待问题
     try expect(pthread_spin_trylock(&spin) == 0);
     try expect(pthread_spin_unlock(&spin) == 0);
     try expect(pthread_spin_destroy(&spin) == 0);
 }
 
-// 测试 pthread_mutexattr
 fn test_pthread_mutexattr() !void {
     var attr: pthread_mutexattr_t = pthread_mutexattr_t{};
     try expect(pthread_mutexattr_init(&attr) == 0);
 
-    // 设置普通锁类型
     try expect(pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_NORMAL) == 0);
     var type: i32 = 0;
     try expect(pthread_mutexattr_gettype(&attr, &type) == 0);
     try expect(type == PTHREAD_MUTEX_NORMAL);
 
-    // 设置递归锁类型
     try expect(pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) == 0);
     try expect(pthread_mutexattr_gettype(&attr, &type) == 0);
     try expect(type == PTHREAD_MUTEX_RECURSIVE);
@@ -154,7 +103,6 @@ fn test_pthread_mutexattr() !void {
     try expect(pthread_mutexattr_destroy(&attr) == 0);
 }
 
-// 测试递归锁
 fn test_pthread_recursive_mutex() !void {
     var attr: pthread_mutexattr_t = pthread_mutexattr_t{};
     try expect(pthread_mutexattr_init(&attr) == 0);
@@ -163,12 +111,10 @@ fn test_pthread_recursive_mutex() !void {
     var mutex: pthread_mutex_t = pthread_mutex_t{};
     try expect(pthread_mutex_init(&mutex, &attr) == 0);
 
-    // 递归加锁应该成功
     try expect(pthread_mutex_lock(&mutex) == 0);
     try expect(pthread_mutex_lock(&mutex) == 0);
     try expect(pthread_mutex_lock(&mutex) == 0);
 
-    // 对应解锁
     pthread_mutex_unlock(&mutex);
     pthread_mutex_unlock(&mutex);
     pthread_mutex_unlock(&mutex);
@@ -177,25 +123,20 @@ fn test_pthread_recursive_mutex() !void {
     pthread_mutexattr_destroy(&attr);
 }
 
-// 测试 pthread_attr
 fn test_pthread_attr() !void {
     var attr: pthread_attr_t = pthread_attr_t{};
     try expect(pthread_attr_init(&attr) == 0);
 
-    // 测试默认栈大小
     var stacksize: usize = 0;
     try expect(pthread_attr_getstacksize(&attr, &stacksize) == 0);
-    try expect(stacksize > 0);  // 应该返回默认大小
+    try expect(stacksize > 0);
 
-    // 测试设置栈大小
-    try expect(pthread_attr_setstacksize(&attr, 1024 * 1024) == 0);  // 1MB
+    try expect(pthread_attr_setstacksize(&attr, 1024 * 1024) == 0);
     try expect(pthread_attr_getstacksize(&attr, &stacksize) == 0);
     try expect(stacksize == 1024 * 1024);
 
-    // 测试最小栈大小限制
-    try expect(pthread_attr_setstacksize(&attr, 4096) == 22);  // 太小，应该失败
+    try expect(pthread_attr_setstacksize(&attr, 4096) == 22);
 
-    // 测试分离状态
     var detachstate: i32 = 0;
     try expect(pthread_attr_getdetachstate(&attr, &detachstate) == 0);
     try expect(detachstate == PTHREAD_CREATE_JOINABLE);
@@ -204,263 +145,138 @@ fn test_pthread_attr() !void {
     try expect(pthread_attr_getdetachstate(&attr, &detachstate) == 0);
     try expect(detachstate == PTHREAD_CREATE_DETACHED);
 
-    // 测试无效分离状态
-    try expect(pthread_attr_setdetachstate(&attr, 2) == 22);  // 无效值
-
+    try expect(pthread_attr_setdetachstate(&attr, 2) == 22);
     try expect(pthread_attr_destroy(&attr) == 0);
 }
 
-// 测试使用 attr 创建分离线程
-fn test_pthread_attr_detached() !void {
-    var attr: pthread_attr_t = pthread_attr_t{};
-    try expect(pthread_attr_init(&attr) == 0);
-    try expect(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0);
-
-    var th: pthread_t = pthread_t{};
-    try expect(pthread_create(&th, &attr, &thread_start as &void, null) == 0);
-
-    // 分离线程：join 须返回 EINVAL；实现侧仍会 waitpid+释放栈（见 pthread_join）
-    try expect(pthread_join(&th, null as & &void) == 22);
-
-    try expect(pthread_attr_destroy(&attr) == 0);
-}
-
-// 测试读写锁
 fn test_pthread_rwlock() !void {
     var rwlock: pthread_rwlock_t = pthread_rwlock_t{};
     try expect(pthread_rwlock_init(&rwlock, null) == 0);
 
-    // 测试读锁
     try expect(pthread_rwlock_rdlock(&rwlock) == 0);
     try expect(pthread_rwlock_unlock(&rwlock) == 0);
 
-    // 测试写锁
     try expect(pthread_rwlock_wrlock(&rwlock) == 0);
     try expect(pthread_rwlock_unlock(&rwlock) == 0);
 
-    // 测试尝试读锁
     try expect(pthread_rwlock_tryrdlock(&rwlock) == 0);
     try expect(pthread_rwlock_unlock(&rwlock) == 0);
 
-    // 测试尝试写锁
     try expect(pthread_rwlock_trywrlock(&rwlock) == 0);
     try expect(pthread_rwlock_unlock(&rwlock) == 0);
 
     try expect(pthread_rwlock_destroy(&rwlock) == 0);
 }
 
-// 用于测试取消的线程函数
-var _cancel_test_flag: i32 = 0;
-fn cancel_test_thread(arg: &void) &void {
-    _ = arg;
-    // 循环检查取消请求
-    var i: i32 = 0;
-    while i < 100 {
-        pthread_testcancel();
-        i = i + 1;
-    }
-    _cancel_test_flag = 1;
-    return null;
-}
-
-// 测试线程取消
-fn test_pthread_cancel() !void {
-    _cancel_test_flag = 0;
-    
-    var th: pthread_t = pthread_t{};
-    try expect(pthread_create(&th, null as &const pthread_attr_t, &cancel_test_thread as &void, null) == 0);
-    
-    // 发送取消请求
-    try expect(pthread_cancel(&th) == 0);
-    
-    // 等待线程结束
-    const join_ret: i32 = pthread_join(&th, null as & &void);
-    // 线程应该被取消，但我们的简化实现可能无法正确返回 PTHREAD_CANCELED
-    // 所以只检查 join 是否成功
-    try expect(join_ret == 0);
-}
-
-// 测试设置取消状态
 fn test_pthread_setcancelstate() !void {
-    // 测试设置使能状态
     var oldstate: i32 = 0;
     try expect(pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, &oldstate) == 0);
-    
-    // 测试设置禁止状态
+
     try expect(pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &oldstate) == 0);
     try expect(oldstate == PTHREAD_CANCEL_ENABLE);
-    
-    // 测试无效参数
-    try expect(pthread_setcancelstate(2, null) == 22); // EINVAL
-    
-    // 测试设置取消类型
+
+    try expect(pthread_setcancelstate(2, null) == 22);
+
     var oldtype: i32 = 0;
     try expect(pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, &oldtype) == 0);
     try expect(pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, &oldtype) == 0);
     try expect(oldtype == PTHREAD_CANCEL_DEFERRED);
-    
-    // 测试无效参数
-    try expect(pthread_setcanceltype(2, null) == 22); // EINVAL
+
+    try expect(pthread_setcanceltype(2, null) == 22);
 }
 
-// 用于测试 TLS 的线程函数
-var _tls_test_value: i32 = 42;
-var _tls_thread_result: i64 = 0;
-var _tls_key_seq: i32 = 0;
-fn tls_test_thread(arg: &void) &void {
-    _ = arg;
-    
-    // 设置线程特定值
-    var key1: pthread_key_t = pthread_key_t{};
-    key1.seq = _tls_key_seq;
-    pthread_setspecific(key1, (&_tls_test_value) as &void);
-    
-    // 获取线程特定值（使用新的副本避免移动问题）
-    var key2: pthread_key_t = pthread_key_t{};
-    key2.seq = _tls_key_seq;
-    const val: &void = pthread_getspecific(key2);
-    const val_ptr: &i32 = val as &i32;
-    _tls_thread_result = val_ptr[0] as i64;
-    
-    return null;
-}
-
-// 用于测试屏障的共享数据
-var _barrier_test_counter: atomic i32 = 0;
-var _barrier: pthread_barrier_t = pthread_barrier_t{ count: 0, arrived: 0, generation: 0, mutex: pthread_mutex_t{ state: 0, owner: 0, type: 0 }, cond: pthread_cond_t{ waiters: 0, seq: 0 } };
-var _barrier_test_value1: i32 = 0;
-var _barrier_test_value2: i32 = 0;
-
-// 测试线程特定数据（TLS）
 fn test_pthread_key() !void {
-    // 测试创建键
     var key: pthread_key_t = pthread_key_t{};
     try expect(pthread_key_create(&key, null) == 0);
-    try expect(key.seq > 0);  // 序列号应该被设置
-    
-    // 测试设置和获取特定于线程的数据
+    try expect(key.seq > 0);
+
     const test_value: i32 = 123;
     var key_copy: pthread_key_t = pthread_key_t{};
     key_copy.seq = key.seq;
     key_copy.destructor = key.destructor;
-    const set_ret: i32 = pthread_setspecific(key_copy, (&test_value) as &void);
-    try expect(set_ret == 0);
-    
+    try expect(pthread_setspecific(key_copy, (&test_value) as &void) == 0);
+
     var key_copy2: pthread_key_t = pthread_key_t{};
     key_copy2.seq = key.seq;
     key_copy2.destructor = key.destructor;
     const retrieved: &void = pthread_getspecific(key_copy2);
     try expect(retrieved != null);
-    
-    // 使用指针解引用
+
     const retrieved_ptr: &i32 = retrieved as &i32;
-    const val: i32 = retrieved_ptr[0];
-    try expect(val == 123);
-    
-    // 测试删除键
+    try expect(retrieved_ptr[0] == 123);
+
     try expect(pthread_key_delete(&key) == 0);
-    
-    // 测试无效参数
-    try expect(pthread_key_create(null as &pthread_key_t, null) == 22); // EINVAL
-    try expect(pthread_key_delete(null as &pthread_key_t) == 22); // EINVAL
+    try expect(pthread_key_create(null as &pthread_key_t, null) == 22);
+    try expect(pthread_key_delete(null as &pthread_key_t) == 22);
     var invalid_key: pthread_key_t = pthread_key_t{};
-    try expect(pthread_setspecific(invalid_key, null) == 22); // EINVAL
+    try expect(pthread_setspecific(invalid_key, null) == 22);
 }
 
-// 测试屏障
 fn test_pthread_barrier() !void {
-    // 测试屏障属性
     var attr: pthread_barrierattr_t = pthread_barrierattr_t{};
     try expect(pthread_barrierattr_init(&attr) == 0);
     try expect(pthread_barrierattr_destroy(&attr) == 0);
-    
-    // 测试无效参数
-    try expect(pthread_barrier_init(null as &pthread_barrier_t, null, 2) == 22); // EINVAL
-    
-    // 测试创建屏障（单线程，简化测试）
-    var barrier: pthread_barrier_t = pthread_barrier_t{ count: 0, arrived: 0, generation: 0, mutex: pthread_mutex_t{ state: 0, owner: 0, type: 0 }, cond: pthread_cond_t{ waiters: 0, seq: 0 } };
+
+    try expect(pthread_barrier_init(null as &pthread_barrier_t, null, 2) == 22);
+
+    var barrier: pthread_barrier_t = pthread_barrier_t{
+        count: 0,
+        arrived: 0,
+        generation: 0,
+        mutex: pthread_mutex_t{ state: 0, owner: 0, type: 0 },
+        cond: pthread_cond_t{ waiters: 0, seq: 0 },
+    };
     try expect(pthread_barrier_init(&barrier, null, 1) == 0);
-    
-    // 单线程等待应该立即返回 PTHREAD_BARRIER_SERIAL_THREAD
-    const ret: i32 = pthread_barrier_wait(&barrier);
-    try expect(ret == PTHREAD_BARRIER_SERIAL_THREAD);
-    
-    // 测试销毁
+    try expect(pthread_barrier_wait(&barrier) == PTHREAD_BARRIER_SERIAL_THREAD);
     try expect(pthread_barrier_destroy(&barrier) == 0);
-    
-    // 测试无效计数
-    var barrier2: pthread_barrier_t = pthread_barrier_t{ count: 0, arrived: 0, generation: 0, mutex: pthread_mutex_t{ state: 0, owner: 0, type: 0 }, cond: pthread_cond_t{ waiters: 0, seq: 0 } };
-    try expect(pthread_barrier_init(&barrier2, null, 0) == 22); // EINVAL
+
+    var barrier2: pthread_barrier_t = pthread_barrier_t{
+        count: 0,
+        arrived: 0,
+        generation: 0,
+        mutex: pthread_mutex_t{ state: 0, owner: 0, type: 0 },
+        cond: pthread_cond_t{ waiters: 0, seq: 0 },
+    };
+    try expect(pthread_barrier_init(&barrier2, null, 0) == 22);
 }
 
-// 测试 CPU 集合操作
 fn test_pthread_cpuset() !void {
-    // 测试 CPU_ZERO
-    var cpuset: cpu_set_t = cpu_set_t{ bits0: 0, bits1: 0, bits2: 0, bits3: 0, bits4: 0, bits5: 0, bits6: 0, bits7: 0, bits8: 0, bits9: 0, bits10: 0, bits11: 0, bits12: 0, bits13: 0, bits14: 0, bits15: 0 };
+    var cpuset: cpu_set_t = cpu_set_t{
+        bits0: 0, bits1: 0, bits2: 0, bits3: 0,
+        bits4: 0, bits5: 0, bits6: 0, bits7: 0,
+        bits8: 0, bits9: 0, bits10: 0, bits11: 0,
+        bits12: 0, bits13: 0, bits14: 0, bits15: 0,
+    };
     CPU_ZERO(&cpuset);
     try expect(CPU_COUNT(&cpuset) == 0);
-    
-    // 测试 CPU_SET 和 CPU_ISSET
+
     CPU_SET(0, &cpuset);
     try expect(CPU_ISSET(0, &cpuset) != 0);
     try expect(CPU_ISSET(1, &cpuset) == 0);
     try expect(CPU_COUNT(&cpuset) == 1);
-    
+
     CPU_SET(1, &cpuset);
     CPU_SET(5, &cpuset);
     try expect(CPU_ISSET(0, &cpuset) != 0);
     try expect(CPU_ISSET(1, &cpuset) != 0);
     try expect(CPU_ISSET(5, &cpuset) != 0);
     try expect(CPU_COUNT(&cpuset) == 3);
-    
-    // 测试 CPU_CLR
+
     CPU_CLR(1, &cpuset);
     try expect(CPU_ISSET(1, &cpuset) == 0);
     try expect(CPU_COUNT(&cpuset) == 2);
 }
 
-// 测试 CPU 亲和性：对 pthread_create 得到的子线程句柄调用 get/setaffinity（子线程由 _affinity_release 保持存活直至测试结束）
-fn test_pthread_affinity() !void {
-    _affinity_release = 0;
-    _affinity_started = 0;
-    var th: pthread_t = pthread_t{};
-    try expect(pthread_create(&th, null as &const pthread_attr_t, &thread_start_affinity_hold as &void, null) == 0);
-    defer {
-        _affinity_release = 1;
-        _ = pthread_join(&th, null as & &void);
-    }
-
-    // 这里用纯忙等，避免在子线程存活期间额外调用 nanosleep/yield 触发时序问题。
-    while _affinity_started == 0 {
-        var spin: i32 = 0;
-        while spin < 1000 {
-            spin = spin + 1;
-        }
-    }
-
-    CPU_ZERO(&_affinity_cpuset_a);
-    const get_ret: i32 = pthread_getaffinity_np(&th, @size_of(cpu_set_t), &_affinity_cpuset_a);
-    try expect(get_ret != 22);
-
-    if get_ret == 0 {
-        CPU_ZERO(&_affinity_cpuset_a);
-        CPU_SET(0, &_affinity_cpuset_a);
-        const set_ret: i32 = pthread_setaffinity_np(&th, @size_of(cpu_set_t), &_affinity_cpuset_a);
-        try expect(set_ret != 22);
-    }
-
-    try expect(pthread_getaffinity_np(&th, 0, &_affinity_cpuset_b) == 22);
-    try expect(pthread_setaffinity_np(&th, 0, &_affinity_cpuset_b) == 22);
-
-    try expect(pthread_getaffinity_np(null as &pthread_t, @size_of(cpu_set_t), &_affinity_cpuset_b) == 22);
-    try expect(pthread_setaffinity_np(null as &pthread_t, @size_of(cpu_set_t), &_affinity_cpuset_b) == 22);
-}
-
-// 补充：当前线程亲和性（与 pthread_self / gettid 路径一致）
 fn test_pthread_affinity_self() !void {
     var me: pthread_t = pthread_self();
-    CPU_ZERO(&_affinity_cpuset_a);
-    const get_ret: i32 = pthread_getaffinity_np(&me, @size_of(cpu_set_t), &_affinity_cpuset_a);
+    var cpuset: cpu_set_t = cpu_set_t{
+        bits0: 0, bits1: 0, bits2: 0, bits3: 0,
+        bits4: 0, bits5: 0, bits6: 0, bits7: 0,
+        bits8: 0, bits9: 0, bits10: 0, bits11: 0,
+        bits12: 0, bits13: 0, bits14: 0, bits15: 0,
+    };
+    CPU_ZERO(&cpuset);
+    const get_ret: i32 = pthread_getaffinity_np(&me, @size_of(cpu_set_t), &cpuset);
     try expect(get_ret != 22);
 }
 
@@ -472,12 +288,6 @@ export fn main() i32 {
         return test_suite_end();
     };
     test_pass("pthread_mutex_init_destroy");
-
-    test_pthread_create_join() catch {
-        test_fail("pthread_create_join");
-        return test_suite_end();
-    };
-    test_pass("pthread_create_join");
 
     test_pthread_once() catch {
         test_fail("pthread_once");
@@ -496,12 +306,6 @@ export fn main() i32 {
         return test_suite_end();
     };
     test_pass("pthread_self_equal");
-
-    test_pthread_detach() catch {
-        test_fail("pthread_detach");
-        return test_suite_end();
-    };
-    test_pass("pthread_detach");
 
     test_pthread_yield() catch {
         test_fail("pthread_yield");
@@ -545,23 +349,11 @@ export fn main() i32 {
     };
     test_pass("pthread_attr");
 
-    test_pthread_attr_detached() catch {
-        test_fail("pthread_attr_detached");
-        return test_suite_end();
-    };
-    test_pass("pthread_attr_detached");
-
     test_pthread_rwlock() catch {
         test_fail("pthread_rwlock");
         return test_suite_end();
     };
     test_pass("pthread_rwlock");
-
-    test_pthread_cancel() catch {
-        test_fail("pthread_cancel");
-        return test_suite_end();
-    };
-    test_pass("pthread_cancel");
 
     test_pthread_setcancelstate() catch {
         test_fail("pthread_setcancelstate");
@@ -586,12 +378,6 @@ export fn main() i32 {
         return test_suite_end();
     };
     test_pass("pthread_cpuset");
-
-    test_pthread_affinity() catch {
-        test_fail("pthread_affinity");
-        return test_suite_end();
-    };
-    test_pass("pthread_affinity");
 
     test_pthread_affinity_self() catch {
         test_fail("pthread_affinity_self");

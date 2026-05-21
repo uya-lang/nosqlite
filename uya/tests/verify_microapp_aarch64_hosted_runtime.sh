@@ -28,6 +28,20 @@ dump_log_and_fail() {
     exit 1
 }
 
+assert_single_result_surface() {
+    local path="$1"
+    local expected="$2"
+    local count
+    grep -a -F -q "$expected" "$path" || dump_log_and_fail "未输出统一 result: $expected" "$path"
+    count="$(grep -a -c '^\[microapp loader\] payload result=' "$path" || true)"
+    if [ "$count" -ne 1 ]; then
+        dump_log_and_fail "payload result 行数量异常: $count" "$path"
+    fi
+    if grep -a -q '^\[microapp loader\] payload fault class=' "$path"; then
+        dump_log_and_fail "不应输出旧 fault 诊断面" "$path"
+    fi
+}
+
 pick_first_available() {
     local cmd
     for cmd in "$@"; do
@@ -170,8 +184,7 @@ run_case_fault() {
     fi
     grep -a -q "\[microapp loader\] image loaded, ticking" "$run_log" || dump_log_and_fail "aarch64 fault run 未进入 tick" "$run_log"
     grep -a -q "\[microapp loader\] executed mapped payload" "$run_log" || dump_log_and_fail "aarch64 fault run 未命中 mapped payload 执行分支" "$run_log"
-    grep -a -q "\[microapp loader\] payload result=fault class=segv code=1 signal=11" "$run_log" || dump_log_and_fail "aarch64 fault run 未输出统一 fault result" "$run_log"
-    grep -a -q "\[microapp loader\] payload fault class=segv code=1 signal=11" "$run_log" || dump_log_and_fail "aarch64 fault run 未输出 fault class 诊断" "$run_log"
+    assert_single_result_surface "$run_log" "[microapp loader] payload result=fault class=segv code=1 signal=11"
     if grep -a -q "\[microapp loader\] launching native payload" "$run_log"; then
         dump_log_and_fail "aarch64 fault run 意外回退到了 native payload ELF" "$run_log"
     fi
@@ -186,8 +199,7 @@ run_case_fault() {
     fi
     grep -a -q "\[microapp loader\] image loaded, ticking" "$loader_log" || dump_log_and_fail "aarch64 fault loader 未进入 tick" "$loader_log"
     grep -a -q "\[microapp loader\] executed mapped payload" "$loader_log" || dump_log_and_fail "aarch64 fault loader 未命中 mapped payload 执行分支" "$loader_log"
-    grep -a -q "\[microapp loader\] payload result=fault class=segv code=1 signal=11" "$loader_log" || dump_log_and_fail "aarch64 fault loader 未输出统一 fault result" "$loader_log"
-    grep -a -q "\[microapp loader\] payload fault class=segv code=1 signal=11" "$loader_log" || dump_log_and_fail "aarch64 fault loader 未输出 fault class 诊断" "$loader_log"
+    assert_single_result_surface "$loader_log" "[microapp loader] payload result=fault class=segv code=1 signal=11"
     if grep -a -q "\[microapp loader\] launching native payload" "$loader_log"; then
         dump_log_and_fail "aarch64 fault loader 意外回退到了 native payload ELF" "$loader_log"
     fi

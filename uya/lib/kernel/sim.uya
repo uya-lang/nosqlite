@@ -6,6 +6,7 @@
 // and issue syscalls via kernel_syscall(). The scheduler calls these in round-robin.
 
 use kernel.container;
+use kernel.capability;
 use kernel.dispatch;
 use kernel.errors;
 use kernel.image;
@@ -93,6 +94,7 @@ export struct SimKernel {
     loaded_trap_a0: [u32: 8],
     loaded_trap_a1: [u32: 8],
     loaded_trap_a7: [u32: 8],
+    loaded_bridge_dispatch_count: [u32: 8],
     // Callback table: callers register fn pointers here
     // For simplicity in Uya (no fn pointer arrays), we use a dispatch pattern
 }
@@ -123,6 +125,7 @@ export fn sim_kernel_make() SimKernel {
         loaded_trap_a0: [],
         loaded_trap_a1: [],
         loaded_trap_a7: [],
+        loaded_bridge_dispatch_count: [],
     };
 }
 
@@ -167,6 +170,7 @@ export fn sim_kernel_init(k: &SimKernel) void {
         k.loaded_trap_a0[i] = 0u32;
         k.loaded_trap_a1[i] = 0u32;
         k.loaded_trap_a7[i] = 0u32;
+        k.loaded_bridge_dispatch_count[i] = 0u32;
         i = i + 1;
     }
 }
@@ -336,6 +340,17 @@ fn sim_loaded_trap_a7_ref(k: &SimKernel, slot: u32) &u32 {
     return &k.loaded_trap_a7[7];
 }
 
+fn sim_loaded_bridge_dispatch_count_ref(k: &SimKernel, slot: u32) &u32 {
+    if slot == 0u32 { return &k.loaded_bridge_dispatch_count[0]; }
+    if slot == 1u32 { return &k.loaded_bridge_dispatch_count[1]; }
+    if slot == 2u32 { return &k.loaded_bridge_dispatch_count[2]; }
+    if slot == 3u32 { return &k.loaded_bridge_dispatch_count[3]; }
+    if slot == 4u32 { return &k.loaded_bridge_dispatch_count[4]; }
+    if slot == 5u32 { return &k.loaded_bridge_dispatch_count[5]; }
+    if slot == 6u32 { return &k.loaded_bridge_dispatch_count[6]; }
+    return &k.loaded_bridge_dispatch_count[7];
+}
+
 fn sim_entry_fn_ref(k: &SimKernel, slot: u32) &i32 {
     if slot == 0u32 { return &k.entry_fns[0]; }
     if slot == 1u32 { return &k.entry_fns[1]; }
@@ -422,17 +437,35 @@ export fn sim_unbind_bridge_dispatch() void {
     g_sim_bridge_active = 0u32;
 }
 
+fn sim_bridge_error_id_to_i64(error_id: u32) i64 {
+    const err_tmp: !i64 = error_id as! i64;
+    if err_tmp.error_id != 0u32 {
+        return -1i64;
+    }
+    return 0i64 - err_tmp.value;
+}
+
 export fn sim_microapp_bridge_dispatch2(nr: i64, a1: i64, a2: i64) i64 {
     if g_sim_bridge_active == 0u32 || g_sim_bridge_kernel == null {
         return -1i64;
     }
     const bridge_kernel: &SimKernel = g_sim_bridge_kernel;
+    if g_sim_bridge_cid >= 8u32 {
+        return -1i64;
+    }
     if nr < 0i64 {
         return -1i64;
     }
     const nr_tmp: !u32 = nr as! u32;
     if nr_tmp.error_id != 0u32 {
         return -1i64;
+    }
+    sim_loaded_bridge_dispatch_count_ref(bridge_kernel, g_sim_bridge_cid)[0] =
+        sim_loaded_bridge_dispatch_count_ref(bridge_kernel, g_sim_bridge_cid)[0] + 1u32;
+
+    var bridge_kind: ImageBridgeKind = ImageBridgeKind.ibk_unknown;
+    if bridge_kernel.loaded_image_valid[g_sim_bridge_cid] != 0u32 {
+        bridge_kind = bridge_kernel.loaded_image_headers[g_sim_bridge_cid].bridge_kind;
     }
     if nr_tmp.value == SYS_PRINT {
         if a1 < 0i64 || a2 < 0i64 {
@@ -441,6 +474,21 @@ export fn sim_microapp_bridge_dispatch2(nr: i64, a1: i64, a2: i64) i64 {
         const len_tmp: !u32 = a2 as! u32;
         if len_tmp.error_id != 0u32 {
             return -1i64;
+        }
+        if bridge_kind == ImageBridgeKind.ibk_trap {
+            const vaddr_tmp: !u32 = a1 as! u32;
+            if vaddr_tmp.error_id != 0u32 {
+                return -1i64;
+            }
+            const ret: !u32 = sim_syscall(bridge_kernel, g_sim_bridge_cid, nr_tmp.value, vaddr_tmp.value, len_tmp.value);
+            if ret.error_id != 0u32 {
+                return sim_bridge_error_id_to_i64(ret.error_id);
+            }
+            const ret_i64: !i64 = ret.value as! i64;
+            if ret_i64.error_id != 0u32 {
+                return -1i64;
+            }
+            return ret_i64.value;
         }
         if len_tmp.value > SYSCALL_PRINT_MAX {
             return -1i64;
@@ -476,7 +524,14 @@ export fn sim_microapp_bridge_dispatch2(nr: i64, a1: i64, a2: i64) i64 {
         }
         const ret_va: !u32 = sim_syscall(g_sim_bridge_kernel, g_sim_bridge_cid, nr_tmp.value, size_tmp.value, flags_tmp.value);
         if ret_va.error_id != 0u32 {
-            return -1i64;
+            return sim_bridge_error_id_to_i64(ret_va.error_id);
+        }
+        if bridge_kind == ImageBridgeKind.ibk_trap {
+            const ret_va_i64: !i64 = ret_va.value as! i64;
+            if ret_va_i64.error_id != 0u32 {
+                return -1i64;
+            }
+            return ret_va_i64.value;
         }
         const host_ptr: &byte = mmu_translate_ptr(sim_pt_ref(bridge_kernel, g_sim_bridge_cid), &bridge_kernel.host_ctx.pm, ret_va.value, 1u32, ACCESS_W) catch {
             return -1i64;
@@ -497,11 +552,7 @@ export fn sim_microapp_bridge_dispatch2(nr: i64, a1: i64, a2: i64) i64 {
     }
     const ret: !u32 = sim_syscall(bridge_kernel, g_sim_bridge_cid, nr_tmp.value, a1_tmp.value, a2_tmp.value);
     if ret.error_id != 0u32 {
-        const err_tmp: !i64 = ret.error_id as! i64;
-        if err_tmp.error_id != 0u32 {
-            return -1i64;
-        }
-        return 0i64 - err_tmp.value;
+        return sim_bridge_error_id_to_i64(ret.error_id);
     }
     const value_tmp: !i64 = ret.value as! i64;
     if value_tmp.error_id != 0u32 {
@@ -920,6 +971,7 @@ export fn sim_load_image(k: &SimKernel, cid: u32, priority: u32, image_bytes: &[
         return error.NoMemory;
     }
     const hdr: ImageHeader = try image_validate(image_bytes);
+    try kernel_required_caps_validate(hdr.required_caps);
     const min_va: u32 = sim_loaded_min_va(&hdr);
     const max_end: u32 = sim_loaded_max_end(&hdr);
     const base_vpn: u32 = min_va / PAGE_SIZE;
@@ -991,6 +1043,7 @@ export fn sim_load_image(k: &SimKernel, cid: u32, priority: u32, image_bytes: &[
         try sim_apply_hosted_call_gate_relative_relocs(k, cid, &hdr, image_bytes);
         try sim_patch_hosted_call_gate_bridge_dispatch(k, cid, &hdr);
     }
+    try kernel_host_apply_required_caps(&k.host_ctx, cid, hdr.required_caps);
     if mmu_debug_enabled() != 0 {
         // 调试探针：显示入口地址在当前页表里的翻译结果，便于确认 MMU 路径是否接通。
         _ = try mmu_translate_ptr(pt, &k.host_ctx.pm, hdr.entry_va, 4u32, ACCESS_X);
@@ -1002,6 +1055,7 @@ export fn sim_load_image(k: &SimKernel, cid: u32, priority: u32, image_bytes: &[
     sim_loaded_page_count_ref(k, cid)[0] = pages_needed;
     try sim_reset_loaded_result(k, cid);
     try sim_reset_loaded_trap_state(k, cid);
+    sim_loaded_bridge_dispatch_count_ref(k, cid)[0] = 0u32;
     k.host_ctx.heap_base_vpn[cid] = base_vpn + pages_needed;
     k.host_ctx.heap_next_vpn[cid] = base_vpn + pages_needed;
     k.host_ctx.stack_base_vpn[cid] = stack_base_vpn;
@@ -1060,10 +1114,26 @@ fn sim_exec_loaded_rv32_trap(k: &SimKernel, cid: u32, hdr: &ImageHeader) !i32 {
             }
             pc = pc + 4u32;
         } else if insn == RV32_INSN_ECALL {
-            const ret: u32 = try sim_syscall(k, cid, a7, a0, a1);
-            a0 = ret;
+            try sim_bind_bridge_dispatch(k, cid);
+            const ret_raw: i64 = sim_microapp_bridge_dispatch2(a7 as i64, a0 as i64, a1 as i64);
+            sim_unbind_bridge_dispatch();
+            if ret_raw < 0i64 {
+                const err_tmp: !u32 = (0i64 - ret_raw) as! u32;
+                if err_tmp.error_id != 0u32 {
+                    return error.InvalidState;
+                }
+                a0 = 4294967295u32;
+                a1 = err_tmp.value;
+            } else {
+                const ret_tmp: !u32 = ret_raw as! u32;
+                if ret_tmp.error_id != 0u32 {
+                    return error.InvalidState;
+                }
+                a0 = ret_tmp.value;
+                a1 = 0u32;
+            }
             pc = pc + 4u32;
-            if a7 == SYS_YIELD {
+            if a7 == SYS_YIELD && a1 == 0u32 {
                 sim_loaded_trap_pc_ref(k, cid)[0] = pc;
                 sim_loaded_trap_a0_ref(k, cid)[0] = a0;
                 sim_loaded_trap_a1_ref(k, cid)[0] = a1;

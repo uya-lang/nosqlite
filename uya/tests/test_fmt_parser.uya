@@ -1,0 +1,86 @@
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.fmt.ast.DeclKind;
+use std.fmt.ast.StmtKind;
+use std.fmt.ast.ExprKind;
+use std.fmt.ast.File;
+use std.fmt.ast.Stmt;
+use std.fmt.tokenizer.Token;
+use std.fmt.tokenizer.tokenize;
+use std.fmt.parser.parse_file;
+
+fn test_parse_function_decl() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "fn add(a, b) { return a + b; }" as &[byte];
+    var tokens: &[Token] = try tokenize(&a, src);
+    var file: &File = try parse_file(&a, tokens);
+
+    try assert_eq_i32(file.decl_count as i32, 1);
+    try assert_eq_i32(file.decls[0].kind as i32, DeclKind.DECL_FN as i32);
+    try assert_eq_i32(file.decls[0].fn_decl.param_count as i32, 2);
+    try assert_eq_i32(file.decls[0].fn_decl.body.stmt_count as i32, 1);
+}
+
+fn test_parse_return_binary_precedence() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "fn main() { return 1 + 2 * 3; }" as &[byte];
+    var tokens: &[Token] = try tokenize(&a, src);
+    var file: &File = try parse_file(&a, tokens);
+
+    var stmt: &Stmt = &file.decls[0].fn_decl.body.stmts[0];
+    try assert_eq_i32(stmt.kind as i32, StmtKind.STMT_RETURN as i32);
+    try assert_eq_i32(stmt.return_stmt.value.kind as i32, ExprKind.EXPR_BINARY as i32);
+    try assert_eq_i32(stmt.return_stmt.value.binary.left.kind as i32, ExprKind.EXPR_NUMBER as i32);
+    try assert_eq_i32(stmt.return_stmt.value.binary.right.kind as i32, ExprKind.EXPR_BINARY as i32);
+}
+
+fn test_parse_call_expr_stmt() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "fn main() { foo(x, 1); }" as &[byte];
+    var tokens: &[Token] = try tokenize(&a, src);
+    var file: &File = try parse_file(&a, tokens);
+
+    var stmt: &Stmt = &file.decls[0].fn_decl.body.stmts[0];
+    try assert_eq_i32(stmt.kind as i32, StmtKind.STMT_EXPR as i32);
+    try assert_eq_i32(stmt.expr_stmt.expr.kind as i32, ExprKind.EXPR_CALL as i32);
+    try assert_eq_i32(stmt.expr_stmt.expr.call.arg_count as i32, 2);
+}
+
+fn test_parse_assign_stmt() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "fn main() { x = 1 + 2; }" as &[byte];
+    var tokens: &[Token] = try tokenize(&a, src);
+    var file: &File = try parse_file(&a, tokens);
+
+    var stmt: &Stmt = &file.decls[0].fn_decl.body.stmts[0];
+    try assert_eq_i32(stmt.kind as i32, StmtKind.STMT_ASSIGN as i32);
+    try assert_eq_i32(stmt.assign.target.kind as i32, ExprKind.EXPR_IDENT as i32);
+    try assert_eq_i32(stmt.assign.value.kind as i32, ExprKind.EXPR_BINARY as i32);
+}
+
+export fn main() i32 {
+    test_suite_begin("fmt parser tests");
+    run_test("parse function decl", test_parse_function_decl);
+    run_test("parse return precedence", test_parse_return_binary_precedence);
+    run_test("parse call expr stmt", test_parse_call_expr_stmt);
+    run_test("parse assign stmt", test_parse_assign_stmt);
+    return test_suite_end();
+}

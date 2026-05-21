@@ -1,0 +1,7 @@
+use std.runtime.entry;
+
+export fn main() i32 {
+    const x: f64 = 3.14;
+    x as! f32;
+    return 0;
+}

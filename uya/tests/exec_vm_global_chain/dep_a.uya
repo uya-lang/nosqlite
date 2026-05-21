@@ -1,0 +1,10 @@
+fn init_a() i32 {
+    return 10;
+}
+
+export var counter_a: i32 = init_a();
+
+export fn inc_a() i32 {
+    counter_a = counter_a + 1;
+    return counter_a;
+}

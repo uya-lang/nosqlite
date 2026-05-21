@@ -1,0 +1,55 @@
+// 测试 union drop：离开作用域时应先 drop 当前活跃变体，再执行 union 自身 drop
+use std.runtime.entry;
+
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+var inner_drop_count: i32 = 0;
+var outer_drop_count: i32 = 0;
+
+struct File {
+  id: i32,
+  fn drop(self: File) void {
+    inner_drop_count = inner_drop_count + 1;
+  }
+}
+
+union FileOrInt {
+  file: File,
+  value: i32,
+}
+
+FileOrInt {
+  fn drop(self: FileOrInt) void {
+    outer_drop_count = outer_drop_count + 1;
+  }
+}
+
+fn test_union_drop_auto_variant() !void {
+  inner_drop_count = 0;
+  outer_drop_count = 0;
+  {
+    const v: FileOrInt = FileOrInt.file(File{ id: 1 });
+  }
+  try expect(inner_drop_count == 1);
+  try expect(outer_drop_count == 1);
+}
+
+fn test_union_drop_non_drop_variant() !void {
+  inner_drop_count = 0;
+  outer_drop_count = 0;
+  {
+    const v: FileOrInt = FileOrInt.value(7);
+  }
+  try expect(inner_drop_count == 0);
+  try expect(outer_drop_count == 1);
+}
+
+export fn main() i32 {
+  test_suite_begin("Union Drop Auto Variant Tests");
+  run_test("union drop auto variant", test_union_drop_auto_variant);
+  run_test("union drop non-drop variant", test_union_drop_non_drop_variant);
+  return test_suite_end();
+}

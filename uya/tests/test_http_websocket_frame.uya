@@ -1,0 +1,185 @@
+use std.http.websocket_frame;
+use std.http.websocket_types;
+use std.testing.assert_eq_i32;
+use std.testing.assert_true;
+
+fn bytes_eq(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+test "websocket_frame_encode_parse_text_server_side" {
+    var payload: [byte: 6] = "hello";
+    var out: [byte: 64] = [];
+    var mask: [byte: 4] = [0: 4];
+    const n: usize = try websocket_encode_frame(
+        WebSocketRole.Server,
+        true,
+        WebSocketOpcode.Text,
+        payload[0: 5],
+        mask,
+        &out[0],
+        64
+    );
+    const view: WebSocketFrameView = try websocket_parse_frame_from_buffer(
+        WebSocketRole.Client,
+        &out[0],
+        n,
+        false
+    );
+    try assert_true(view.fin);
+    try assert_eq_i32(1, view.opcode as i32);
+    if !bytes_eq(view.payload_ptr[0: view.payload_len], payload[0: 5]) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "websocket_frame_encode_parse_masked_client_frame" {
+    var payload: [byte: 2] = [72, 105];
+    var out: [byte: 64] = [];
+    var mask: [byte: 4] = [1, 2, 3, 4];
+    const n: usize = try websocket_encode_frame(
+        WebSocketRole.Client,
+        true,
+        WebSocketOpcode.Binary,
+        payload[0: 2],
+        mask,
+        &out[0],
+        64
+    );
+    const view: WebSocketFrameView = try websocket_parse_frame_from_buffer(
+        WebSocketRole.Server,
+        &out[0],
+        n,
+        false
+    );
+    try assert_true(view.masked);
+    try assert_eq_i32(2, view.opcode as i32);
+    if !bytes_eq(view.payload_ptr[0: view.payload_len], payload[0: 2]) {
+        try assert_eq_i32(0, 1);
+    }
+}
+
+test "websocket_frame_rejects_unmasked_client_frame" {
+    var payload: [byte: 1] = [1];
+    var out: [byte: 16] = [];
+    var mask: [byte: 4] = [0: 4];
+    const n: usize = try websocket_encode_frame(
+        WebSocketRole.Server,
+        true,
+        WebSocketOpcode.Binary,
+        payload[0: 1],
+        mask,
+        &out[0],
+        16
+    );
+    const parsed: !WebSocketFrameView = websocket_parse_frame_from_buffer(
+        WebSocketRole.Server,
+        &out[0],
+        n,
+        false
+    );
+    match parsed {
+        error.WebSocketUnmaskedClientFrame => {}
+        else => { try assert_eq_i32(0, 1); }
+    }
+}
+
+test "websocket_frame_rejects_masked_server_frame" {
+    var payload: [byte: 1] = [1];
+    var out: [byte: 16] = [];
+    var mask: [byte: 4] = [9, 8, 7, 6];
+    const n: usize = try websocket_encode_frame(
+        WebSocketRole.Client,
+        true,
+        WebSocketOpcode.Binary,
+        payload[0: 1],
+        mask,
+        &out[0],
+        16
+    );
+    const parsed: !WebSocketFrameView = websocket_parse_frame_from_buffer(
+        WebSocketRole.Client,
+        &out[0],
+        n,
+        false
+    );
+    match parsed {
+        error.WebSocketMaskedServerFrame => {}
+        else => { try assert_eq_i32(0, 1); }
+    }
+}
+
+test "websocket_frame_length_boundaries" {
+    var payload125: [byte: 125] = [0: 125];
+    var payload126: [byte: 126] = [0: 126];
+    var payload65535: [byte: 65535] = [0: 65535];
+    var payload65536: [byte: 65536] = [0: 65536];
+    var out: [byte: 70000] = [];
+    var mask: [byte: 4] = [0: 4];
+    const n125: usize = try websocket_encode_frame(WebSocketRole.Server, true, WebSocketOpcode.Binary, payload125[0: 125], mask, &out[0], 70000);
+    const n126: usize = try websocket_encode_frame(WebSocketRole.Server, true, WebSocketOpcode.Binary, payload126[0: 126], mask, &out[0], 70000);
+    const n65535: usize = try websocket_encode_frame(WebSocketRole.Server, true, WebSocketOpcode.Binary, payload65535[0: 65535], mask, &out[0], 70000);
+    const n65536: usize = try websocket_encode_frame(WebSocketRole.Server, true, WebSocketOpcode.Binary, payload65536[0: 65536], mask, &out[0], 70000);
+    try assert_eq_i32(127, n125 as i32);
+    try assert_eq_i32(130, n126 as i32);
+    try assert_eq_i32(65539, n65535 as i32);
+    try assert_eq_i32(65546, n65536 as i32);
+}
+
+test "websocket_frame_rejects_fragmented_control_and_bad_continuation" {
+    var ping_payload: [byte: 1] = [1];
+    var ping_frame: [byte: 16] = [];
+    var ping_mask: [byte: 4] = [0: 4];
+    const ping_n: usize = try websocket_encode_frame(
+        WebSocketRole.Server,
+        false,
+        WebSocketOpcode.Ping,
+        ping_payload[0: 1],
+        ping_mask,
+        &ping_frame[0],
+        16
+    );
+    const bad_ping: !WebSocketFrameView = websocket_parse_frame_from_buffer(
+        WebSocketRole.Client,
+        &ping_frame[0],
+        ping_n,
+        false
+    );
+    match bad_ping {
+        error.WebSocketFragmentedControlFrame => {}
+        else => { try assert_eq_i32(0, 1); }
+    }
+
+    var cont_payload: [byte: 1] = [1];
+    var cont_frame: [byte: 16] = [];
+    var cont_mask: [byte: 4] = [0: 4];
+    const cont_n: usize = try websocket_encode_frame(
+        WebSocketRole.Server,
+        true,
+        WebSocketOpcode.Continuation,
+        cont_payload[0: 1],
+        cont_mask,
+        &cont_frame[0],
+        16
+    );
+    const bad_cont: !WebSocketFrameView = websocket_parse_frame_from_buffer(
+        WebSocketRole.Client,
+        &cont_frame[0],
+        cont_n,
+        false
+    );
+    match bad_cont {
+        error.WebSocketContinuationMissing => {}
+        else => { try assert_eq_i32(0, 1); }
+    }
+}

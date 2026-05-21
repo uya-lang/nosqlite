@@ -1,0 +1,48 @@
+use std.http.websocket_types;
+use std.testing.assert_eq_i32;
+use std.testing.assert_true;
+
+test "websocket_types_basic_values" {
+    try assert_eq_i32(0, WebSocketOpcode.Continuation as i32);
+    try assert_eq_i32(1, WebSocketOpcode.Text as i32);
+    try assert_eq_i32(2, WebSocketOpcode.Binary as i32);
+    try assert_eq_i32(8, WebSocketOpcode.Close as i32);
+    try assert_eq_i32(9, WebSocketOpcode.Ping as i32);
+    try assert_eq_i32(10, WebSocketOpcode.Pong as i32);
+    try assert_eq_i32(14, WS_MAX_HEADER_BYTES as i32);
+    try assert_eq_i32(125, WS_CONTROL_MAX_PAYLOAD as i32);
+}
+
+test "websocket_accept_options_default_values" {
+    const opts: WebSocketAcceptOptions = websocket_accept_options_default();
+    try assert_true(opts.auto_pong);
+    try assert_eq_i32(0, opts.allow_extensions as i32);
+    try assert_eq_i32(65536, opts.max_frame_size as i32);
+    try assert_eq_i32(1048576, opts.max_message_size as i32);
+}
+
+test "websocket_type_struct_init_smoke" {
+    var payload: [byte: 6] = "hello";
+    const frame: WebSocketFrameView = WebSocketFrameView{
+        fin: true,
+        opcode: WebSocketOpcode.Text,
+        masked: false,
+        payload_ptr: &payload[0],
+        payload_len: 5,
+        mask_key: [0: 4],
+    };
+    const msg: WebSocketMessageView = WebSocketMessageView{
+        opcode: WebSocketOpcode.Binary,
+        payload_ptr: &payload[0],
+        payload_len: 5,
+    };
+    try assert_true(frame.fin);
+    try assert_eq_i32(1, frame.opcode as i32);
+    try assert_eq_i32(2, msg.opcode as i32);
+    try assert_eq_i32(5, frame.payload_len as i32);
+    try assert_eq_i32(5, msg.payload_len as i32);
+
+    const policy: ReconnectPolicy = websocket_reconnect_policy_default();
+    try assert_eq_i32(0, policy.enabled as i32);
+    try assert_eq_i32(1000, policy.initial_delay_ms as i32);
+}

@@ -18,30 +18,30 @@ fn poll_ready_i32(p: Poll<!i32>) i32 {
     }
 }
 
-fn test_frame_methods_value() void {
+fn test_frame_methods_value() !void {
     var frame: @frame(frame_method_child);
     frame.stop();
 
     const w: Waker = Waker{};
     frame.start(41);
     const first: i32 = poll_ready_i32(frame.poll(&w));
-    expect(first == 42);
+    try expect(first == 42);
 
     frame.stop();
     frame.start(9);
     const second: i32 = poll_ready_i32(frame.poll(&w));
-    expect(second == 10);
+    try expect(second == 10);
     frame.stop();
 }
 
-fn test_frame_methods_ref() void {
+fn test_frame_methods_ref() !void {
     var frame: @frame(frame_method_child);
     const fp: &@frame(frame_method_child) = &frame;
     const w: Waker = Waker{};
 
     fp.start(4);
     const got: i32 = poll_ready_i32(fp.poll(&w));
-    expect(got == 5);
+    try expect(got == 5);
     fp.stop();
 }
 

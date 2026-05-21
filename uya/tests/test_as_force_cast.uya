@@ -14,7 +14,7 @@ test "test_as_force_f32" {
 
 test "test_as_force_with_catch" {
     const large: i32 = 100;
-    const f: f32 = large as! f32 catch |_| { 0.0 };
+    const f: f32 = large as! f32 catch |_| { 0.0 as f32; };
     try assert_eq_i32(f > 99.0, true);
     try assert_eq_i32(f < 101.0, true);
 }

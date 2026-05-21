@@ -1,12 +1,12 @@
 // std.mem.heap - 基于 osal mmap/munmap 的堆式 IAllocator（无 malloc）
 // 模块路径：use std.mem.heap;
 
-use osal.os_mmap;
-use osal.os_munmap;
-use syscall.MAP_ANONYMOUS;
-use syscall.MAP_PRIVATE;
-use syscall.PROT_READ;
-use syscall.PROT_WRITE;
+use libc.sys_mmap;
+use libc.sys_munmap;
+use libc.MAP_ANONYMOUS;
+use libc.MAP_PRIVATE;
+use libc.PROT_READ;
+use libc.PROT_WRITE;
 use mem.mem_copy;
 use std.mem.allocator.IAllocator;
 
@@ -27,8 +27,12 @@ export struct HeapAllocator : IAllocator {
             return error.AllocInvalidSize;
         }
         const total: usize = size + heap_hdr_size();
-        const raw: &void = try os_mmap(null, total, PROT_READ | PROT_WRITE,
+        const raw_ptr: *void = try sys_mmap(null as *void, total, PROT_READ | PROT_WRITE,
             MAP_PRIVATE | MAP_ANONYMOUS, 0 - 1, 0);
+        if raw_ptr == null {
+            return error.OutOfMemory;
+        }
+        const raw: &void = raw_ptr as &void;
         var hp: &usize = raw as &usize;
         *hp = total;
         const user_addr: usize = @usize_from_ptr(raw as &void) + heap_hdr_size();
@@ -43,7 +47,7 @@ export struct HeapAllocator : IAllocator {
         const base: &void = heap_user_to_base(ptr);
         var hp: &usize = base as &usize;
         const total: usize = *hp;
-        _ = os_munmap(base, total) catch {};
+        _ = sys_munmap(base as *void, total) catch {};
     }
 
     fn realloc(self: &Self, ptr: &byte, new_size: usize) !&byte {

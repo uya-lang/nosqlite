@@ -1,0 +1,15 @@
+struct Counter {
+    value: i32,
+}
+
+Counter {
+    fn get(self: &Self) i32 {
+        return self.value;
+    }
+}
+
+fn main() i32 {
+    const c: Counter = Counter{ value: 1 };
+    _ = c;
+    return Counter.get();
+}

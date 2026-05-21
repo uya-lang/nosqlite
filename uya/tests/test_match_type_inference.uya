@@ -71,19 +71,19 @@ export fn main() i32 {
     
     const r1: i32 = test_first_as_second_field();
     printf("test_first_as_second_field: %d\n", r1);
-    try assert_true(r1 == 42);
+    _ = assert_true(r1 == 42) catch { return 1; };
     
     const r2: i32 = test_first_as_second_literal();
     printf("test_first_as_second_literal: %d\n", r2);
-    try assert_true(r2 == 42);
+    _ = assert_true(r2 == 42) catch { return 2; };
     
     const r3: i32 = test_all_fields();
     printf("test_all_fields: %d\n", r3);
-    try assert_true(r3 == 100);
+    _ = assert_true(r3 == 100) catch { return 3; };
     
     const r4: i32 = test_mixed();
     printf("test_mixed: %d\n", r4);
-    try assert_true(r4 == 42);
+    _ = assert_true(r4 == 42) catch { return 4; };
     
     printf("=== All tests passed ===\n");
     return 0;

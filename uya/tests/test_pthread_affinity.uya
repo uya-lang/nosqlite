@@ -1,0 +1,79 @@
+// test_pthread_affinity.uya - 从 test_pthread.uya 拆出的跨线程亲和性用例
+
+use std.runtime.entry;
+use libc.pthread;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.test_pass;
+use std.testing.test_fail;
+use std.testing.expect;
+
+var _affinity_release: atomic i32 = 0;
+var _affinity_started: atomic i32 = 0;
+var _affinity_cpuset_a: cpu_set_t = cpu_set_t{
+    bits0: 0, bits1: 0, bits2: 0, bits3: 0,
+    bits4: 0, bits5: 0, bits6: 0, bits7: 0,
+    bits8: 0, bits9: 0, bits10: 0, bits11: 0,
+    bits12: 0, bits13: 0, bits14: 0, bits15: 0,
+};
+var _affinity_cpuset_b: cpu_set_t = cpu_set_t{
+    bits0: 0, bits1: 0, bits2: 0, bits3: 0,
+    bits4: 0, bits5: 0, bits6: 0, bits7: 0,
+    bits8: 0, bits9: 0, bits10: 0, bits11: 0,
+    bits12: 0, bits13: 0, bits14: 0, bits15: 0,
+};
+
+fn thread_start_affinity_hold(arg: &void) &void {
+    _affinity_started = 1;
+    while _affinity_release == 0 {
+        _ = pthread_yield();
+    }
+    return arg;
+}
+
+fn test_pthread_affinity() !void {
+    _affinity_release = 0;
+    _affinity_started = 0;
+
+    var th: pthread_t = pthread_t{};
+    try expect(pthread_create(&th, null as &const pthread_attr_t, &thread_start_affinity_hold as &void, null) == 0);
+    defer {
+        _affinity_release = 1;
+        _ = pthread_join(&th, null as & &void);
+    }
+
+    while _affinity_started == 0 {
+        var spin: i32 = 0;
+        while spin < 1000 {
+            spin = spin + 1;
+        }
+    }
+
+    CPU_ZERO(&_affinity_cpuset_a);
+    const get_ret: i32 = pthread_getaffinity_np(&th, @size_of(cpu_set_t), &_affinity_cpuset_a);
+    try expect(get_ret != 22);
+
+    if get_ret == 0 {
+        CPU_ZERO(&_affinity_cpuset_a);
+        CPU_SET(0, &_affinity_cpuset_a);
+        const set_ret: i32 = pthread_setaffinity_np(&th, @size_of(cpu_set_t), &_affinity_cpuset_a);
+        try expect(set_ret != 22);
+    }
+
+    try expect(pthread_getaffinity_np(&th, 0, &_affinity_cpuset_b) == 22);
+    try expect(pthread_setaffinity_np(&th, 0, &_affinity_cpuset_b) == 22);
+    try expect(pthread_getaffinity_np(null as &pthread_t, @size_of(cpu_set_t), &_affinity_cpuset_b) == 22);
+    try expect(pthread_setaffinity_np(null as &pthread_t, @size_of(cpu_set_t), &_affinity_cpuset_b) == 22);
+}
+
+export fn main() i32 {
+    test_suite_begin("pthread_affinity");
+
+    test_pthread_affinity() catch {
+        test_fail("pthread_affinity");
+        return test_suite_end();
+    };
+    test_pass("pthread_affinity");
+
+    return test_suite_end();
+}

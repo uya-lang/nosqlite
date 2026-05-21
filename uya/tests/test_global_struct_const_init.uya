@@ -1,0 +1,33 @@
+use std.testing.assert_eq_i32;
+
+struct Color {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+struct Style {
+    background: Color,
+    foreground: Color,
+    border: Color,
+    border_width: u8,
+}
+
+const TRANSPARENT: Color = Color{ r: 0, g: 0, b: 0, a: 0 };
+const WHITE: Color = Color{ r: 255, g: 255, b: 255, a: 255 };
+const BLACK: Color = Color{ r: 0, g: 0, b: 0, a: 255 };
+
+const DEFAULT_STYLE: Style = Style{
+    background: TRANSPARENT,
+    foreground: WHITE,
+    border: BLACK,
+    border_width: 1,
+};
+
+test "global struct const init can reuse other globals" {
+    try assert_eq_i32(DEFAULT_STYLE.background.a as i32, 0);
+    try assert_eq_i32(DEFAULT_STYLE.foreground.r as i32, 255);
+    try assert_eq_i32(DEFAULT_STYLE.border.a as i32, 255);
+    try assert_eq_i32(DEFAULT_STYLE.border_width as i32, 1);
+}

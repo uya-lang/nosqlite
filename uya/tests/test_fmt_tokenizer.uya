@@ -1,0 +1,74 @@
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.testing.assert_eq_i32;
+use std.testing.assert_eq_bool;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.fmt.positions.Position;
+use std.fmt.positions.Span;
+use std.fmt.tokenizer.Token;
+use std.fmt.tokenizer.TokenType;
+use std.fmt.tokenizer.tokenize;
+
+fn test_tokenize_simple_function() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "fn add(a, b) { return a+b; }" as &[byte];
+    const tokens: &[Token] = try tokenize(&a, src);
+
+    try assert_eq_i32(tokens.len as i32, 14);
+    try assert_eq_i32(tokens[0].type as i32, TokenType.TOKEN_FN as i32);
+    try assert_eq_i32(tokens[1].type as i32, TokenType.TOKEN_IDENT as i32);
+    try assert_eq_i32(tokens[2].type as i32, TokenType.TOKEN_LPAREN as i32);
+    try assert_eq_i32(tokens[3].type as i32, TokenType.TOKEN_IDENT as i32);
+    try assert_eq_i32(tokens[4].type as i32, TokenType.TOKEN_COMMA as i32);
+    try assert_eq_i32(tokens[5].type as i32, TokenType.TOKEN_IDENT as i32);
+    try assert_eq_i32(tokens[6].type as i32, TokenType.TOKEN_RPAREN as i32);
+    try assert_eq_i32(tokens[7].type as i32, TokenType.TOKEN_LBRACE as i32);
+    try assert_eq_i32(tokens[8].type as i32, TokenType.TOKEN_RETURN as i32);
+    try assert_eq_i32(tokens[9].type as i32, TokenType.TOKEN_IDENT as i32);
+    try assert_eq_i32(tokens[10].type as i32, TokenType.TOKEN_PLUS as i32);
+    try assert_eq_i32(tokens[11].type as i32, TokenType.TOKEN_IDENT as i32);
+    try assert_eq_i32(tokens[12].type as i32, TokenType.TOKEN_SEMICOLON as i32);
+    try assert_eq_i32(tokens[13].type as i32, TokenType.TOKEN_RBRACE as i32);
+}
+
+fn test_tokenize_positions() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "fn x\nreturn 1;" as &[byte];
+    const tokens: &[Token] = try tokenize(&a, src);
+
+    try assert_eq_i32(tokens[0].span.start.line as i32, 1);
+    try assert_eq_i32(tokens[0].span.start.column as i32, 1);
+    try assert_eq_i32(tokens[1].span.start.line as i32, 1);
+    try assert_eq_i32(tokens[1].span.start.column as i32, 4);
+    try assert_eq_i32(tokens[2].span.start.line as i32, 2);
+    try assert_eq_i32(tokens[2].span.start.column as i32, 1);
+    try assert_eq_i32(tokens[3].type as i32, TokenType.TOKEN_NUMBER as i32);
+    try assert_eq_i32(tokens[3].span.start.line as i32, 2);
+}
+
+fn test_span_helpers() !void {
+    const start: Position = Position { offset: 3, line: 1, column: 4 };
+    const end: Position = Position { offset: 5, line: 1, column: 6 };
+    const span: Span = Span { start: start, end: end };
+
+    try assert_eq_i32(span.start.offset as i32, 3);
+    try assert_eq_i32(span.end.offset as i32, 5);
+    try assert_eq_bool(span.start.line == 1, true);
+}
+
+export fn main() i32 {
+    test_suite_begin("fmt tokenizer tests");
+    run_test("tokenize simple function", test_tokenize_simple_function);
+    run_test("tokenize positions", test_tokenize_positions);
+    run_test("span helpers", test_span_helpers);
+    return test_suite_end();
+}

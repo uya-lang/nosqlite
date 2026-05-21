@@ -325,6 +325,7 @@ fn test_context_handshake_and_write_read() i32 {
     var ctx_s: SslContext = SslContext{ role: HS_ROLE_SERVER, hs: &hs_s, rec: &rec_s };
     ssl_init(&ctx_c);
     ssl_init(&ctx_s);
+    ssl_set_insecure_skip_verify(&ctx_c, true);
 
     var host: [byte: 11] = [101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109];
     ssl_set_hostname(&ctx_c, &host[0], 11);

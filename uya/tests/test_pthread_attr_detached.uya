@@ -1,0 +1,36 @@
+// test_pthread_attr_detached.uya - 从 test_pthread.uya 拆出的 attr 分离线程用例
+
+use std.runtime.entry;
+use libc.pthread;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.test_pass;
+use std.testing.test_fail;
+use std.testing.expect;
+
+fn thread_start(arg: &void) &void {
+    return arg;
+}
+
+fn test_pthread_attr_detached() !void {
+    var attr: pthread_attr_t = pthread_attr_t{};
+    try expect(pthread_attr_init(&attr) == 0);
+    try expect(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0);
+
+    var th: pthread_t = pthread_t{};
+    try expect(pthread_create(&th, &attr, &thread_start as &void, null) == 0);
+    try expect(pthread_join(&th, null as & &void) == 22);
+    try expect(pthread_attr_destroy(&attr) == 0);
+}
+
+export fn main() i32 {
+    test_suite_begin("pthread_attr_detached");
+
+    test_pthread_attr_detached() catch {
+        test_fail("pthread_attr_detached");
+        return test_suite_end();
+    };
+    test_pass("pthread_attr_detached");
+
+    return test_suite_end();
+}

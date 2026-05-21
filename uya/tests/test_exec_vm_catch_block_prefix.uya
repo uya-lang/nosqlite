@@ -1,0 +1,42 @@
+use std.runtime.entry;
+
+error CatchPrefixError;
+
+var g_catch_prefix_counter: i32 = 0;
+
+fn bump_catch_prefix(delta: i32) i32 {
+    g_catch_prefix_counter = g_catch_prefix_counter + delta;
+    return g_catch_prefix_counter;
+}
+
+fn fail_catch_prefix(flag: i32) !i32 {
+    if flag != 0 {
+        return error.CatchPrefixError;
+    }
+    return 21;
+}
+
+export fn main() i32 {
+    const ok: i32 = fail_catch_prefix(0) catch {
+        _ = bump_catch_prefix(100);
+        0;
+    };
+    if ok != 21 || g_catch_prefix_counter != 0 {
+        return 1;
+    }
+
+    const fallback: i32 = fail_catch_prefix(1) catch {
+        _ = bump_catch_prefix(3);
+        9;
+    };
+    if fallback != 9 || g_catch_prefix_counter != 3 {
+        return 2;
+    }
+
+    fail_catch_prefix(1) catch {
+        _ = bump_catch_prefix(7);
+        @println("catch prefix return");
+        return 0;
+    };
+    return 3;
+}

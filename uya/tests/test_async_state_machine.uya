@@ -151,4 +151,3 @@ test "async_state_machine_no_await" {
     };
     try assert_eq_i32(v, 42);
 }
-

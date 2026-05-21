@@ -1,0 +1,68 @@
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Factory {
+    value: i32,
+}
+
+Factory {
+    fn new() Self {
+        return Factory{ value: 7 };
+    }
+
+    fn make(v: i32) Self {
+        return Factory{ value: v };
+    }
+
+    fn add(a: i32, b: i32) i32 {
+        return a + b;
+    }
+
+    fn get(self: &Self) i32 {
+        return self.value;
+    }
+
+    fn get2(this: &Self) i32 {
+        return this.value;
+    }
+}
+
+fn test_static_new() !void {
+    const f: Factory = Factory.new();
+    try assert_eq_i32(f.get(), 7);
+}
+
+fn test_static_make() !void {
+    const f: Factory = Factory.make(11);
+    try assert_eq_i32(f.get(), 11);
+}
+
+fn test_instance_method_via_type() !void {
+    const f: Factory = Factory.make(13);
+    try assert_eq_i32(Factory.get(f), 13);
+}
+
+fn test_instance_method_non_self_name() !void {
+    const f: Factory = Factory.make(15);
+    try assert_eq_i32(f.get2(), 15);
+    try assert_eq_i32(Factory.get2(f), 15);
+}
+
+fn test_static_plain_helper() !void {
+    const sum: i32 = Factory.add(3, 4);
+    try assert_eq_i32(sum, 7);
+}
+
+export fn main() i32 {
+    test_suite_begin("Static Method Struct Tests");
+    run_test("static new", test_static_new);
+    run_test("static make", test_static_make);
+    run_test("instance via type", test_instance_method_via_type);
+    run_test("instance non-self name", test_instance_method_non_self_name);
+    run_test("static helper", test_static_plain_helper);
+    return test_suite_end();
+}

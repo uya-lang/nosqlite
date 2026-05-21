@@ -16,13 +16,12 @@ export fn main() i32 {
     _ = result catch {
         // 打开失败（预期行为）
         const success_msg: *byte = "Error handling works!\n";
-        @syscall(SYS_write, 1, success_msg as i64, 22);
+        _ = @syscall(SYS_write, 1, success_msg as i64, 22) catch {};
         return 0;  // 测试通过
     };
     
     // 如果没有失败，说明有问题
     const fail_msg: *byte = "Should have failed!\n";
-    @syscall(SYS_write, 1, fail_msg as i64, 20);
+    _ = @syscall(SYS_write, 1, fail_msg as i64, 20) catch {};
     return 1;
 }
-

@@ -98,7 +98,7 @@ fn slice_eq_bytes(a: &[byte], b: &[byte]) bool {
 
 fn run_client_loopback(port: u16) void {
     const conn_res: !i32 = http_tcp_connect_loopback(port);
-    const cfd: i32 = conn_res catch { 0 - 1 };
+    const cfd: i32 = conn_res catch { 0 - 1; };
     if cfd < 0 {
         sys_exit(1);
     }
@@ -107,7 +107,7 @@ fn run_client_loopback(port: u16) void {
     var rb: [byte: 512] = [];
     var total: usize = 0;
     while total < 512 {
-        const n: isize = sys_read(cfd, &rb[total] as *byte, 512 - total) catch { 0 - 1 };
+        const n: isize = sys_read(cfd, &rb[total] as *byte, 512 - total) catch { -1 as isize; };
         if n <= 0 {
             break;
         }
@@ -133,7 +133,7 @@ fn run_client_loopback(port: u16) void {
 /// 模拟 `ab -k`：HTTP/1.0 + `Connection: keep-alive`；首包响应须含 `Connection: keep-alive`，否则客户端常不发送下一请求。
 fn run_client_http10_keepalive_two_rounds(port: u16) void {
     const conn_res: !i32 = http_tcp_connect_loopback(port);
-    const cfd: i32 = conn_res catch { 0 - 1 };
+    const cfd: i32 = conn_res catch { 0 - 1; };
     if cfd < 0 {
         sys_exit(1);
     }
@@ -142,7 +142,7 @@ fn run_client_http10_keepalive_two_rounds(port: u16) void {
     var rb: [byte: 512] = [];
     var total: usize = 0;
     while total < 512 {
-        const n: isize = sys_read(cfd, &rb[total] as *byte, 512 - total) catch { 0 - 1 };
+        const n: isize = sys_read(cfd, &rb[total] as *byte, 512 - total) catch { -1 as isize; };
         if n <= 0 {
             break;
         }
@@ -162,7 +162,7 @@ fn run_client_http10_keepalive_two_rounds(port: u16) void {
     _ = sys_write(cfd, r1.ptr, r1.len);
     var total2: usize = 0;
     while total2 < 512 {
-        const n2: isize = sys_read(cfd, &rb[total2] as *byte, 512 - total2) catch { 0 - 1 };
+        const n2: isize = sys_read(cfd, &rb[total2] as *byte, 512 - total2) catch { -1 as isize; };
         if n2 <= 0 {
             break;
         }
@@ -180,7 +180,7 @@ fn run_client_http10_keepalive_two_rounds(port: u16) void {
 
 fn run_client_pipeline_two_gets(port: u16) void {
     const conn_res: !i32 = http_tcp_connect_loopback(port);
-    const cfd: i32 = conn_res catch { 0 - 1 };
+    const cfd: i32 = conn_res catch { 0 - 1; };
     if cfd < 0 {
         sys_exit(1);
     }
@@ -206,7 +206,7 @@ fn run_client_pipeline_two_gets(port: u16) void {
     var saw_one: i32 = 0;
     var saw_two: i32 = 0;
     while total < 640 {
-        const n: isize = sys_read(cfd, &rb[total] as *byte, 640 - total) catch { 0 - 1 };
+        const n: isize = sys_read(cfd, &rb[total] as *byte, 640 - total) catch { -1 as isize; };
         if n <= 0 {
             break;
         }
@@ -231,7 +231,7 @@ fn run_client_pipeline_two_gets(port: u16) void {
 
 fn run_client_invalid_method_expect_400(port: u16) void {
     const conn_res: !i32 = http_tcp_connect_loopback(port);
-    const cfd: i32 = conn_res catch { 0 - 1 };
+    const cfd: i32 = conn_res catch { 0 - 1; };
     if cfd < 0 {
         sys_exit(1);
     }
@@ -240,7 +240,7 @@ fn run_client_invalid_method_expect_400(port: u16) void {
     var rb: [byte: 256] = [];
     var total: usize = 0;
     while total < 256 {
-        const n: isize = sys_read(cfd, &rb[total] as *byte, 256 - total) catch { 0 - 1 };
+        const n: isize = sys_read(cfd, &rb[total] as *byte, 256 - total) catch { -1 as isize; };
         if n <= 0 {
             break;
         }
@@ -254,6 +254,36 @@ fn run_client_invalid_method_expect_400(port: u16) void {
         sys_exit(2);
     }
     if !response_has_subslice(rb[0: total], &"400"[0: 3]) {
+        sys_exit(3);
+    }
+    sys_exit(0);
+}
+
+fn run_client_chunked_post_expect_201(port: u16) void {
+    const conn_res: !i32 = http_tcp_connect_loopback(port);
+    const cfd: i32 = conn_res catch { 0 - 1; };
+    if cfd < 0 {
+        sys_exit(1);
+    }
+    const req: &[byte] = &"POST /chunk HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n1\r\n \r\n5\r\nworld\r\n0\r\n\r\n"[0: 100];
+    _ = sys_write(cfd, req.ptr, req.len);
+    var rb: [byte: 256] = [];
+    var total: usize = 0;
+    while total < 256 {
+        const n: isize = sys_read(cfd, &rb[total] as *byte, 256 - total) catch { -1 as isize; };
+        if n <= 0 {
+            break;
+        }
+        total = total + (n as usize);
+        if response_has_subslice(rb[0: total], &"201"[0: 3]) {
+            break;
+        }
+    }
+    _ = sys_close(cfd);
+    if total == 0 {
+        sys_exit(2);
+    }
+    if !response_has_subslice(rb[0: total], &"201"[0: 3]) {
         sys_exit(3);
     }
     sys_exit(0);
@@ -366,6 +396,50 @@ test "http_parse_error_returns_400" {
             try assert_eq_i32(0, 1);
         }
     }
+    _ = sys_close(sfd);
+
+    var st: i32 = 0;
+    _ = try sys_waitpid(child_pid, &st, 0);
+    if (st & 0xff) != 0 {
+        try assert_eq_i32(0, 1);
+    }
+    try assert_eq_i32((st >> 8) & 0xff, 0);
+    http_server_close(&srv);
+}
+
+test "http_recv_parse_request_decodes_chunked_request" {
+    const gate: i32 = http_loopback_test_gate();
+    if gate > 0 {
+        return;
+    }
+    if gate < 0 {
+        try assert_eq_i32(0, 1);
+        return;
+    }
+    var cfg: ServerConfig = ServerConfig{
+        mode: ServerMode.Blocking,
+        max_connections: 8,
+        port: 0,
+        host: [],
+    };
+    const srv: HttpServer = try http_server_listen(&cfg);
+    const child_pid: i32 = fork();
+    if child_pid == 0 {
+        run_client_chunked_post_expect_201(srv.port);
+    }
+    if child_pid <= 0 {
+        try assert_eq_i32(0, 1);
+    }
+    var srv_tmp: HttpServer = HttpServer{ listen_fd: srv.listen_fd, port: srv.port };
+    const conn: Conn = try http_server_accept(&srv_tmp);
+    const sfd: i32 = conn.fd;
+    const pr: ParseResult = try http_recv_parse_request(sfd);
+    try assert_eq_i32(pr.request.method as i32, Method.POST as i32);
+    try assert_eq_i32(pr.request.path_len, 6);
+    if !slice_eq_bytes(pr.request.body, &"hello world"[0: 11]) {
+        try assert_eq_i32(0, 1);
+    }
+    _ = http_send_response(sfd, Status.Created, &"chunk-ok"[0: 8]) catch {};
     _ = sys_close(sfd);
 
     var st: i32 = 0;
@@ -496,7 +570,7 @@ test "http_http10_keepalive_response_echoes_connection" {
 
 fn run_client_post_then_get_201_204(port: u16) void {
     const conn_res: !i32 = http_tcp_connect_loopback(port);
-    const cfd: i32 = conn_res catch { 0 - 1 };
+    const cfd: i32 = conn_res catch { 0 - 1; };
     if cfd < 0 {
         sys_exit(1);
     }
@@ -523,7 +597,7 @@ fn run_client_post_then_get_201_204(port: u16) void {
     var saw_204: i32 = 0;
     var saw_ok: i32 = 0;
     while total < 768 {
-        const n: isize = sys_read(cfd, &rb[total] as *byte, 768 - total) catch { 0 - 1 };
+        const n: isize = sys_read(cfd, &rb[total] as *byte, 768 - total) catch { -1 as isize; };
         if n <= 0 {
             break;
         }
@@ -610,7 +684,7 @@ test "http_pipeline_post_created_get_no_content" {
 
 fn run_client_get_item_with_query(port: u16) void {
     const conn_res: !i32 = http_tcp_connect_loopback(port);
-    const cfd: i32 = conn_res catch { 0 - 1 };
+    const cfd: i32 = conn_res catch { 0 - 1; };
     if cfd < 0 {
         sys_exit(1);
     }
@@ -619,7 +693,7 @@ fn run_client_get_item_with_query(port: u16) void {
     var rb: [byte: 320] = [];
     var total: usize = 0;
     while total < 320 {
-        const n: isize = sys_read(cfd, &rb[total] as *byte, 320 - total) catch { 0 - 1 };
+        const n: isize = sys_read(cfd, &rb[total] as *byte, 320 - total) catch { -1 as isize; };
         if n <= 0 {
             break;
         }

@@ -1,0 +1,41 @@
+use std.runtime.entry;
+
+error ExecDiscardError;
+
+var g_discard_counter: i32 = 0;
+
+fn bump_discard_counter() i32 {
+    g_discard_counter = g_discard_counter + 1;
+    return g_discard_counter;
+}
+
+fn add_discard_counter(delta: i32) i32 {
+    g_discard_counter = g_discard_counter + delta;
+    return g_discard_counter;
+}
+
+fn maybe_discard(flag: i32) !i32 {
+    if flag != 0 {
+        return error.ExecDiscardError;
+    }
+    return 7;
+}
+
+export fn main() i32 {
+    _ = bump_discard_counter();
+    if g_discard_counter != 1 {
+        return 1;
+    }
+
+    _ = maybe_discard(0) catch {
+        return 2;
+    };
+
+    _ = maybe_discard(1) catch { add_discard_counter(10); };
+    if g_discard_counter != 11 {
+        return 3;
+    }
+
+    @println("discard assign");
+    return 0;
+}

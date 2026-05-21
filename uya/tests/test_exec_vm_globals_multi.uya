@@ -1,0 +1,26 @@
+use exec_vm_global_chain.dep_a.counter_a;
+use exec_vm_global_chain.dep_a.inc_a;
+use exec_vm_global_chain.dep_b.counter_b;
+use exec_vm_global_chain.dep_b.inc_b;
+
+export fn main() i32 {
+    if counter_a != 10 {
+        return 1;
+    }
+    if counter_b != 15 {
+        return 2;
+    }
+    if inc_a() != 11 {
+        return 3;
+    }
+    if counter_a != 11 {
+        return 4;
+    }
+    if inc_b() != 18 {
+        return 5;
+    }
+    if counter_b != 18 {
+        return 6;
+    }
+    return 0;
+}

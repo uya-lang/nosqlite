@@ -1,0 +1,34 @@
+use std.runtime.entry;
+
+interface IInc {
+    fn bump(self: &Self, x: i32) i32;
+}
+
+struct Accum : IInc {
+    value: i32
+}
+
+Accum {
+    fn bump(self: &Self, x: i32) i32 {
+        self.value = self.value + x;
+        return self.value;
+    }
+}
+
+struct Runner {
+    inner: IInc
+}
+
+export fn main() i32 {
+    var accum: Accum = Accum{ value: 7 };
+    var runner: Runner = Runner{
+        inner: accum,
+    };
+    if runner.inner.bump(3) != 10 {
+        return 1;
+    }
+    if runner.inner.bump(4) != 14 {
+        return 2;
+    }
+    return 0;
+}

@@ -88,6 +88,21 @@ fn http_loopback_tests_supported() bool {
     const fd: i32 = probe catch {
         return false;
     };
+    var one: i32 = 1;
+    _ = sys_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one as &void, 4 as u32) catch {
+        _ = sys_close(fd);
+        return false;
+    };
+    var addr: [byte: 16] = [];
+    fill_sockaddr_loopback_16(0, &addr[0] as &byte);
+    _ = sys_bind(fd, &addr[0] as &void, 16 as u32) catch {
+        _ = sys_close(fd);
+        return false;
+    };
+    _ = sys_listen(fd, 1) catch {
+        _ = sys_close(fd);
+        return false;
+    };
     _ = sys_close(fd);
     return true;
 }

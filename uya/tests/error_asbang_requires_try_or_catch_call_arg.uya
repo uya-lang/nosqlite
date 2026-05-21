@@ -1,0 +1,11 @@
+use std.runtime.entry;
+
+fn take(v: f32) void {
+    _ = v;
+}
+
+export fn main() i32 {
+    const x: f64 = 3.14;
+    take(x as! f32);
+    return 0;
+}

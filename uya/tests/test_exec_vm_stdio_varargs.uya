@@ -1,0 +1,46 @@
+use std.runtime.entry;
+use libc;
+use libc.printf;
+use libc.fprintf;
+use libc.snprintf;
+use libc.strcmp;
+
+fn _va_copy_sum(seed: i32, ...) i32 {
+    var ap1: va_list = va_list{};
+    @va_start(&ap1, seed);
+    var ap2: va_list = va_list{};
+    @va_copy(&ap2, ap1);
+    const v1: i32 = @va_arg(ap1, i32);
+    const v2: i32 = @va_arg(ap2, i32);
+    @va_end(&ap1);
+    @va_end(&ap2);
+    return v1 + v2;
+}
+
+export fn main() i32 {
+    if _va_copy_sum(0, 21) != 42 {
+        return 1;
+    }
+
+    const fprintf_rc: i32 = fprintf(libc.stdout, "exec vm fprintf %d %s\n", 7, "body");
+    if fprintf_rc <= 0 {
+        return 2;
+    }
+
+    const printf_rc: i32 = printf("exec vm printf|%*s|%d\n", 4, "ok", 9);
+    if printf_rc <= 0 {
+        return 3;
+    }
+
+    var buf: [byte: 64] = [];
+    const snprintf_rc: i32 = snprintf(&buf[0], 64, "%s:%d:%s", "snprintf", 11, "body");
+    if snprintf_rc <= 0 {
+        return 4;
+    }
+    if strcmp(&buf[0] as *const byte, "snprintf:11:body" as *const byte) != 0 {
+        return 5;
+    }
+
+    @println(&buf[0]);
+    return 0;
+}

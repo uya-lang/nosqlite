@@ -1,0 +1,10 @@
+use std.runtime.entry;
+use libc;
+use libc.fprintf;
+
+export fn main() i32 {
+    if fprintf(libc.stdout, "exec libc module global\n" as *byte) <= 0 {
+        return 1;
+    }
+    return 0;
+}

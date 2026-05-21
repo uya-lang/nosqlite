@@ -1,0 +1,44 @@
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Box<T> {
+    value: T,
+
+    fn wrap(value: T) Self {
+        return Box<T>{ value: value };
+    }
+
+    fn get(self: &Self) T {
+        return self.value;
+    }
+}
+
+fn test_static_wrap_i32() !void {
+    const b: Box<i32> = Box<i32>.wrap(42);
+    const v: i32 = b.get();
+    try assert_eq_i32(v, 42);
+}
+
+fn test_static_wrap_bool() !void {
+    const b: Box<bool> = Box<bool>.wrap(true);
+    const v: bool = b.get();
+    try expect(v);
+}
+
+fn test_instance_generic_via_type() !void {
+    const b: Box<i32> = Box<i32>.wrap(21);
+    try assert_eq_i32(Box<i32>.get(b), 21);
+}
+
+export fn main() i32 {
+    test_suite_begin("Static Method Generic Struct Tests");
+    run_test("wrap i32", test_static_wrap_i32);
+    run_test("wrap bool", test_static_wrap_bool);
+    run_test("instance via type", test_instance_generic_via_type);
+    return test_suite_end();
+}

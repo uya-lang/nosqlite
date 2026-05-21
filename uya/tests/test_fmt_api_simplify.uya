@@ -1,0 +1,52 @@
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.fmt.fmt.FormatOptions;
+use std.fmt.fmt.format_with_options;
+
+fn index_of(haystack: &[byte], needle: &[byte]) i32 {
+    if needle.len == 0 || haystack.len < needle.len {
+        return -1;
+    }
+    var i: usize = 0;
+    while i + needle.len <= haystack.len {
+        var ok: bool = true;
+        var j: usize = 0;
+        while j < needle.len {
+            if haystack.ptr[i + j] != needle.ptr[j] {
+                ok = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if ok {
+            return i as i32;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn test_format_with_simplify() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const opts: FormatOptions = FormatOptions {
+        sort_imports: false,
+        simplify: true,
+    };
+    const out: &[byte] = try format_with_options(&a, "fn main(){return (1);}" as &[byte], opts);
+
+    try assert_eq_i32(index_of(out, "return 1;" as &[byte]) >= 0 as i32, true as i32);
+}
+
+export fn main() i32 {
+    test_suite_begin("fmt api simplify tests");
+    run_test("format with simplify", test_format_with_simplify);
+    return test_suite_end();
+}

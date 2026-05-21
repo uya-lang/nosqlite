@@ -22,6 +22,20 @@ dump_log_and_fail() {
     exit 1
 }
 
+assert_single_result_surface() {
+    local path="$1"
+    local expected="$2"
+    local count
+    grep -a -F -q "$expected" "$path" || dump_log_and_fail "未输出统一 result: $expected" "$path"
+    count="$(grep -a -c '^\[microapp loader\] payload result=' "$path" || true)"
+    if [ "$count" -ne 1 ]; then
+        dump_log_and_fail "payload result 行数量异常: $count" "$path"
+    fi
+    if grep -a -q '^\[microapp loader\] payload fault class=' "$path"; then
+        dump_log_and_fail "不应输出旧 fault 诊断面" "$path"
+    fi
+}
+
 TARGET_GCC=x86_64-linux-gnu-gcc \
     "$ROOT_DIR/bin/uya" build --app microapp \
     --microapp-profile linux_aarch64_hardvm \
@@ -33,7 +47,7 @@ if "$ROOT_DIR/bin/uya" run examples/microapp/microcontainer_hello_load.uya -- "$
 fi
 
 grep -a -q '\[microapp loader\] no execution path for target_arch=aarch64 bridge=call_gate' "$LOADER_LOG" || dump_log_and_fail "loader 未输出 unwired profile 诊断" "$LOADER_LOG"
-grep -a -q '\[microapp loader\] payload result=unwired bridge=call_gate target=aarch64' "$LOADER_LOG" || dump_log_and_fail "loader 未输出统一 unwired result" "$LOADER_LOG"
+assert_single_result_surface "$LOADER_LOG" "[microapp loader] payload result=unwired bridge=call_gate target=aarch64"
 grep -a -q '\[microapp loader\] pass native payload path as argv\[2\] or add mapped execution support for this profile' "$LOADER_LOG" || dump_log_and_fail "loader 未提示如何处理 unwired profile" "$LOADER_LOG"
 if grep -a -q '\[microapp loader\] done' "$LOADER_LOG"; then
     dump_log_and_fail "unwired profile 不应输出 done" "$LOADER_LOG"

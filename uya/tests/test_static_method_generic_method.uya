@@ -1,0 +1,32 @@
+use std.runtime.entry;
+
+use std.testing.assert_eq_i32;
+use std.testing.expect;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+
+struct Cast {}
+
+Cast {
+    fn to<T>(x: i32) T {
+        return x as T;
+    }
+}
+
+fn test_static_generic_to_i64() !void {
+    const v: i64 = Cast.to<i64>(42);
+    try expect(v == 42);
+}
+
+fn test_static_generic_to_i32() !void {
+    const v: i32 = Cast.to<i32>(17);
+    try assert_eq_i32(v, 17);
+}
+
+export fn main() i32 {
+    test_suite_begin("Static Method Generic Method Tests");
+    run_test("to i64", test_static_generic_to_i64);
+    run_test("to i32", test_static_generic_to_i32);
+    return test_suite_end();
+}

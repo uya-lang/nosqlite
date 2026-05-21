@@ -23,6 +23,20 @@ dump_log_and_fail() {
     exit 1
 }
 
+assert_single_result_surface() {
+    local path="$1"
+    local expected="$2"
+    local count
+    grep -a -F -q "$expected" "$path" || dump_log_and_fail "未输出统一 result: $expected" "$path"
+    count="$(grep -a -c '^\[microapp loader\] payload result=' "$path" || true)"
+    if [ "$count" -ne 1 ]; then
+        dump_log_and_fail "payload result 行数量异常: $count" "$path"
+    fi
+    if grep -a -q '^\[microapp loader\] payload fault class=' "$path"; then
+        dump_log_and_fail "不应输出旧 fault 诊断面" "$path"
+    fi
+}
+
 python3 - "$RUN_UAPP" "$EXIT_UAPP" <<'PY'
 from hashlib import sha256
 from pathlib import Path
@@ -130,7 +144,10 @@ PY
 "$ROOT_DIR/bin/uya" run lib/std/runtime/microapp/loader_main.uya -- "$RUN_UAPP" >"$RUN_LOG" 2>&1 || dump_log_and_fail "trap runtime loader run 失败" "$RUN_LOG"
 grep -a -q "trap runtime ok" "$RUN_LOG" || dump_log_and_fail "trap runtime 未输出预期文本" "$RUN_LOG"
 grep -a -q "\[microapp loader\] executed trap payload" "$RUN_LOG" || dump_log_and_fail "trap runtime 未命中 trap payload 执行分支" "$RUN_LOG"
-grep -a -q "\[microapp loader\] payload result=ok" "$RUN_LOG" || dump_log_and_fail "trap runtime 未输出统一 ok result" "$RUN_LOG"
+assert_single_result_surface "$RUN_LOG" "[microapp loader] payload result=ok"
+if grep -a -q "\[microapp loader\] payload result=validated" "$RUN_LOG"; then
+    dump_log_and_fail "trap runtime 真执行路径不应停在 validated-only 结果面" "$RUN_LOG"
+fi
 
 set +e
 "$ROOT_DIR/bin/uya" run lib/std/runtime/microapp/loader_main.uya -- "$EXIT_UAPP" >"$EXIT_LOG" 2>&1
@@ -140,6 +157,9 @@ if [ "$exit_status" -ne 7 ]; then
     dump_log_and_fail "trap runtime non-zero exit 退出码异常: $exit_status" "$EXIT_LOG"
 fi
 grep -a -q "\[microapp loader\] executed trap payload" "$EXIT_LOG" || dump_log_and_fail "trap runtime non-zero exit 未命中 trap payload 执行分支" "$EXIT_LOG"
-grep -a -q "\[microapp loader\] payload result=exit code=7" "$EXIT_LOG" || dump_log_and_fail "trap runtime non-zero exit 未输出统一 exit result" "$EXIT_LOG"
+assert_single_result_surface "$EXIT_LOG" "[microapp loader] payload result=exit code=7"
+if grep -a -q "\[microapp loader\] payload result=validated" "$EXIT_LOG"; then
+    dump_log_and_fail "trap runtime non-zero exit 真执行路径不应停在 validated-only 结果面" "$EXIT_LOG"
+fi
 
 echo "microapp trap runtime ok"

@@ -17,20 +17,22 @@ struct NodeB {
     prev: *NodeA,
 }
 
-fn test_forward_decl() void {
+fn test_forward_decl() !void {
     var a: NodeA = NodeA{ data: 1, next: null };
     var b: NodeB = NodeB{ value: 2, prev: null };
     
     // 验证结构体正确初始化
-    assert_true(a.data == 1);
-    assert_true(b.value == 2);
+    try assert_true(a.data == 1);
+    try assert_true(b.value == 2);
     
     printf("  forward decl: OK\n");
 }
 
 export fn main() i32 {
     printf("=== Struct Forward Declaration Tests ===\n");
-    test_forward_decl();
+    test_forward_decl() catch {
+        return 1;
+    };
     printf("=== All tests passed ===\n");
     return 0;
 }

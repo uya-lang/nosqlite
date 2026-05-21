@@ -1,0 +1,18 @@
+use std.runtime.entry;
+
+struct Pair {
+    left: i32,
+    right: i32,
+}
+
+export fn main() i32 {
+    const pair_size: usize = @size_of(Pair);
+    const pair_align: usize = @align_of(Pair);
+    if pair_size != 8usize {
+        return 1;
+    }
+    if pair_align != 4usize {
+        return 2;
+    }
+    return 0;
+}

@@ -1,0 +1,21 @@
+use std.testing.assert_eq_i32;
+
+interface IAdd {
+    fn add(self: &Self, x: i32) i32;
+}
+
+struct Counter : IAdd {
+    value: i32,
+}
+
+Counter {
+    fn add(self: &Self, x: i32) i32 {
+        return self.value + x;
+    }
+}
+
+const GLOBAL_CB: IAdd = Counter{ value: 7 };
+
+test "interface global init" {
+    try assert_eq_i32(GLOBAL_CB.add(5), 12);
+}

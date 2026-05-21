@@ -1,0 +1,116 @@
+use std.runtime.entry;
+use std.mem.arena.Arena;
+use std.mem.arena.arena_init;
+use std.testing.assert_eq_i32;
+use std.testing.test_suite_begin;
+use std.testing.test_suite_end;
+use std.testing.run_test;
+use std.fmt.tokenizer.Token;
+use std.fmt.tokenizer.TokenType;
+use std.fmt.tokenizer.tokenize;
+use std.fmt.fmt.format;
+
+fn contains_bytes(haystack: &[byte], needle: &[byte]) bool {
+    if needle.len == 0 {
+        return true;
+    }
+    if haystack.len < needle.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i + needle.len <= haystack.len {
+        var ok: bool = true;
+        var j: usize = 0;
+        while j < needle.len {
+            if haystack.ptr[i + j] != needle.ptr[j] {
+                ok = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if ok {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn slices_equal(a: &[byte], b: &[byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn test_tokenize_line_comment() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "// add\nfn add(a,b){return a+b;}" as &[byte];
+    const tokens: &[Token] = try tokenize(&a, src);
+
+    try assert_eq_i32(tokens.len as i32, 15);
+    try assert_eq_i32(tokens[0].type as i32, TokenType.TOKEN_LINE_COMMENT as i32);
+    try assert_eq_i32(tokens[0].lexeme.len as i32, 6);
+    try assert_eq_i32(tokens[0].lexeme.ptr[0] as i32, '/' as i32);
+    try assert_eq_i32(tokens[0].lexeme.ptr[1] as i32, '/' as i32);
+    try assert_eq_i32(tokens[1].type as i32, TokenType.TOKEN_FN as i32);
+}
+
+fn test_tokenize_block_comment() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "/* add */fn add(a,b){return a+b;}" as &[byte];
+    const tokens: &[Token] = try tokenize(&a, src);
+
+    try assert_eq_i32(tokens[0].type as i32, TokenType.TOKEN_BLOCK_COMMENT as i32);
+    try assert_eq_i32(tokens[0].lexeme.len as i32, 9);
+    try assert_eq_i32(tokens[0].lexeme.ptr[0] as i32, '/' as i32);
+    try assert_eq_i32(tokens[0].lexeme.ptr[1] as i32, '*' as i32);
+    try assert_eq_i32(tokens[1].type as i32, TokenType.TOKEN_FN as i32);
+}
+
+fn test_format_preserves_doc_comment() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "// add returns sum\nfn add(a,b){return a+b;}" as &[byte];
+    const out: &[byte] = try format(&a, src);
+
+    try assert_eq_i32(contains_bytes(out, "// add returns sum" as &[byte]) as i32, true as i32);
+    try assert_eq_i32(out.ptr[0] as i32, '/' as i32);
+    try assert_eq_i32(out.ptr[1] as i32, '/' as i32);
+}
+
+fn test_format_preserves_trailing_comment() !void {
+    var arena_buf: [byte: 65536] = [];
+    var a: Arena = undefined;
+    arena_init(&a, &arena_buf[0], 65536);
+
+    const src: &[byte] = "fn add(a,b){return a+b; // sum\n}" as &[byte];
+    const out: &[byte] = try format(&a, src);
+
+    try assert_eq_i32(contains_bytes(out, "// sum" as &[byte]) as i32, true as i32);
+    try assert_eq_i32(contains_bytes(out, "return a + b; // sum" as &[byte]) as i32, true as i32);
+}
+
+export fn main() i32 {
+    test_suite_begin("fmt comments tests");
+    run_test("tokenize line comment", test_tokenize_line_comment);
+    run_test("tokenize block comment", test_tokenize_block_comment);
+    run_test("format preserves doc comment", test_format_preserves_doc_comment);
+    run_test("format preserves trailing comment", test_format_preserves_trailing_comment);
+    return test_suite_end();
+}

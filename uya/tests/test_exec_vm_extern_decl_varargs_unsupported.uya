@@ -1,0 +1,11 @@
+use std.runtime.entry;
+
+extern "libc" fn printf(format: *byte, ...) i32;
+
+export fn main() i32 {
+    const rc: i32 = printf("exec extern decl varargs fallback smoke: %d\n", 7);
+    if rc <= 0 {
+        return 1;
+    }
+    return 0;
+}

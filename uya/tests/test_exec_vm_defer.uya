@@ -1,0 +1,53 @@
+error E;
+
+fn break_case() void {
+    var x: i32 = 0;
+    while (x < 1) {
+        defer { @print("B"); }
+        x = x + 1;
+        break;
+    }
+    @println("1");
+}
+
+fn continue_case() void {
+    var n: i32 = 0;
+    while (n < 2) {
+        defer { @print("C"); }
+        n = n + 1;
+        continue;
+    }
+    @println("2");
+}
+
+fn err_case(flag: i32) !i32 {
+    errdefer { @print("E"); }
+    defer { @print("D"); }
+    if flag != 0 {
+        return error.E;
+    }
+    return 7;
+}
+
+fn nested_scope_case() void {
+    @print("N");
+    {
+        defer { @print("I"); }
+        @print("S");
+    }
+    defer { @print("O"); }
+    @println("K");
+}
+
+export fn main() i32 {
+    nested_scope_case();
+    break_case();
+    continue_case();
+    const ok: i32 = err_case(0) catch { 0; };
+    @print("O");
+    @println(ok);
+    const err: i32 = err_case(1) catch { 0; };
+    @print("R");
+    @println(err);
+    return 0;
+}

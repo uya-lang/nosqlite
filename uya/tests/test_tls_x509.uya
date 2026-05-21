@@ -87,6 +87,8 @@ fn test_cert_verify_self_no_key_fails() i32 {
 }
 
 fn test_verify_chain_rsa_ok() i32 {
+    const valid_not_before: i64 = 0;
+    const valid_not_after: i64 = 4102444800;
     // 构造一个简单的 RSA-only 链：leaf -> root，root 作为信任锚
     var root: Cert = Cert{};
     root.rsa_n_len = 1;
@@ -99,6 +101,9 @@ fn test_verify_chain_rsa_ok() i32 {
     root.max_path_len = 0;
     root.has_key_usage = true;
     root.key_usage_bits = KU_KEY_CERT_SIGN;
+    root.has_validity = true;
+    root.not_before = valid_not_before;
+    root.not_after = valid_not_after;
 
     var leaf: Cert = Cert{};
     leaf.rsa_n_len = 1;
@@ -111,6 +116,9 @@ fn test_verify_chain_rsa_ok() i32 {
     leaf.max_path_len = 0;
     leaf.has_key_usage = true;
     leaf.key_usage_bits = KU_DIGITAL_SIGNATURE;
+    leaf.has_validity = true;
+    leaf.not_before = valid_not_before;
+    leaf.not_after = valid_not_after;
 
     // 链：leaf -> root，信任锚列表只包含 root；要求叶子具有数字签名用途
     verify_chain_rsa(&leaf, &root, 1, &root, 1, KU_DIGITAL_SIGNATURE) catch {
@@ -120,6 +128,8 @@ fn test_verify_chain_rsa_ok() i32 {
 }
 
 fn test_verify_chain_rsa_trust_anchor_mismatch_fails() i32 {
+    const valid_not_before: i64 = 0;
+    const valid_not_after: i64 = 4102444800;
     var root: Cert = Cert{};
     root.rsa_n_len = 1;
     root.rsa_n[0] = 0xAA;
@@ -131,6 +141,9 @@ fn test_verify_chain_rsa_trust_anchor_mismatch_fails() i32 {
     root.max_path_len = 0;
     root.has_key_usage = true;
     root.key_usage_bits = KU_KEY_CERT_SIGN;
+    root.has_validity = true;
+    root.not_before = valid_not_before;
+    root.not_after = valid_not_after;
     var leaf: Cert = Cert{};
     leaf.rsa_n_len = 1;
     leaf.rsa_n[0] = 0xBB;
@@ -142,6 +155,9 @@ fn test_verify_chain_rsa_trust_anchor_mismatch_fails() i32 {
     leaf.max_path_len = 0;
     leaf.has_key_usage = true;
     leaf.key_usage_bits = KU_DIGITAL_SIGNATURE;
+    leaf.has_validity = true;
+    leaf.not_before = valid_not_before;
+    leaf.not_after = valid_not_after;
 
     // 信任锚列表为空，预期链验证失败
     verify_chain_rsa(&leaf, &root, 1, &root, 0, KU_DIGITAL_SIGNATURE) catch {
@@ -151,6 +167,8 @@ fn test_verify_chain_rsa_trust_anchor_mismatch_fails() i32 {
 }
 
 fn test_verify_chain_rsa_long_chain_ok() i32 {
+    const valid_not_before: i64 = 0;
+    const valid_not_after: i64 = 4102444800;
     var root: Cert = Cert{};
     root.rsa_n_len = 1;
     root.rsa_n[0] = 0xA1;
@@ -162,6 +180,9 @@ fn test_verify_chain_rsa_long_chain_ok() i32 {
     root.max_path_len = 0;
     root.has_key_usage = true;
     root.key_usage_bits = KU_KEY_CERT_SIGN;
+    root.has_validity = true;
+    root.not_before = valid_not_before;
+    root.not_after = valid_not_after;
 
     var inter1: Cert = Cert{};
     inter1.rsa_n_len = 1;
@@ -174,6 +195,9 @@ fn test_verify_chain_rsa_long_chain_ok() i32 {
     inter1.max_path_len = 2;
     inter1.has_key_usage = true;
     inter1.key_usage_bits = KU_KEY_CERT_SIGN;
+    inter1.has_validity = true;
+    inter1.not_before = valid_not_before;
+    inter1.not_after = valid_not_after;
 
     var inter2: Cert = Cert{};
     inter2.rsa_n_len = 1;
@@ -186,6 +210,9 @@ fn test_verify_chain_rsa_long_chain_ok() i32 {
     inter2.max_path_len = 1;
     inter2.has_key_usage = true;
     inter2.key_usage_bits = KU_KEY_CERT_SIGN;
+    inter2.has_validity = true;
+    inter2.not_before = valid_not_before;
+    inter2.not_after = valid_not_after;
 
     var leaf: Cert = Cert{};
     leaf.rsa_n_len = 1;
@@ -198,6 +225,9 @@ fn test_verify_chain_rsa_long_chain_ok() i32 {
     leaf.max_path_len = 0;
     leaf.has_key_usage = true;
     leaf.key_usage_bits = KU_DIGITAL_SIGNATURE;
+    leaf.has_validity = true;
+    leaf.not_before = valid_not_before;
+    leaf.not_after = valid_not_after;
 
     var chain: [Cert: 3] = [inter1, inter2, root];
     verify_chain_rsa(&leaf, &chain[0], 3, &root, 1, KU_DIGITAL_SIGNATURE) catch {
@@ -296,6 +326,48 @@ fn test_verify_hostname_bytes_san_and_cn() i32 {
     return 2;
 }
 
+fn test_cert_check_validity_accepts_current_window() i32 {
+    var c: Cert = Cert{};
+    c.has_validity = true;
+    c.not_before = 0;
+    c.not_after = 4102444800; // 2100-01-01
+    cert_check_validity(&c) catch {
+        return 1;
+    };
+    return 0;
+}
+
+fn test_verify_chain_rsa_rejects_expired_leaf() i32 {
+    var root: Cert = Cert{};
+    root.rsa_n_len = 1;
+    root.rsa_n[0] = 0xAA;
+    root.rsa_e_len = 1;
+    root.rsa_e[0] = 0x01;
+    root.has_basic_constraints = true;
+    root.is_ca = true;
+    root.has_key_usage = true;
+    root.key_usage_bits = KU_KEY_CERT_SIGN;
+    root.has_validity = true;
+    root.not_before = 0;
+    root.not_after = 4102444800;
+
+    var leaf: Cert = Cert{};
+    leaf.rsa_n_len = 1;
+    leaf.rsa_n[0] = 0xBB;
+    leaf.rsa_e_len = 1;
+    leaf.rsa_e[0] = 0x01;
+    leaf.has_key_usage = true;
+    leaf.key_usage_bits = KU_DIGITAL_SIGNATURE;
+    leaf.has_validity = true;
+    leaf.not_before = 0;
+    leaf.not_after = 1;
+
+    verify_chain_rsa(&leaf, &root, 1, &root, 1, KU_DIGITAL_SIGNATURE) catch {
+        return 0;
+    };
+    return 1;
+}
+
 export fn main() i32 {
     if test_asn1_der_sequence_integer_octetstring() != 0 {
         return 1;
@@ -323,6 +395,12 @@ export fn main() i32 {
     }
     if test_verify_hostname_bytes_san_and_cn() != 0 {
         return 9;
+    }
+    if test_cert_check_validity_accepts_current_window() != 0 {
+        return 10;
+    }
+    if test_verify_chain_rsa_rejects_expired_leaf() != 0 {
+        return 11;
     }
     return 0;
 }

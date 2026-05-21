@@ -1,0 +1,18 @@
+use std.runtime.entry;
+
+const I32_MAX_EXEC: i32 = @max;
+const I32_MIN_EXEC: i32 = @min;
+const U16_MAX_EXEC: u16 = @max;
+
+export fn main() i32 {
+    if I32_MAX_EXEC != 2147483647 {
+        return 1;
+    }
+    if I32_MIN_EXEC != (-2147483647 - 1) {
+        return 2;
+    }
+    if U16_MAX_EXEC != 65535 as u16 {
+        return 3;
+    }
+    return 0;
+}

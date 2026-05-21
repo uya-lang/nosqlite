@@ -1,0 +1,75 @@
+use std.mem.arena.Arena;
+use std.mem.arena.arena_alloc;
+
+fn is_ident_char(c: byte) bool {
+    return (c >= 'a' as byte && c <= 'z' as byte) ||
+        (c >= 'A' as byte && c <= 'Z' as byte) ||
+        (c >= '0' as byte && c <= '9' as byte) ||
+        c == '_' as byte;
+}
+
+fn match_return_paren(source: &[byte], pos: usize, inner_start: &usize, inner_end: &usize, end_pos: &usize) bool {
+    if pos + 9 >= source.len {
+        return false;
+    }
+    if !(source.ptr[pos + 0] == 'r' as byte && source.ptr[pos + 1] == 'e' as byte && source.ptr[pos + 2] == 't' as byte && source.ptr[pos + 3] == 'u' as byte && source.ptr[pos + 4] == 'r' as byte && source.ptr[pos + 5] == 'n' as byte && source.ptr[pos + 6] == ' ' as byte && source.ptr[pos + 7] == '(' as byte) {
+        return false;
+    }
+    var i: usize = pos + 8;
+    if i >= source.len {
+        return false;
+    }
+    if !is_ident_char(source.ptr[i]) {
+        return false;
+    }
+    *inner_start = i;
+    while i < source.len && is_ident_char(source.ptr[i]) {
+        i = i + 1;
+    }
+    *inner_end = i;
+    if i + 1 >= source.len {
+        return false;
+    }
+    if source.ptr[i] != ')' as byte || source.ptr[i + 1] != ';' as byte {
+        return false;
+    }
+    *end_pos = i + 2;
+    return true;
+}
+
+export fn simplify_text(arena: &Arena, source: &[byte]) !&[byte] {
+    const out: &byte = arena_alloc(arena, source.len);
+    var in_pos: usize = 0;
+    var out_pos: usize = 0;
+
+    while in_pos < source.len {
+        var inner_start: usize = 0;
+        var inner_end: usize = 0;
+        var end_pos: usize = 0;
+        if match_return_paren(source, in_pos, &inner_start, &inner_end, &end_pos) {
+            out[out_pos + 0] = 'r' as byte;
+            out[out_pos + 1] = 'e' as byte;
+            out[out_pos + 2] = 't' as byte;
+            out[out_pos + 3] = 'u' as byte;
+            out[out_pos + 4] = 'r' as byte;
+            out[out_pos + 5] = 'n' as byte;
+            out[out_pos + 6] = ' ' as byte;
+            out_pos = out_pos + 7;
+            var j: usize = inner_start;
+            while j < inner_end {
+                out[out_pos] = source.ptr[j];
+                out_pos = out_pos + 1;
+                j = j + 1;
+            }
+            out[out_pos] = ';' as byte;
+            out_pos = out_pos + 1;
+            in_pos = end_pos;
+        } else {
+            out[out_pos] = source.ptr[in_pos];
+            out_pos = out_pos + 1;
+            in_pos = in_pos + 1;
+        }
+    }
+
+    return out[0:out_pos];
+}

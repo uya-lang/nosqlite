@@ -3,6 +3,8 @@
 // 说明：基于系统调用的标准 I/O 函数（零外部依赖）；_vfprintf_impl 与 C99 格式对齐（flags/width/precision/length、%a/%A、%zu/%zd、%j/%t、%h/%hh，浮点/%c/%p width）
 // 注意：函数名使用下划线分隔风格，避免与 C 标准库冲突
 
+use std;
+
 // ============================================================
 // 标准流：与 C 标准库完全兼容，可替代系统 libc 供其它 C 程序使用（outlibc）
 // FILE 为流类型（含 fd），stdin/stdout/stderr 由 Uya 初始化，--nostdlib 时由我们提供
@@ -21,9 +23,20 @@ var _stdin: FILE = FILE{ fd: 0, buf_pos: 0, buf_len: 0, buf_mode: 0 };
 var _stdout: FILE = FILE{ fd: 1, buf_pos: 0, buf_len: 0, buf_mode: 1 };  // 行缓冲
 var _stderr: FILE = FILE{ fd: 2, buf_pos: 0, buf_len: 0, buf_mode: 0 };  // 无缓冲
 
+fn stdio_fopen_slot_at(idx: usize) &FILE {
+    if idx >= @len(fopen_fd_storage) {
+        return null;
+    }
+    return &fopen_fd_storage[idx];
+}
+
 export var stdin: &FILE = &_stdin;
 export var stdout: &FILE = &_stdout;
 export var stderr: &FILE = &_stderr;
+
+fn _stdio_write_fail_isize() isize {
+    return -1 as isize;
+}
 
 // ============================================================
 // 缓冲区操作函数
@@ -31,17 +44,18 @@ export var stderr: &FILE = &_stderr;
 
 // flush_buffer - 刷新流的缓冲区
 export extern "libc" fn flush_buffer(stream: &FILE) i32 {
+    if stream == null {
+        return -1;
+    }
     if stream.buf_len == 0 {
         return 0;  // 没有需要刷新的数据
     }
     
     // 写入缓冲区中的所有数据
-    const result: !i64 = @syscall(SYS_write, stream.fd, stream.buffer as i64, stream.buf_len as i64);
-    const written: i64 = result catch {
-        return -1;  // 写入失败
-    };
+    const result: !isize = sys_write(stream.fd as i32, &stream.buffer[0] as *const byte, stream.buf_len);
+    const written: isize = result catch { _stdio_write_fail_isize(); };
     
-    if written < 0 {
+    if written < 0 as isize {
         return -1;
     }
     
@@ -54,18 +68,22 @@ export extern "libc" fn flush_buffer(stream: &FILE) i32 {
 
 // write_to_buffer - 将数据写入流的缓冲区
 export extern "libc" fn write_to_buffer(stream: &FILE, buf: &const byte, n: usize) i64 {
+    if stream == null || (buf == null && n != 0) {
+        return -1;
+    }
     if n == 0 {
         return 0;
+    }
+    if stream == null || buf == null {
+        return -1;
     }
     
     const buf_size: usize = @len(stream.buffer);
     // 如果禁用了缓冲或缓冲区太小，直接写入
     if stream.buf_mode == 0 || n >= buf_size {
-        const result: !i64 = @syscall(SYS_write, stream.fd, buf as i64, n as i64);
-        const written: i64 = result catch {
-            return -1;
-        };
-        return written;
+        const result: !isize = sys_write(stream.fd as i32, buf as *const byte, n);
+        const written: isize = result catch { _stdio_write_fail_isize(); };
+        return written as i64;
     }
     
     // 尝试将数据放入缓冲区
@@ -81,6 +99,7 @@ export extern "libc" fn write_to_buffer(stream: &FILE, buf: &const byte, n: usiz
             if flush_buffer(stream) < 0 {
                 return -1;
             }
+            space_left = buf_size;
         }
 
         var to_copy: usize = 0;
@@ -99,6 +118,7 @@ export extern "libc" fn write_to_buffer(stream: &FILE, buf: &const byte, n: usiz
 
         // 先复制数据到缓冲区
         stream.buf_len = stream.buf_len + to_copy;
+        stream.buf_pos = stream.buf_len;
         src_offset = src_offset + to_copy;
         bytes_written = bytes_written + to_copy;
         remaining = remaining - to_copy;
@@ -182,11 +202,9 @@ export extern "libc" fn put_char_fd(c: i32, fd: i64) i32 {
     } else {
         // 非标准流，直接写入
         var ch: byte = c as byte;
-        const result: !i64 = @syscall(SYS_write, fd, &ch as i64, 1);
-        const written: i64 = result catch {
-            return 0 - 1;
-        };
-        if written == 1 {
+        const result: !isize = sys_write(fd as i32, &ch as *const byte, 1);
+        const written: isize = result catch { _stdio_write_fail_isize(); };
+        if written == 1 as isize {
             return c;
         }
         return 0 - 1;
@@ -213,11 +231,9 @@ export extern "libc" fn write_bytes_fd(buf: &const byte, n: usize, fd: i64) i64 
         return write_to_buffer(target_stream, buf, n);
     } else {
         // 非标准流，直接写入
-        const result: !i64 = @syscall(SYS_write, fd, buf as i64, n as i64);
-        const written: i64 = result catch {
-            return 0 - 1;
-        };
-        return written;
+        const result: !isize = sys_write(fd as i32, buf as *const byte, n);
+        const written: isize = result catch { _stdio_write_fail_isize(); };
+        return written as i64;
     }
 }
 
@@ -248,11 +264,11 @@ export extern "libc" fn put_str_len(s: &const byte, len: usize) i32 {
 // 返回：读取的字符，EOF 或错误返回 -1
 export extern "libc" fn get_char() i32 {
     var ch: byte = 0 as byte;
-    const result: !i64 = @syscall(SYS_read, STDIN, &ch as i64, 1);
-    const bytes_read: i64 = result catch {
+    const result: !isize = sys_read(STDIN as i32, &ch as *byte, 1);
+    const bytes_read: isize = result catch {
         return 0 - 1;
     };
-    if bytes_read == 1 {
+    if bytes_read == 1 as isize {
         return ch as i32;
     }
     return 0 - 1;
@@ -261,21 +277,21 @@ export extern "libc" fn get_char() i32 {
 // read_bytes - 从标准输入读取最多 n 个字节
 // 返回：读取的字节数，EOF 或错误返回 -1
 export extern "libc" fn read_bytes(buf: &byte, n: usize) i64 {
-    const result: !i64 = @syscall(SYS_read, STDIN, buf as i64, n as i64);
-    const bytes_read: i64 = result catch {
+    const result: !isize = sys_read(STDIN as i32, buf as *byte, n);
+    const bytes_read: isize = result catch {
         return 0 - 1;
     };
-    return bytes_read;
+    return bytes_read as i64;
 }
 
 // read_bytes_fd - 从指定文件描述符读取最多 n 个字节
 // 返回：读取的字节数，EOF 或错误返回 -1
 export extern "libc" fn read_bytes_fd(buf: &byte, n: usize, fd: i64) i64 {
-    const result: !i64 = @syscall(SYS_read, fd, buf as i64, n as i64);
-    const bytes_read: i64 = result catch {
+    const result: !isize = sys_read(fd as i32, buf as *byte, n);
+    const bytes_read: isize = result catch {
         return 0 - 1;
     };
-    return bytes_read;
+    return bytes_read as i64;
 }
 
 // ============================================================
@@ -394,10 +410,17 @@ export extern "libc" fn print_i64(value: i64) usize {
 
 // 全局 FILE 存储（用于 fopen/fclose，split mirror 自举时会并发打开大量输出文件）
 var fopen_fd_storage: [FILE: 128] = [];
-const _FOPEN_W_FLAGS: i64 = 577;   // O_WRONLY | O_CREAT | O_TRUNC
-const _FOPEN_A_FLAGS: i64 = 1089;  // O_WRONLY | O_CREAT | O_APPEND
-const _FOPEN_W_PLUS_FLAGS: i64 = 578;   // O_RDWR | O_CREAT | O_TRUNC
-const _FOPEN_A_PLUS_FLAGS: i64 = 1090;  // O_RDWR | O_CREAT | O_APPEND
+std.cfg(std.target_os == .tos_macos, {
+    const _FOPEN_W_FLAGS: i64 = 0x00000001 | 0x00000200 | 0x00000400;
+    const _FOPEN_A_FLAGS: i64 = 0x00000001 | 0x00000200 | 0x00000008;
+    const _FOPEN_W_PLUS_FLAGS: i64 = 0x00000002 | 0x00000200 | 0x00000400;
+    const _FOPEN_A_PLUS_FLAGS: i64 = 0x00000002 | 0x00000200 | 0x00000008;
+}, {
+    const _FOPEN_W_FLAGS: i64 = 0x00000001 | 0x00000040 | 0x00000200;
+    const _FOPEN_A_FLAGS: i64 = 0x00000001 | 0x00000040 | 0x00000400;
+    const _FOPEN_W_PLUS_FLAGS: i64 = 0x00000002 | 0x00000040 | 0x00000200;
+    const _FOPEN_A_PLUS_FLAGS: i64 = 0x00000002 | 0x00000040 | 0x00000400;
+})
 
 // fopen - 打开文件（C 标准库兼容）
 // 返回：FILE*，失败返回 null
@@ -450,20 +473,23 @@ export extern "libc" fn fopen(filename: &const byte, mode: &const byte) &FILE {
     var j: usize = 0;
     while j < storage_size {
         // 查找空闲槽位（fd <= 0 表示未使用）
-        if fopen_fd_storage[j].fd <= 0 {
-            fopen_fd_storage[j].fd = fd as i64;
-            fopen_fd_storage[j].buf_pos = 0;
-            fopen_fd_storage[j].buf_len = 0;
+        const slot: &FILE = stdio_fopen_slot_at(j);
+        if slot != null && slot.fd <= 0 {
+            slot.fd = fd as i64;
+            slot.buf_pos = 0;
+            slot.buf_len = 0;
             // 普通文件默认应使用全缓冲；编译器代码生成依赖这一点，
             // 以避免病态的超小 write() 输出。
-            fopen_fd_storage[j].buf_mode = 2;
-            return &fopen_fd_storage[j];
+            slot.buf_mode = 2;
+            return slot;
         }
         j = j + 1;
     }
     
     // 如果数组满了，关闭文件描述符并返回 null
-    _ = sys_close(fd);
+    const close_result: i32 = sys_close(fd) catch { 0; };
+    if close_result != 0 {
+    }
     return null;
 }
 
@@ -1828,7 +1854,7 @@ export extern "libc" fn fflush(stream: &FILE) i32 {
 export extern "libc" fn fseek(stream: &FILE, offset: i64, whence: i32) i32 {
     if stream == null { return -1; }
     // 简化实现：使用 lseek
-    const result: !i64 = @syscall(SYS_lseek, stream.fd, offset, whence as i64);
+    const result: !i64 = sys_lseek(stream.fd as i32, offset, whence);
     const ret: i64 = result catch { return -1; };
     if ret < 0 { return -1; }
     return 1;
@@ -1838,7 +1864,7 @@ export extern "libc" fn fseek(stream: &FILE, offset: i64, whence: i32) i32 {
 // 返回：当前位置，失败返回 -1
 export extern "libc" fn ftell(stream: &FILE) i64 {
     if stream == null { return -1; }
-    const result: !i64 = @syscall(SYS_lseek, stream.fd, 0, 1);  // SEEK_CUR = 1
+    const result: !i64 = sys_lseek(stream.fd as i32, 0, 1);  // SEEK_CUR = 1
     const ret: i64 = result catch { return -1; };
     return ret;
 }
@@ -1846,7 +1872,7 @@ export extern "libc" fn ftell(stream: &FILE) i64 {
 // rewind - 重置文件位置指针到开头
 export extern "libc" fn rewind(stream: &FILE) void {
     if stream == null { return; }
-    _ = @syscall(SYS_lseek, stream.fd, 0, 0);  // SEEK_SET = 0
+    _ = sys_lseek(stream.fd as i32, 0, 0);  // SEEK_SET = 0
 }
 
 // feof - 检查是否到达文件末尾
@@ -1997,7 +2023,7 @@ export extern "libc" fn remove(path: &const byte) i32 {
 // 返回：0 成功，-1 失败
 export extern "libc" fn rename(oldpath: &const byte, newpath: &const byte) i32 {
     if oldpath == null || newpath == null { return -1; }
-    const result: !i32 = @syscall(SYS_rename, oldpath as i64, newpath as i64) as! i32;
+    const result: !i32 = sys_rename(oldpath, newpath);
     const ret: i32 = result catch { return -1; };
     return ret;
 }
@@ -2007,8 +2033,11 @@ export extern "libc" fn rename(oldpath: &const byte, newpath: &const byte) i32 {
 // 注意：文件在关闭或程序退出时自动删除
 var _tmpfile_counter: i32 = 0;
 
-// O_RDWR | O_CREAT | O_EXCL = 2 | 64 | 128 = 194
-const _TMPFILE_O_FLAGS: i32 = 194;
+std.cfg(std.target_os == .tos_macos, {
+    const _TMPFILE_O_FLAGS: i32 = 2562;  // O_RDWR | O_CREAT | O_EXCL
+}, {
+    const _TMPFILE_O_FLAGS: i32 = 194;   // O_RDWR | O_CREAT | O_EXCL
+})
 // S_IRUSR | S_IWUSR = 256 | 128 = 384
 const _TMPFILE_MODE: i32 = 384;
 
@@ -2200,7 +2229,7 @@ export extern "libc" fn puts(s: &const byte) i32 {
     
     // 输出字符串
     if len > 0 {
-        const result1: !i64 = @syscall(SYS_write, STDOUT, s as i64, len as i64);
+        const result1: !isize = sys_write(STDOUT as i32, s as *const byte, len);
         result1 catch {
             return 0 - 1;
         };
@@ -2208,7 +2237,7 @@ export extern "libc" fn puts(s: &const byte) i32 {
     
     // 输出换行符
     var nl: byte = 10;
-    const result2: !i64 = @syscall(SYS_write, STDOUT, &nl as i64, 1);
+    const result2: !isize = sys_write(STDOUT as i32, &nl as *const byte, 1);
     result2 catch {
         return 0 - 1;
     };

@@ -1,6 +1,6 @@
 # Uya 语言正式语法规范（Formal BNF）
 
-> **版本**：与 [uya.md](./uya.md) 0.49.45 同步（2026-04-16）
+> **版本**：与 [uya.md](./uya.md) 0.49.50 同步（2026-05-19）
 
 本文档包含 Uya 语言的完整、无歧义的 BNF 语法定义，用于：
 - 编译器/解析器实现
@@ -57,7 +57,11 @@ struct_body    = ( field_list | method_list | field_list method_list )
 field_list     = field { ',' field }
 field          = ID ':' type
 method_list    = method_decl { method_decl }
-method_decl    = [ async_fn_attr ] 'fn' ID [ '<' type_param_list '>' ] '(' [ param_list ] ')' type '{' statements '}'  # self 参数必须为 &Self 或 &StructName
+method_decl    = [ async_fn_attr ] 'fn' ID [ '<' type_param_list '>' ] '(' [ param_list ] ')' type '{' statements '}'  # 若首参类型为 &Self / &StructName（联合体为 &UnionName），则视为实例方法；否则为静态方法；特例：drop 必须为 fn drop(self: T) void
+
+**补充规则**：
+- `drop` 只能在结构体 / 联合体内部或对应方法块中声明为 `fn drop(self: T) void { ... }`。
+- `drop` 不是用户可显式调用的普通函数；`drop(x)`、`T.drop(x)`、`x.drop()` 都是编译错误。
 
 # 结构体外部方法定义（方式2）
 struct_method_block = ID '{' method_list '}'
@@ -75,7 +79,12 @@ constraint_list = ID { '+' ID }
 - **方式2：结构体外部定义**：使用块语法在结构体定义后添加方法
   - 语法：`StructName { fn method(self: &Self) ReturnType { ... } }`
 - 方法实现允许使用可选前缀 `@async_fn`
-- `self` 参数必须显式声明，使用指针：`self: &Self` 或 `self: *StructName`
+- 实例方法按**第一个参数的类型**判定：
+  - 结构体：`&Self` 或 `&StructName`
+  - 联合体：`&Self` 或 `&UnionName`
+- 参数名不限；`self` 只是惯例，不是语义判定条件
+- 所有方法都允许以 `Type.method(...)` 形式调用；当首参为实例 receiver 时，额外允许 `obj.method(...)` 语法糖
+- 方法调用可继续参与任意深度的后缀链；例如 `obj.method().next().field`、`obj.method<T>().next()`
 - 推荐使用 `Self` 占位符：`self: &Self` 更简洁
 - 详细语法说明见 [uya.md](./uya.md#29-扩展特性) 结构体方法部分
 
@@ -230,6 +239,8 @@ unary_expr     = ('!' | '-' | '~' | '&' | '*' | 'try') unary_expr | cast_expr
 cast_expr      = postfix_expr [ ('as' | 'as!') type ]
 postfix_expr   = primary_expr { '.' (ID | NUM) | '[' expr ']' | '(' arg_list ')' | slice_op | catch_op }
                 # '.' NUM 用于元组字段访问，如 tuple.0, tuple.1
+                # 花括号字面量、括号表达式、下标结果、方法调用结果都可继续重复接同一套后缀，因此链式调用深度不受限制
+                # 泛型方法调用在解析歧义消解后同样归入这条后缀链，如 obj.method<T>().next()
                 # 0.49.41：STRING 为 primary_expr 时，可接 '[' expr ']'（下标）或 slice_op（与数组字面量、标识符一致），如 "hello"[0:3]、&"hello"[0:3]
 catch_op       = 'catch' [ '|' ID '|' ] '{' statements '}'
 primary_expr   = ID | NUM | STRING | CHAR | 'true' | 'false' | 'null'
@@ -237,9 +248,9 @@ primary_expr   = ID | NUM | STRING | CHAR | 'true' | 'false' | 'null'
                | struct_literal | array_literal | tuple_literal | enum_literal | union_literal
                | match_expr | '(' expr ')'
 builtin_expr   = '@' ('sizeof' | 'alignof' | 'len' | 'max' | 'min' | 'params' | 'va_start' | 'va_end' | 'va_arg' | 'va_copy' | 'asm')
-               | '@' ('mc_type' | 'mc_eval' | 'mc_ast' | 'mc_code' | 'mc_error' | 'mc_get_env' | 'mc_source') '(' expr_list ')'
+               | '@' ('mc_type' | 'mc_eval' | 'mc_ast' | 'mc_code' | 'mc_error' | 'mc_get_env' | 'mc_source' | 'error_id' | 'error_name') '(' expr_list ')'
                | vector_builtin_expr
-               # @size_of(T)、@align_of(T)、@len(expr) 为调用形式；@max、@min 为值形式；@params 为函数体内参数元组；@va_start(&ap,last)、@va_end(&ap)、@va_arg(ap,Type)、@va_copy(&dest,src) 为可变参数栈访问（uya.md §5.4）；@asm 为内联汇编块（uya.md §19）
+               # @size_of(T)、@align_of(T)、@len(expr) 为调用形式；@max、@min 为值形式；@params 为函数体内参数元组；@va_start(&ap,last)、@va_end(&ap)、@va_arg(ap,Type)、@va_copy(&dest,src) 为可变参数栈访问（uya.md §5.4）；@error_id(err) 读取错误 ID；@error_name(err) 返回语言级错误名字符串；@asm 为内联汇编块（uya.md §19）
                # 宏系统内置（uya.md §25）：@mc_type(expr) 返回 TypeInfo；@mc_eval(expr) 编译时求值；@mc_ast(code)、@mc_code(ast)、@mc_error(msg)、@mc_get_env(name)；@mc_source(expr) 编译期将表达式序列化为字符串
 vector_builtin_expr
                = '@vector' '.' 'splat' '(' expr ')'
@@ -267,9 +278,11 @@ union_literal  = ID '.' ID '(' expr ')'  # 联合体创建，如 IntOrFloat.i(42
 - **`@vector.store(ptr, v)`**（**0.49.34**）：**`v`** 为 **`@vector(T,N)`**，**`ptr`** 为 **`&T`** 且与 **`v`** 元素类型匹配（**`byte`/`u8`** 规则同 **`load`**）；将 **`v`** 按向量大小写入 **`ptr`**；**`void`**；**不检查**可写范围长度
 - **`@vector.select(m, a, b)`**（**0.49.35**）：**`m`** 为 **`@mask(N)`**，**`a`**、**`b`** 为相同 **`@vector(T,N)`** 且 **`N`** 与 **`m`** 一致；通道 **`i`** 上 **`m`** 为真取 **`a`** 的分量，否则取 **`b`** 的分量；结果为 **`@vector(T,N)`**；目标类型上下文同 **`@vector.splat`** / **`load`**
 - **`@vector.reduce_add(v)`**（**0.49.36**）：**`v`** 为 **`@vector(T,N)`**，元素类型 **`T`** 为 **`i8`–`i64`、`u8`–`u64`、`f32`、`f64`**；结果为标量 **`T`**，为各通道之和（**`+`** 语义同标量）
+- **`@vector.reduce_mul(v)`**（**0.49.38**）：**`v`** 为 **`@vector(T,N)`**，元素类型 **`T`** 为 **`i8`–`i64`、`u8`–`u64`、`f32`、`f64`**；结果为标量 **`T`**，为各通道之积（**`*`** 语义同标量）
+- **`@vector.reduce_min(v)`** / **`@vector.reduce_max(v)`**（**0.49.39**）：**`v`** 为 **`@vector(T,N)`**，元素类型 **`T`** 为 **`i8`–`i64`、`u8`–`u64`、`f32`、`f64`**；结果为标量 **`T`**，分别为各通道最小值 / 最大值
 - `@vector.any(m)` 与 `@vector.all(m)` 接受 `@mask(N)` 并返回 `bool`
 - 第一阶段不允许把 `@mask(N)` 直接作为 `if` / `while` 条件
-- 第一阶段不引入 **`shuffle`**；**`reduce_*`** 中仅纳入 **`@vector.reduce_add`**（**0.49.36**），其它 **`reduce_*`** 仍暂缓
+- 第一阶段不引入 **`shuffle`**
 
 ### 内联汇编
 

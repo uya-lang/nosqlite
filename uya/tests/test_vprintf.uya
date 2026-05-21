@@ -85,10 +85,10 @@ fn _test_vsprintf_wrapper(format: &const byte, ...) i32 {
     @va_end(&ap);
     
     // 验证结果
-    try expect(result >= 14);
-    try expect(buf[0] == 110);  // 'n'
-    try expect(buf[1] == 117);  // 'u'
-    try expect(buf[2] == 109);  // 'm'
+    _ = expect(result >= 14) catch { return 0 - 1; };
+    _ = expect(buf[0] == 110) catch { return 0 - 1; };  // 'n'
+    _ = expect(buf[1] == 117) catch { return 0 - 1; };  // 'u'
+    _ = expect(buf[2] == 109) catch { return 0 - 1; };  // 'm'
     
     return result;
 }
@@ -107,7 +107,7 @@ fn _test_vsprintf_empty_wrapper(format: &const byte, ...) i32 {
     
     @va_end(&ap);
     
-    try expect(buf[0] == 0);
+    _ = expect(buf[0] == 0) catch { return 0 - 1; };
     return result;
 }
 
@@ -130,9 +130,9 @@ fn _test_vsnprintf_wrapper(format: &const byte, ...) i32 {
     @va_end(&ap);
     
     // 验证结果
-    try expect(buf[0] == 110);  // 'n'
-    try expect(buf[4] == 52);   // '4'
-    try expect(buf[5] == 50);   // '2'
+    _ = expect(buf[0] == 110) catch { return 0 - 1; };  // 'n'
+    _ = expect(buf[4] == 52) catch { return 0 - 1; };   // '4'
+    _ = expect(buf[5] == 50) catch { return 0 - 1; };   // '2'
     
     return result;
 }
@@ -153,7 +153,7 @@ fn _test_vsnprintf_truncate_wrapper(format: &const byte, ...) i32 {
     @va_end(&ap);
     
     // 验证被截断
-    try expect(buf[7] == 0);  // 最后应该是 null 终止符
+    _ = expect(buf[7] == 0) catch { return 0 - 1; };  // 最后应该是 null 终止符
     
     return result;
 }

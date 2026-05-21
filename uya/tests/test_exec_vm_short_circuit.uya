@@ -1,0 +1,16 @@
+use std.runtime.entry;
+
+fn zero() i32 {
+    return 0;
+}
+
+export fn main() i32 {
+    const and_value: bool = false && ((1 / zero()) == 1);
+    const or_value: bool = true || ((1 / zero()) == 1);
+    if and_value == false {
+        if or_value == true {
+            return 0;
+        }
+    }
+    return 1;
+}

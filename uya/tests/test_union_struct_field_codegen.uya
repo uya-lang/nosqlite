@@ -1,0 +1,39 @@
+use std.testing.assert_eq_i32;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct KeyEvent {
+    code: i32,
+}
+
+union EventData {
+    Point: Point,
+    Key: KeyEvent,
+    Empty: void,
+}
+
+struct Event {
+    kind: i32,
+    data: EventData,
+}
+
+fn make_point_event(x: i32, y: i32) Event {
+    return Event{
+        kind: 1,
+        data: EventData.Point(Point{ x: x, y: y }),
+    };
+}
+
+test "union field inside struct" {
+    const evt: Event = make_point_event(3, 4);
+    var out: i32 = -1;
+    match evt.data {
+        .Point(p) => { out = p.x + p.y; },
+        .Key(k) => { out = k.code; },
+        .Empty(_) => { out = 0; },
+    };
+    try assert_eq_i32(out, 7);
+}

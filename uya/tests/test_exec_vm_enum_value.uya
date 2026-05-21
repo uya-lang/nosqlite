@@ -1,0 +1,30 @@
+use std.runtime.entry;
+
+enum ExecPhase {
+    Cold,
+    Warm = 7,
+    Hot,
+}
+
+const G_PHASE: ExecPhase = ExecPhase.Warm;
+
+fn is_hot(phase: ExecPhase) bool {
+    return phase == ExecPhase.Hot;
+}
+
+export fn main() i32 {
+    if G_PHASE != ExecPhase.Warm {
+        return 1;
+    }
+
+    const next: ExecPhase = ExecPhase.Hot;
+    if is_hot(next) == false {
+        return 2;
+    }
+
+    if ExecPhase.Cold == ExecPhase.Warm {
+        return 3;
+    }
+
+    return 0;
+}

@@ -1,0 +1,23 @@
+// test_async_await_direct_err_union.uya
+// 回归：直接 `const x: !T = @await fut;` 必须正确 lowering。
+
+use std.async;
+use std.testing.assert_eq_i32;
+
+fn ready_i32_direct(v: i32) Future<!i32> {
+    const p: Poll<!i32> = Poll<!i32>.Ready(ok<i32>(v));
+    return Future<!i32>{ state: p };
+}
+
+@async_fn
+fn bind_direct_err_union() Future<!i32> {
+    const r: !i32 = @await ready_i32_direct(7);
+    const v: i32 = r catch { 0 - 10; };
+    return v + 5;
+}
+
+test "async_bind_direct_err_union_await" {
+    const out: !i32 = block_on<i32>(bind_direct_err_union());
+    const v: i32 = try out;
+    try assert_eq_i32(v, 12);
+}
