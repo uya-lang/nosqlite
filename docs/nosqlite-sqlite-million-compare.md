@@ -23,16 +23,16 @@
 
 | case | NoSQLite | SQLite | 对比 |
 | --- | ---: | ---: | --- |
-| bulk_load rows/s | 202204.72 | 704761.86 | SQLite faster x3.49 |
-| limit_query p50 us | 1.03 | 13.15 | NoSQLite faster x12.75 |
-| limit_query p95 us | 1.08 | 14.23 | NoSQLite faster x13.14 |
+| bulk_load rows/s | 734354.04 | 701818.90 | NoSQLite faster x1.05 |
+| limit_query p50 us | 0.91 | 13.24 | NoSQLite faster x14.52 |
+| limit_query p95 us | 0.97 | 14.21 | NoSQLite faster x14.70 |
 
 ## 原始指标
 
 | engine | load s | load rows/s | query p50 us | query p95 us | query qps | peak KiB | notes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| nosqlite | 4.95 | 202204.72 | 1.03 | 1.08 | 956910.33 | 4097984 | NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64; full fetch timed |
-| sqlite | 1.42 | 704761.86 | 13.15 | 14.23 | 74481.57 | 19736 | SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64; full fetch timed |
+| nosqlite | 1.36 | 734354.04 | 0.91 | 0.97 | 1083834.61 | 239548 | NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64; full fetch timed |
+| sqlite | 1.42 | 701818.90 | 13.24 | 14.21 | 74512.09 | 19732 | SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64; full fetch timed |
 
 ## 复现命令
 

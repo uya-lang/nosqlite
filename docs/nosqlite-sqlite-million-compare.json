@@ -11,21 +11,21 @@
     "batch_rows": 48000,
     "load": {
       "rows": 1000000,
-      "load_us": 4945483,
-      "rows_per_s": 202204.7189324076
+      "load_us": 1361741,
+      "rows_per_s": 734354.0364871146
     },
     "limit_query": {
       "samples": 100,
-      "p50_ns": 1031,
-      "p95_ns": 1083,
-      "p99_ns": 1184,
-      "p50_us": 1.031,
-      "p95_us": 1.083,
-      "p99_us": 1.184,
-      "qps": 956910.3279331694
+      "p50_ns": 912,
+      "p95_ns": 967,
+      "p99_ns": 1045,
+      "p50_us": 0.912,
+      "p95_us": 0.967,
+      "p99_us": 1.045,
+      "qps": 1083834.6068389963
     },
     "notes": "NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64; full fetch timed",
-    "peak_memory_kib": 4097984
+    "peak_memory_kib": 239548
   },
   "sqlite": {
     "engine": "sqlite",
@@ -33,20 +33,20 @@
     "batch_rows": 48000,
     "load": {
       "rows": 1000000,
-      "load_us": 1418919,
-      "rows_per_s": 704761.8644897982
+      "load_us": 1424869,
+      "rows_per_s": 701818.9040536358
     },
     "limit_query": {
       "samples": 100,
-      "p50_ns": 13150,
-      "p95_ns": 14234,
-      "p99_ns": 18443,
-      "p50_us": 13.15,
-      "p95_us": 14.234,
-      "p99_us": 18.443,
-      "qps": 74481.57102488131
+      "p50_ns": 13245,
+      "p95_ns": 14214,
+      "p99_ns": 17329,
+      "p50_us": 13.245,
+      "p95_us": 14.214,
+      "p99_us": 17.329,
+      "qps": 74512.09480322847
     },
     "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64; full fetch timed",
-    "peak_memory_kib": 19736
+    "peak_memory_kib": 19732
   }
 }

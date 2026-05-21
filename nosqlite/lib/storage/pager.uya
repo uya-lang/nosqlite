@@ -2495,12 +2495,16 @@ export fn wal_encode_page_write(txn_id: u64, page_id: u32, page_lsn: u64, payloa
     if out.ptr == null || out.len < total {
         return error.WalInvalidBuffer;
     }
+    const payload_header: &PageHeader = page_header_from_buf(payload);
+    if payload_header == null {
+        return error.WalInvalidBuffer;
+    }
     try wal_record_header_store(out, WalRecordType.PAGE_WRITE, total, 0u32);
     wal_store_u64_le(out, WAL_RECORD_HEADER_SIZE, txn_id);
     wal_store_u32_le(out, WAL_RECORD_HEADER_SIZE + 8, page_id);
     wal_store_u64_le(out, WAL_RECORD_HEADER_SIZE + 12, page_lsn);
     wal_store_u32_le(out, WAL_RECORD_HEADER_SIZE + 20, payload.len as u32);
-    wal_store_u32_le(out, WAL_RECORD_HEADER_SIZE + 24, checksum_bytes(payload));
+    wal_store_u32_le(out, WAL_RECORD_HEADER_SIZE + 24, payload_header.checksum);
     _ = mem_copy(&out.ptr[WAL_RECORD_HEADER_SIZE + WAL_PAGE_WRITE_META_SIZE], payload.ptr, payload.len);
     return try wal_record_finalize(out, WalRecordType.PAGE_WRITE, total);
 }
@@ -2521,7 +2525,8 @@ export fn wal_decode_page_write(record: &[byte]) !WalPageWriteView {
     }
     const payload: &[byte] = record[WAL_RECORD_HEADER_SIZE + WAL_PAGE_WRITE_META_SIZE: page_size as usize];
     const payload_checksum: u32 = wal_load_u32_le(record, WAL_RECORD_HEADER_SIZE + 24);
-    if payload_checksum != checksum_bytes(payload) {
+    const payload_header: &PageHeader = page_header_from_buf(payload);
+    if payload_header == null || payload_checksum != payload_header.checksum || !page_checksum_valid(payload) {
         return error.WalInvalidChecksum;
     }
     return WalPageWriteView{

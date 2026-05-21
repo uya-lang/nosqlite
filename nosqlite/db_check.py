@@ -404,7 +404,8 @@ def scan_wal(wal_path: str, meta: dict) -> dict:
                     raise CheckError(FORMAT_WAL_RECORD_INVALID)
                 if page_size not in (PAGE_SIZE_DEFAULT, PAGE_SIZE_MAX) or page_size != len(payload):
                     raise CheckError(FORMAT_WAL_RECORD_INVALID)
-                if payload_crc != zlib.crc32(payload) & 0xFFFFFFFF:
+                payload_header, _ = validate_page(payload, page_size)
+                if payload_crc != payload_header["checksum"]:
                     raise CheckError(FORMAT_WAL_RECORD_INVALID)
                 pending_pages += 1
             elif record_type == RECORD_COMMIT:
