@@ -2,7 +2,7 @@
 
 日期：2026-05-21
 
-本报告聚焦百万条记录量级下的装载、查询、批量更新与批量删除性能对比。
+本报告聚焦百万条记录量级下的装载、查询、批量更新，以及区分 logical delete / physical delete 后的删除性能对比。
 
 ## 运行口径
 
@@ -17,26 +17,41 @@
 - 数据文档：`{"n": <id>, "bucket": <id % 100>, "age": <18 + (id % 41)>, "active": <bool>}`
 - 查询口径：`SELECT _id FROM users LIMIT 64` / `SELECT id FROM users LIMIT 64`
 - 更新口径：fresh preload 后按 `batch_rows` 分段执行 durable range update；NoSQLite 执行 `UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end`，SQLite 执行 `UPDATE users SET doc = json_set(doc, '$.age', 30) WHERE id >= start AND id < end`。
-- 删除口径：fresh preload 后按 `batch_rows` 分段执行 durable range delete；NoSQLite 执行 `DELETE FROM users WHERE _id >= start AND _id < end`，SQLite 执行 `DELETE FROM users WHERE id >= start AND id < end`。
+- `logical_delete` 口径：fresh preload 后按 `batch_rows` 头到尾执行 durable range delete；NoSQLite 会命中 prefix metadata delete 快路径，SQLite 仍执行物理 DELETE，因此该项只用于能力说明，不作为公平主结论。
+- `physical_delete` 口径：fresh preload 后按 `batch_rows` 尾到头执行 durable range delete；两侧都执行 `DELETE ... WHERE id >= start AND id < end`，同时显式避开 NoSQLite prefix logical delete 快路径，作为公平 delete 主对比。
 - limit_query 计时范围：从开始执行查询到完整取回 64 行结果，两侧统一口径。
-- 更新/删除各自使用独立 fresh preload 数据集，预装载不计入该 case 计时，避免 load/query cache 污染后续结果。
+- 更新、logical_delete、physical_delete 各自使用独立 fresh preload 数据集，预装载不计入该 case 计时，避免 load/query cache 污染后续结果。
 
 ## 摘要
 
 | case | NoSQLite | SQLite | 对比 |
 | --- | ---: | ---: | --- |
-| bulk_load rows/s | 640204.87 | 662690.52 | SQLite faster x1.04 |
-| limit_query p50 us | 1.96 | 14.25 | NoSQLite faster x7.28 |
-| limit_query p95 us | 2.94 | 15.48 | NoSQLite faster x5.26 |
-| bulk_update rows/s | 262536.10 | 1153402.54 | SQLite faster x4.39 |
-| bulk_delete rows/s | 393700.79 | 5319148.94 | SQLite faster x13.51 |
+| bulk_load rows/s | 1199040.77 | 660938.53 | NoSQLite faster x1.81 |
+| limit_query p50 us | 0.94 | 14.07 | NoSQLite faster x14.91 |
+| limit_query p95 us | 1.74 | 15.11 | NoSQLite faster x8.67 |
+| bulk_update rows/s | 1148105.63 | 1218026.80 | SQLite faster x1.06 |
+| physical_delete rows/s | 1550387.60 | 5649717.51 | SQLite faster x3.64 |
+
+## Delete 语义拆分
+
+| case | NoSQLite | SQLite | 说明 |
+| --- | ---: | ---: | --- |
+| logical_delete rows/s | 2840909.09 | 4878048.78 | 非同口径。NoSQLite 为 durable logical prefix delete，SQLite 仍是 physical DELETE，仅作参考。 |
+| physical_delete rows/s | 1550387.60 | 5649717.51 | 公平主口径。两侧都按尾到头分段删除，显式避开 NoSQLite prefix logical delete 快路径。 |
 
 ## 原始指标
 
-| engine | load s | load rows/s | update s | update rows/s | delete s | delete rows/s | query p50 us | query p95 us | query qps | peak KiB | notes |
+| engine | load s | load rows/s | update s | update rows/s | physical_delete s | physical_delete rows/s | query p50 us | query p95 us | query qps | peak KiB | notes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| nosqlite | 0.00 | 640204.87 | 0.00 | 262536.10 | 0.00 | 393700.79 | 1.96 | 2.94 | 481324.61 | 320 | NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end; NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; DELETE FROM users WHERE _id >= start AND _id < end |
-| sqlite | 0.00 | 662690.52 | 0.00 | 1153402.54 | 0.00 | 5319148.94 | 14.25 | 15.48 | 69048.85 | 17852 | SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?; SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; DELETE FROM users WHERE id >= ? AND id < ? |
+| nosqlite | 0.00 | 1199040.77 | 0.00 | 1148105.63 | 0.00 | 1550387.60 | 0.94 | 1.74 | 972668.03 | 228 | NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end; NoSQLite million-row benchmark; fresh preloaded dataset; durable tail-to-head range delete; prefix logical delete fast path intentionally bypassed to force physical page updates |
+| sqlite | 0.00 | 660938.53 | 0.00 | 1218026.80 | 0.00 | 5649717.51 | 14.07 | 15.11 | 70124.26 | 18220 | SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?; SQLite JSON1; fresh preloaded million-row dataset; durable tail-to-head range DELETE; physical row delete semantics |
+
+## Delete 明细
+
+| engine | logical_delete s | logical_delete rows/s | physical_delete s | physical_delete rows/s | notes |
+| --- | ---: | ---: | ---: | ---: | --- |
+| nosqlite | 0.00 | 2840909.09 | 0.00 | 1550387.60 | NoSQLite million-row benchmark; fresh preloaded dataset; durable head-to-tail prefix delete; commits deleted-through metadata boundary; logical delete semantics; NoSQLite million-row benchmark; fresh preloaded dataset; durable tail-to-head range delete; prefix logical delete fast path intentionally bypassed to force physical page updates |
+| sqlite | 0.00 | 4878048.78 | 0.00 | 5649717.51 | SQLite JSON1 reference; fresh preloaded million-row dataset; durable head-to-tail range DELETE; physical row delete semantics; SQLite JSON1; fresh preloaded million-row dataset; durable tail-to-head range DELETE; physical row delete semantics |
 
 ## 复现命令
 

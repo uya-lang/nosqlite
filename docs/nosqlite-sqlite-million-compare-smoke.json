@@ -11,35 +11,41 @@
     "batch_rows": 250,
     "load": {
       "rows": 1000,
-      "load_us": 1562,
-      "rows_per_s": 640204.8655569783,
+      "load_us": 834,
+      "rows_per_s": 1199040.7673860912,
       "notes": "NoSQLite million-row benchmark; staged txn batches; direct JSON insert helper; durable commit timed"
     },
     "limit_query": {
       "samples": 10,
-      "p50_ns": 1956,
-      "p95_ns": 2944,
-      "p99_ns": 2944,
-      "p50_us": 1.956,
-      "p95_us": 2.944,
-      "p99_us": 2.944,
-      "qps": 481324.6053138237,
+      "p50_ns": 944,
+      "p95_ns": 1743,
+      "p99_ns": 1743,
+      "p50_us": 0.944,
+      "p95_us": 1.743,
+      "p99_us": 1.743,
+      "qps": 972668.0284019064,
       "notes": "NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64; full fetch timed"
     },
     "bulk_update": {
       "rows": 1000,
-      "op_us": 3809,
-      "rows_per_s": 262536.0987135731,
+      "op_us": 871,
+      "rows_per_s": 1148105.6257175659,
       "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end"
     },
-    "bulk_delete": {
+    "logical_delete": {
       "rows": 1000,
-      "op_us": 2540,
-      "rows_per_s": 393700.7874015748,
-      "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; DELETE FROM users WHERE _id >= start AND _id < end"
+      "op_us": 352,
+      "rows_per_s": 2840909.090909091,
+      "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable head-to-tail prefix delete; commits deleted-through metadata boundary; logical delete semantics"
+    },
+    "physical_delete": {
+      "rows": 1000,
+      "op_us": 645,
+      "rows_per_s": 1550387.596899225,
+      "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable tail-to-head range delete; prefix logical delete fast path intentionally bypassed to force physical page updates"
     },
     "notes": "NoSQLite million-row benchmark",
-    "peak_memory_kib": 320
+    "peak_memory_kib": 228
   },
   "sqlite": {
     "engine": "sqlite",
@@ -47,34 +53,40 @@
     "batch_rows": 250,
     "load": {
       "rows": 1000,
-      "load_us": 1509,
-      "rows_per_s": 662690.5235255136,
+      "load_us": 1513,
+      "rows_per_s": 660938.5327164574,
       "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; full fetch timed"
     },
     "limit_query": {
       "samples": 10,
-      "p50_ns": 14248,
-      "p95_ns": 15482,
-      "p99_ns": 15482,
-      "p50_us": 14.248,
-      "p95_us": 15.482,
-      "p99_us": 15.482,
-      "qps": 69048.85206283446,
+      "p50_ns": 14075,
+      "p95_ns": 15108,
+      "p99_ns": 15108,
+      "p50_us": 14.075,
+      "p95_us": 15.108,
+      "p99_us": 15.108,
+      "qps": 70124.260189055,
       "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64; full fetch timed"
     },
     "bulk_update": {
       "rows": 1000,
-      "op_us": 867,
-      "rows_per_s": 1153402.5374855825,
+      "op_us": 821,
+      "rows_per_s": 1218026.796589525,
       "notes": "SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?"
     },
-    "bulk_delete": {
+    "logical_delete": {
       "rows": 1000,
-      "op_us": 188,
-      "rows_per_s": 5319148.936170213,
-      "notes": "SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; DELETE FROM users WHERE id >= ? AND id < ?"
+      "op_us": 205,
+      "rows_per_s": 4878048.780487805,
+      "notes": "SQLite JSON1 reference; fresh preloaded million-row dataset; durable head-to-tail range DELETE; physical row delete semantics"
+    },
+    "physical_delete": {
+      "rows": 1000,
+      "op_us": 177,
+      "rows_per_s": 5649717.514124294,
+      "notes": "SQLite JSON1; fresh preloaded million-row dataset; durable tail-to-head range DELETE; physical row delete semantics"
     },
     "notes": "SQLite JSON1 million-row benchmark",
-    "peak_memory_kib": 17852
+    "peak_memory_kib": 18220
   }
 }

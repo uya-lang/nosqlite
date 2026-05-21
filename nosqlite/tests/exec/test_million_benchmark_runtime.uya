@@ -321,7 +321,7 @@ fn run_bulk_update(db: &DbHandle, docs: u64, batch_rows: u64, emit_progress: boo
     return elapsed_bench_usec(start_ns);
 }
 
-fn run_bulk_delete(db: &DbHandle, docs: u64, batch_rows: u64, emit_progress: bool) !u64 {
+fn run_logical_delete(db: &DbHandle, docs: u64, batch_rows: u64, emit_progress: bool) !u64 {
     var deleted_total: u64 = 0u64;
     const start_ns: u64 = now_nsec();
     while deleted_total < docs {
@@ -344,7 +344,7 @@ fn run_bulk_delete(db: &DbHandle, docs: u64, batch_rows: u64, emit_progress: boo
         const exec_u: !void = txn_exec(&txn, sql_buf[0: sql_len]);
         if exec_u.error_id != 0u32 {
             printf(
-                "BENCH_ERROR_DETAIL stage=bulk_delete batch_start=%lu batch_end=%lu error_id=%u\n" as *byte,
+                "BENCH_ERROR_DETAIL stage=logical_delete batch_start=%lu batch_end=%lu error_id=%u\n" as *byte,
                 batch_start,
                 batch_end_exclusive,
                 exec_u.error_id,
@@ -354,7 +354,7 @@ fn run_bulk_delete(db: &DbHandle, docs: u64, batch_rows: u64, emit_progress: boo
         const commit_u: !void = txn_commit(&txn);
         if commit_u.error_id != 0u32 {
             printf(
-                "BENCH_ERROR_DETAIL stage=bulk_delete_commit batch_start=%lu batch_end=%lu error_id=%u\n" as *byte,
+                "BENCH_ERROR_DETAIL stage=logical_delete_commit batch_start=%lu batch_end=%lu error_id=%u\n" as *byte,
                 batch_start,
                 batch_end_exclusive,
                 commit_u.error_id,
@@ -365,6 +365,55 @@ fn run_bulk_delete(db: &DbHandle, docs: u64, batch_rows: u64, emit_progress: boo
         deleted_total = deleted_total + current_batch;
         if emit_progress {
             printf("PROGRESS deleted=%lu\n" as *byte, deleted_total);
+        }
+    }
+    return elapsed_bench_usec(start_ns);
+}
+
+fn run_physical_delete(db: &DbHandle, docs: u64, batch_rows: u64, emit_progress: bool) !u64 {
+    var deleted_total: u64 = 0u64;
+    const start_ns: u64 = now_nsec();
+    while deleted_total < docs {
+        var txn: Txn = try txn_begin(db);
+        var txn_ok: bool = false;
+        defer {
+            if !txn_ok {
+                _ = txn_rollback(&txn) catch {};
+            }
+        }
+        const remaining: u64 = docs - deleted_total;
+        var current_batch: u64 = batch_rows;
+        if remaining < current_batch {
+            current_batch = remaining;
+        }
+        const batch_end_exclusive: u64 = docs - deleted_total + 1u64;
+        const batch_start: u64 = batch_end_exclusive - current_batch;
+        var sql_buf: [byte: SQL_BUF_CAP] = [];
+        const sql_len: usize = try build_bulk_delete_sql(batch_start, batch_end_exclusive, sql_buf[0: SQL_BUF_CAP]);
+        const exec_u: !void = txn_exec(&txn, sql_buf[0: sql_len]);
+        if exec_u.error_id != 0u32 {
+            printf(
+                "BENCH_ERROR_DETAIL stage=physical_delete batch_start=%lu batch_end=%lu error_id=%u\n" as *byte,
+                batch_start,
+                batch_end_exclusive,
+                exec_u.error_id,
+            );
+            return error.BenchUnexpectedResult;
+        }
+        const commit_u: !void = txn_commit(&txn);
+        if commit_u.error_id != 0u32 {
+            printf(
+                "BENCH_ERROR_DETAIL stage=physical_delete_commit batch_start=%lu batch_end=%lu error_id=%u\n" as *byte,
+                batch_start,
+                batch_end_exclusive,
+                commit_u.error_id,
+            );
+            return error.BenchUnexpectedResult;
+        }
+        txn_ok = true;
+        deleted_total = deleted_total + current_batch;
+        if emit_progress {
+            printf("PROGRESS physical_deleted=%lu\n" as *byte, deleted_total);
         }
     }
     return elapsed_bench_usec(start_ns);
@@ -464,16 +513,37 @@ fn main() i32 {
         printf("BENCH_ERROR stage=prepare_delete error_id=%u\n" as *byte, delete_prepare_u.error_id);
         return 11;
     }
-    const delete_u: !u64 = run_bulk_delete(&db, docs, batch_rows, emit_progress);
-    if delete_u.error_id != 0u32 {
-        printf("BENCH_ERROR stage=bulk_delete error_id=%u\n" as *byte, delete_u.error_id);
+    const logical_delete_u: !u64 = run_logical_delete(&db, docs, batch_rows, emit_progress);
+    if logical_delete_u.error_id != 0u32 {
+        printf("BENCH_ERROR stage=logical_delete error_id=%u\n" as *byte, logical_delete_u.error_id);
         return 12;
     }
     _ = verify_bulk_delete(&db) catch {
-        printf("BENCH_ERROR stage=bulk_delete_verify error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
+        printf("BENCH_ERROR stage=logical_delete_verify error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
         return 13;
     };
-    printf("RESULT case=bulk_delete us=%lu rows=%lu\n" as *byte, delete_u.value, docs);
+    printf("RESULT case=logical_delete us=%lu rows=%lu\n" as *byte, logical_delete_u.value, docs);
+
+    cleanup();
+    _ = create_users_db(&db) catch {
+        printf("BENCH_ERROR stage=create_physical_delete_db error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
+        return 14;
+    };
+    const physical_delete_prepare_u: !u64 = run_load(&db, docs, batch_rows, false);
+    if physical_delete_prepare_u.error_id != 0u32 {
+        printf("BENCH_ERROR stage=prepare_physical_delete error_id=%u\n" as *byte, physical_delete_prepare_u.error_id);
+        return 15;
+    }
+    const physical_delete_u: !u64 = run_physical_delete(&db, docs, batch_rows, emit_progress);
+    if physical_delete_u.error_id != 0u32 {
+        printf("BENCH_ERROR stage=physical_delete error_id=%u\n" as *byte, physical_delete_u.error_id);
+        return 16;
+    }
+    _ = verify_bulk_delete(&db) catch {
+        printf("BENCH_ERROR stage=physical_delete_verify error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
+        return 17;
+    };
+    printf("RESULT case=physical_delete us=%lu rows=%lu\n" as *byte, physical_delete_u.value, docs);
     return 0;
 }
 

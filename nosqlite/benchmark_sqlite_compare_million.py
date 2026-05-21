@@ -159,6 +159,31 @@ def sqlite_prepare_loaded_db(path: Path, docs: int, batch_rows: int) -> sqlite3.
     return conn
 
 
+def sqlite_run_delete_case(conn: sqlite3.Connection, docs: int, batch_rows: int, reverse: bool) -> int:
+    start_ns = time.perf_counter_ns()
+    deleted = 0
+    while deleted < docs:
+        current_batch = min(batch_rows, docs - deleted)
+        if reverse:
+            batch_end_exclusive = docs - deleted + 1
+            batch_start = batch_end_exclusive - current_batch
+        else:
+            batch_start = deleted + 1
+            batch_end_exclusive = batch_start + current_batch
+        conn.execute("BEGIN")
+        try:
+            conn.execute(
+                "DELETE FROM users WHERE id >= ? AND id < ?",
+                (batch_start, batch_end_exclusive),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        deleted += current_batch
+    return elapsed_us(start_ns)
+
+
 def run_sqlite_case_inline(docs: int, batch_rows: int, query_iters: int) -> dict:
     path = Path(tempfile.gettempdir()) / f"nosqlite_sqlite_compare_million_{os.getpid()}.db"
     load_notes = "SQLite JSON1; journal_mode=WAL; synchronous=FULL; full fetch timed"
@@ -167,9 +192,13 @@ def run_sqlite_case_inline(docs: int, batch_rows: int, query_iters: int) -> dict
         "SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; "
         "UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?"
     )
-    delete_notes = (
-        "SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; "
-        "DELETE FROM users WHERE id >= ? AND id < ?"
+    logical_delete_notes = (
+        "SQLite JSON1 reference; fresh preloaded million-row dataset; durable head-to-tail range DELETE; "
+        "physical row delete semantics"
+    )
+    physical_delete_notes = (
+        "SQLite JSON1; fresh preloaded million-row dataset; durable tail-to-head range DELETE; "
+        "physical row delete semantics"
     )
 
     cleanup_sqlite_path(path)
@@ -247,32 +276,24 @@ def run_sqlite_case_inline(docs: int, batch_rows: int, query_iters: int) -> dict
         update_conn.close()
         cleanup_sqlite_path(path)
 
-    delete_conn = sqlite_prepare_loaded_db(path, docs, batch_rows)
+    logical_delete_conn = sqlite_prepare_loaded_db(path, docs, batch_rows)
     try:
-        start_ns = time.perf_counter_ns()
-        deleted = 0
-        while deleted < docs:
-            current_batch = min(batch_rows, docs - deleted)
-            batch_start = deleted + 1
-            batch_end_exclusive = batch_start + current_batch
-            delete_conn.execute("BEGIN")
-            try:
-                delete_conn.execute(
-                    "DELETE FROM users WHERE id >= ? AND id < ?",
-                    (batch_start, batch_end_exclusive),
-                )
-                delete_conn.execute("COMMIT")
-            except Exception:
-                delete_conn.execute("ROLLBACK")
-                raise
-            deleted += current_batch
-        delete_us = elapsed_us(start_ns)
-
-        remaining = delete_conn.execute("SELECT id FROM users LIMIT 1").fetchone()
+        logical_delete_us = sqlite_run_delete_case(logical_delete_conn, docs, batch_rows, reverse=False)
+        remaining = logical_delete_conn.execute("SELECT id FROM users LIMIT 1").fetchone()
         if remaining is not None:
-            raise RuntimeError("sqlite pk delete verification failed: expected empty table")
+            raise RuntimeError("sqlite logical delete verification failed: expected empty table")
     finally:
-        delete_conn.close()
+        logical_delete_conn.close()
+        cleanup_sqlite_path(path)
+
+    physical_delete_conn = sqlite_prepare_loaded_db(path, docs, batch_rows)
+    try:
+        physical_delete_us = sqlite_run_delete_case(physical_delete_conn, docs, batch_rows, reverse=True)
+        remaining = physical_delete_conn.execute("SELECT id FROM users LIMIT 1").fetchone()
+        if remaining is not None:
+            raise RuntimeError("sqlite physical delete verification failed: expected empty table")
+    finally:
+        physical_delete_conn.close()
         cleanup_sqlite_path(path)
 
     return {
@@ -293,9 +314,13 @@ def run_sqlite_case_inline(docs: int, batch_rows: int, query_iters: int) -> dict
             **aggregate_write_case(docs, update_us),
             "notes": update_notes,
         },
-        "bulk_delete": {
-            **aggregate_write_case(docs, delete_us),
-            "notes": delete_notes,
+        "logical_delete": {
+            **aggregate_write_case(docs, logical_delete_us),
+            "notes": logical_delete_notes,
+        },
+        "physical_delete": {
+            **aggregate_write_case(docs, physical_delete_us),
+            "notes": physical_delete_notes,
         },
         "notes": "SQLite JSON1 million-row benchmark",
     }
@@ -339,8 +364,9 @@ def parse_nosqlite_output(stdout: str, docs: int) -> dict:
 
     load_us = result_us.get("bulk_load", 0)
     update_us = result_us.get("bulk_update", 0)
-    delete_us = result_us.get("bulk_delete", 0)
-    if load_us <= 0 or update_us <= 0 or delete_us <= 0 or not query_samples_ns:
+    logical_delete_us = result_us.get("logical_delete", 0)
+    physical_delete_us = result_us.get("physical_delete", 0)
+    if load_us <= 0 or update_us <= 0 or logical_delete_us <= 0 or physical_delete_us <= 0 or not query_samples_ns:
         raise RuntimeError(f"nosqlite million benchmark output incomplete:\n{stdout}")
 
     return {
@@ -361,9 +387,15 @@ def parse_nosqlite_output(stdout: str, docs: int) -> dict:
             **aggregate_write_case(docs, update_us),
             "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end",
         },
-        "bulk_delete": {
-            **aggregate_write_case(docs, delete_us),
-            "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; DELETE FROM users WHERE _id >= start AND _id < end",
+        "logical_delete": {
+            **aggregate_write_case(docs, logical_delete_us),
+            "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable head-to-tail prefix delete; "
+            "commits deleted-through metadata boundary; logical delete semantics",
+        },
+        "physical_delete": {
+            **aggregate_write_case(docs, physical_delete_us),
+            "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable tail-to-head range delete; "
+            "prefix logical delete fast path intentionally bypassed to force physical page updates",
         },
         "notes": "NoSQLite million-row benchmark",
     }
@@ -449,7 +481,7 @@ def write_markdown(path: Path, docs: int, batch_rows: int, query_iters: int, ns:
         "",
         f"日期：{time.strftime('%Y-%m-%d')}",
         "",
-        "本报告聚焦百万条记录量级下的装载、查询、批量更新与批量删除性能对比。",
+        "本报告聚焦百万条记录量级下的装载、查询、批量更新，以及区分 logical delete / physical delete 后的删除性能对比。",
         "",
         "## 运行口径",
         "",
@@ -464,9 +496,10 @@ def write_markdown(path: Path, docs: int, batch_rows: int, query_iters: int, ns:
         "- 数据文档：`{\"n\": <id>, \"bucket\": <id % 100>, \"age\": <18 + (id % 41)>, \"active\": <bool>}`",
         "- 查询口径：`SELECT _id FROM users LIMIT 64` / `SELECT id FROM users LIMIT 64`",
         "- 更新口径：fresh preload 后按 `batch_rows` 分段执行 durable range update；NoSQLite 执行 `UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end`，SQLite 执行 `UPDATE users SET doc = json_set(doc, '$.age', 30) WHERE id >= start AND id < end`。",
-        "- 删除口径：fresh preload 后按 `batch_rows` 分段执行 durable range delete；NoSQLite 执行 `DELETE FROM users WHERE _id >= start AND _id < end`，SQLite 执行 `DELETE FROM users WHERE id >= start AND id < end`。",
+        "- `logical_delete` 口径：fresh preload 后按 `batch_rows` 头到尾执行 durable range delete；NoSQLite 会命中 prefix metadata delete 快路径，SQLite 仍执行物理 DELETE，因此该项只用于能力说明，不作为公平主结论。",
+        "- `physical_delete` 口径：fresh preload 后按 `batch_rows` 尾到头执行 durable range delete；两侧都执行 `DELETE ... WHERE id >= start AND id < end`，同时显式避开 NoSQLite prefix logical delete 快路径，作为公平 delete 主对比。",
         "- limit_query 计时范围：从开始执行查询到完整取回 64 行结果，两侧统一口径。",
-        "- 更新/删除各自使用独立 fresh preload 数据集，预装载不计入该 case 计时，避免 load/query cache 污染后续结果。",
+        "- 更新、logical_delete、physical_delete 各自使用独立 fresh preload 数据集，预装载不计入该 case 计时，避免 load/query cache 污染后续结果。",
         "",
         "## 摘要",
         "",
@@ -476,14 +509,28 @@ def write_markdown(path: Path, docs: int, batch_rows: int, query_iters: int, ns:
         f"| limit_query p50 us | {format_us(ns['limit_query']['p50_us'])} | {format_us(sq['limit_query']['p50_us'])} | {ratio_text(ns['limit_query']['p50_ns'], sq['limit_query']['p50_ns'], True)} |",
         f"| limit_query p95 us | {format_us(ns['limit_query']['p95_us'])} | {format_us(sq['limit_query']['p95_us'])} | {ratio_text(ns['limit_query']['p95_ns'], sq['limit_query']['p95_ns'], True)} |",
         f"| bulk_update rows/s | {ns['bulk_update']['rows_per_s']:.2f} | {sq['bulk_update']['rows_per_s']:.2f} | {ratio_text(ns['bulk_update']['rows_per_s'], sq['bulk_update']['rows_per_s'], False)} |",
-        f"| bulk_delete rows/s | {ns['bulk_delete']['rows_per_s']:.2f} | {sq['bulk_delete']['rows_per_s']:.2f} | {ratio_text(ns['bulk_delete']['rows_per_s'], sq['bulk_delete']['rows_per_s'], False)} |",
+        f"| physical_delete rows/s | {ns['physical_delete']['rows_per_s']:.2f} | {sq['physical_delete']['rows_per_s']:.2f} | {ratio_text(ns['physical_delete']['rows_per_s'], sq['physical_delete']['rows_per_s'], False)} |",
+        "",
+        "## Delete 语义拆分",
+        "",
+        "| case | NoSQLite | SQLite | 说明 |",
+        "| --- | ---: | ---: | --- |",
+        f"| logical_delete rows/s | {ns['logical_delete']['rows_per_s']:.2f} | {sq['logical_delete']['rows_per_s']:.2f} | 非同口径。NoSQLite 为 durable logical prefix delete，SQLite 仍是 physical DELETE，仅作参考。 |",
+        f"| physical_delete rows/s | {ns['physical_delete']['rows_per_s']:.2f} | {sq['physical_delete']['rows_per_s']:.2f} | 公平主口径。两侧都按尾到头分段删除，显式避开 NoSQLite prefix logical delete 快路径。 |",
         "",
         "## 原始指标",
         "",
-        "| engine | load s | load rows/s | update s | update rows/s | delete s | delete rows/s | query p50 us | query p95 us | query qps | peak KiB | notes |",
+        "| engine | load s | load rows/s | update s | update rows/s | physical_delete s | physical_delete rows/s | query p50 us | query p95 us | query qps | peak KiB | notes |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
-        f"| nosqlite | {ns['load']['load_us'] / 1_000_000:.2f} | {ns['load']['rows_per_s']:.2f} | {ns['bulk_update']['op_us'] / 1_000_000:.2f} | {ns['bulk_update']['rows_per_s']:.2f} | {ns['bulk_delete']['op_us'] / 1_000_000:.2f} | {ns['bulk_delete']['rows_per_s']:.2f} | {format_us(ns['limit_query']['p50_us'])} | {format_us(ns['limit_query']['p95_us'])} | {ns['limit_query']['qps']:.2f} | {ns['peak_memory_kib']} | {ns['bulk_update']['notes']}; {ns['bulk_delete']['notes']} |",
-        f"| sqlite | {sq['load']['load_us'] / 1_000_000:.2f} | {sq['load']['rows_per_s']:.2f} | {sq['bulk_update']['op_us'] / 1_000_000:.2f} | {sq['bulk_update']['rows_per_s']:.2f} | {sq['bulk_delete']['op_us'] / 1_000_000:.2f} | {sq['bulk_delete']['rows_per_s']:.2f} | {format_us(sq['limit_query']['p50_us'])} | {format_us(sq['limit_query']['p95_us'])} | {sq['limit_query']['qps']:.2f} | {sq['peak_memory_kib']} | {sq['bulk_update']['notes']}; {sq['bulk_delete']['notes']} |",
+        f"| nosqlite | {ns['load']['load_us'] / 1_000_000:.2f} | {ns['load']['rows_per_s']:.2f} | {ns['bulk_update']['op_us'] / 1_000_000:.2f} | {ns['bulk_update']['rows_per_s']:.2f} | {ns['physical_delete']['op_us'] / 1_000_000:.2f} | {ns['physical_delete']['rows_per_s']:.2f} | {format_us(ns['limit_query']['p50_us'])} | {format_us(ns['limit_query']['p95_us'])} | {ns['limit_query']['qps']:.2f} | {ns['peak_memory_kib']} | {ns['bulk_update']['notes']}; {ns['physical_delete']['notes']} |",
+        f"| sqlite | {sq['load']['load_us'] / 1_000_000:.2f} | {sq['load']['rows_per_s']:.2f} | {sq['bulk_update']['op_us'] / 1_000_000:.2f} | {sq['bulk_update']['rows_per_s']:.2f} | {sq['physical_delete']['op_us'] / 1_000_000:.2f} | {sq['physical_delete']['rows_per_s']:.2f} | {format_us(sq['limit_query']['p50_us'])} | {format_us(sq['limit_query']['p95_us'])} | {sq['limit_query']['qps']:.2f} | {sq['peak_memory_kib']} | {sq['bulk_update']['notes']}; {sq['physical_delete']['notes']} |",
+        "",
+        "## Delete 明细",
+        "",
+        "| engine | logical_delete s | logical_delete rows/s | physical_delete s | physical_delete rows/s | notes |",
+        "| --- | ---: | ---: | ---: | ---: | --- |",
+        f"| nosqlite | {ns['logical_delete']['op_us'] / 1_000_000:.2f} | {ns['logical_delete']['rows_per_s']:.2f} | {ns['physical_delete']['op_us'] / 1_000_000:.2f} | {ns['physical_delete']['rows_per_s']:.2f} | {ns['logical_delete']['notes']}; {ns['physical_delete']['notes']} |",
+        f"| sqlite | {sq['logical_delete']['op_us'] / 1_000_000:.2f} | {sq['logical_delete']['rows_per_s']:.2f} | {sq['physical_delete']['op_us'] / 1_000_000:.2f} | {sq['physical_delete']['rows_per_s']:.2f} | {sq['logical_delete']['notes']}; {sq['physical_delete']['notes']} |",
         "",
         "## 复现命令",
         "",
@@ -541,8 +588,10 @@ def main() -> int:
         f"load_rows_per_s_sqlite={sqlite_result['load']['rows_per_s']:.2f} "
         f"bulk_update_rows_per_s_nosqlite={nosqlite_result['bulk_update']['rows_per_s']:.2f} "
         f"bulk_update_rows_per_s_sqlite={sqlite_result['bulk_update']['rows_per_s']:.2f} "
-        f"bulk_delete_rows_per_s_nosqlite={nosqlite_result['bulk_delete']['rows_per_s']:.2f} "
-        f"bulk_delete_rows_per_s_sqlite={sqlite_result['bulk_delete']['rows_per_s']:.2f}"
+        f"logical_delete_rows_per_s_nosqlite={nosqlite_result['logical_delete']['rows_per_s']:.2f} "
+        f"logical_delete_rows_per_s_sqlite={sqlite_result['logical_delete']['rows_per_s']:.2f} "
+        f"physical_delete_rows_per_s_nosqlite={nosqlite_result['physical_delete']['rows_per_s']:.2f} "
+        f"physical_delete_rows_per_s_sqlite={sqlite_result['physical_delete']['rows_per_s']:.2f}"
     )
     print(f"MILLION_COMPARE_REPORT markdown={args.write_markdown} json={args.write_json}")
     return 0
