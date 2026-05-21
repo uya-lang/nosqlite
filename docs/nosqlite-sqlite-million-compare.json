@@ -11,18 +11,18 @@
     "batch_rows": 48000,
     "load": {
       "rows": 1000000,
-      "load_us": 9753013,
-      "rows_per_s": 102532.41741808403
+      "load_us": 5699788,
+      "rows_per_s": 175445.12181856588
     },
     "limit_query": {
       "samples": 100,
-      "p50_us": 871,
-      "p95_us": 931,
-      "p99_us": 941,
-      "qps": 1146.3945890175398
+      "p50_us": 1,
+      "p95_us": 1,
+      "p99_us": 1,
+      "qps": 1000000.0
     },
     "notes": "NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64",
-    "peak_memory_kib": 4155164
+    "peak_memory_kib": 4118224
   },
   "sqlite": {
     "engine": "sqlite",
@@ -30,17 +30,17 @@
     "batch_rows": 48000,
     "load": {
       "rows": 1000000,
-      "load_us": 1380864,
-      "rows_per_s": 724184.2788283278
+      "load_us": 1383244,
+      "rows_per_s": 722938.2523979862
     },
     "limit_query": {
       "samples": 100,
       "p50_us": 13,
       "p95_us": 13,
-      "p99_us": 15,
-      "qps": 76277.65064836002
+      "p99_us": 17,
+      "qps": 76452.59938837921
     },
     "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64",
-    "peak_memory_kib": 19644
+    "peak_memory_kib": 19664
   }
 }

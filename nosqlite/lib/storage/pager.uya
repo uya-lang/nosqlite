@@ -2689,7 +2689,6 @@ fn wal_batch_ensure_storage(batch: &WalBatch, required_total: usize) !void {
             initial_capacity = initial_capacity * 2usize;
         }
         batch.bytes = try allocator.alloc(initial_capacity);
-        _ = mem_set(batch.bytes, 0, initial_capacity);
         batch.capacity = initial_capacity;
         return;
     }
@@ -2702,6 +2701,10 @@ fn wal_batch_ensure_storage(batch: &WalBatch, required_total: usize) !void {
     }
     batch.bytes = try allocator.realloc(batch.bytes, new_capacity);
     batch.capacity = new_capacity;
+}
+
+export fn wal_batch_reserve_bytes(batch: &WalBatch, required_total: usize) !void {
+    try wal_batch_ensure_storage(batch, required_total);
 }
 
 fn wal_batch_append_bytes(batch: &WalBatch, data: &[byte]) !void {
