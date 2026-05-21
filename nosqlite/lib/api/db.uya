@@ -1165,6 +1165,20 @@ fn db_collection_page_dirty(collection: &DbCollection, page_offset: u32) bool {
     return (collection.dirty_page_bits[word_idx] & (1u64 << bit_idx)) != 0u64;
 }
 
+fn db_collection_has_dirty_pages(collection: &DbCollection) bool {
+    if collection == null || collection.dirty_page_bits == null {
+        return false;
+    }
+    var word_idx: usize = 0usize;
+    while word_idx < collection.dirty_page_word_capacity as usize {
+        if collection.dirty_page_bits[word_idx] != 0u64 {
+            return true;
+        }
+        word_idx = word_idx + 1usize;
+    }
+    return false;
+}
+
 fn db_row_at(collection: &DbCollection, row_slot: u32) !&DbStoredRow {
     if collection == null {
         return error.DbCollectionNotFound;
@@ -2309,14 +2323,18 @@ fn db_collection_try_patch_tombstone_page_from_disk(db: &DbHandle, collection: &
             };
         }
     }
-    var scan_row_idx: u32 = first_row;
-    const end_row: u32 = first_row + (expected_slot_count as u32);
-    while scan_row_idx < end_row {
-        const row: &DbStoredRow = &collection.rows[scan_row_idx as usize];
-        if row.present && row.blob_loaded {
-            return;
+    const base_pages_current: bool = db.pager_session.active &&
+        db.pager_session.info.meta.checkpoint_lsn == db.pager_session.info.meta.commit_lsn;
+    if !base_pages_current {
+        var scan_row_idx: u32 = first_row;
+        const end_row: u32 = first_row + (expected_slot_count as u32);
+        while scan_row_idx < end_row {
+            const row: &DbStoredRow = &collection.rows[scan_row_idx as usize];
+            if row.present && row.blob_loaded {
+                return;
+            }
+            scan_row_idx = scan_row_idx + 1u32;
         }
-        scan_row_idx = scan_row_idx + 1u32;
     }
     const page_id: u32 = db_collection_data_page_id(collection) + page_offset;
     if page_id < 2u32 || page_id >= db.pager_session.info.meta.page_count {
@@ -4647,6 +4665,7 @@ fn db_txn_try_apply_doc_id_range_delete(txn: &Txn, plan: &QueryPlan, collection_
             return;
         }
     }
+    const allow_tombstone_patch: bool = !db_collection_has_dirty_pages(collection);
     try db_collection_prepare_row_writes(collection);
     collection.prefix_delete_only = false;
     collection.may_have_tombstones = true;
@@ -4667,7 +4686,7 @@ fn db_txn_try_apply_doc_id_range_delete(txn: &Txn, plan: &QueryPlan, collection_
         }
         row_slot = row_slot + 1u32;
     }
-    if changed_out[0] > 0u32 && rows_per_page_u32 != 0u32 {
+    if allow_tombstone_patch && changed_out[0] > 0u32 && rows_per_page_u32 != 0u32 {
         const start_page: u32 = start_slot / rows_per_page_u32;
         const end_page_exclusive: u32 = ((end_slot_exclusive - 1u32) / rows_per_page_u32) + 1u32;
         db_collection_extend_tombstone_patch_pages(collection, start_page, end_page_exclusive);

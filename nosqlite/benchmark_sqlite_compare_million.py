@@ -159,6 +159,10 @@ def sqlite_prepare_loaded_db(path: Path, docs: int, batch_rows: int) -> sqlite3.
     return conn
 
 
+def sqlite_checkpoint_preloaded_db(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+
 def sqlite_run_delete_case(conn: sqlite3.Connection, docs: int, batch_rows: int, reverse: bool) -> int:
     start_ns = time.perf_counter_ns()
     deleted = 0
@@ -193,11 +197,11 @@ def run_sqlite_case_inline(docs: int, batch_rows: int, query_iters: int) -> dict
         "UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?"
     )
     logical_delete_notes = (
-        "SQLite JSON1 reference; fresh preloaded million-row dataset; durable head-to-tail range DELETE; "
+        "SQLite JSON1 reference; fresh preloaded and checkpointed million-row dataset; durable head-to-tail range DELETE; "
         "physical row delete semantics"
     )
     physical_delete_notes = (
-        "SQLite JSON1; fresh preloaded million-row dataset; durable tail-to-head range DELETE; "
+        "SQLite JSON1; fresh preloaded and checkpointed million-row dataset; durable tail-to-head range DELETE; "
         "physical row delete semantics"
     )
 
@@ -278,6 +282,7 @@ def run_sqlite_case_inline(docs: int, batch_rows: int, query_iters: int) -> dict
 
     logical_delete_conn = sqlite_prepare_loaded_db(path, docs, batch_rows)
     try:
+        sqlite_checkpoint_preloaded_db(logical_delete_conn)
         logical_delete_us = sqlite_run_delete_case(logical_delete_conn, docs, batch_rows, reverse=False)
         remaining = logical_delete_conn.execute("SELECT id FROM users LIMIT 1").fetchone()
         if remaining is not None:
@@ -288,6 +293,7 @@ def run_sqlite_case_inline(docs: int, batch_rows: int, query_iters: int) -> dict
 
     physical_delete_conn = sqlite_prepare_loaded_db(path, docs, batch_rows)
     try:
+        sqlite_checkpoint_preloaded_db(physical_delete_conn)
         physical_delete_us = sqlite_run_delete_case(physical_delete_conn, docs, batch_rows, reverse=True)
         remaining = physical_delete_conn.execute("SELECT id FROM users LIMIT 1").fetchone()
         if remaining is not None:
@@ -389,12 +395,12 @@ def parse_nosqlite_output(stdout: str, docs: int) -> dict:
         },
         "logical_delete": {
             **aggregate_write_case(docs, logical_delete_us),
-            "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable head-to-tail prefix delete; "
+            "notes": "NoSQLite million-row benchmark; fresh preloaded and checkpointed dataset; durable head-to-tail prefix delete; "
             "commits deleted-through metadata boundary; logical delete semantics",
         },
         "physical_delete": {
             **aggregate_write_case(docs, physical_delete_us),
-            "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable tail-to-head range delete; "
+            "notes": "NoSQLite million-row benchmark; fresh preloaded and checkpointed dataset; durable tail-to-head range delete; "
             "prefix logical delete fast path intentionally bypassed to force physical page updates",
         },
         "notes": "NoSQLite million-row benchmark",
@@ -496,8 +502,8 @@ def write_markdown(path: Path, docs: int, batch_rows: int, query_iters: int, ns:
         "- 数据文档：`{\"n\": <id>, \"bucket\": <id % 100>, \"age\": <18 + (id % 41)>, \"active\": <bool>}`",
         "- 查询口径：`SELECT _id FROM users LIMIT 64` / `SELECT id FROM users LIMIT 64`",
         "- 更新口径：fresh preload 后按 `batch_rows` 分段执行 durable range update；NoSQLite 执行 `UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end`，SQLite 执行 `UPDATE users SET doc = json_set(doc, '$.age', 30) WHERE id >= start AND id < end`。",
-        "- `logical_delete` 口径：fresh preload 后按 `batch_rows` 头到尾执行 durable range delete；NoSQLite 会命中 prefix metadata delete 快路径，SQLite 仍执行物理 DELETE，因此该项只用于能力说明，不作为公平主结论。",
-        "- `physical_delete` 口径：fresh preload 后按 `batch_rows` 尾到头执行 durable range delete；两侧都执行 `DELETE ... WHERE id >= start AND id < end`，同时显式避开 NoSQLite prefix logical delete 快路径，作为公平 delete 主对比。",
+        "- `logical_delete` 口径：fresh preload 并 checkpoint 后按 `batch_rows` 头到尾执行 durable range delete；NoSQLite 会命中 prefix metadata delete 快路径，SQLite 仍执行物理 DELETE，因此该项只用于能力说明，不作为公平主结论。",
+        "- `physical_delete` 口径：fresh preload 并 checkpoint 后按 `batch_rows` 尾到头执行 durable range delete；两侧都执行 `DELETE ... WHERE id >= start AND id < end`，同时显式避开 NoSQLite prefix logical delete 快路径，作为公平 delete 主对比。",
         "- limit_query 计时范围：从开始执行查询到完整取回 64 行结果，两侧统一口径。",
         "- 更新、logical_delete、physical_delete 各自使用独立 fresh preload 数据集，预装载不计入该 case 计时，避免 load/query cache 污染后续结果。",
         "",

@@ -50,6 +50,7 @@ const TEST_STEM_LAZY_LIMIT: *const byte = "/tmp/nosqlite_exec_phase10_lazy_limit
 const TEST_STEM_LARGE_WRITE: *const byte = "/tmp/nosqlite_exec_phase10_large_write" as *const byte;
 const TEST_STEM_LARGE_DELETE: *const byte = "/tmp/nosqlite_exec_phase10_large_delete" as *const byte;
 const TEST_STEM_LARGE_DELETE_ALL: *const byte = "/tmp/nosqlite_exec_phase10_large_delete_all" as *const byte;
+const TEST_STEM_LARGE_TAIL_DELETE: *const byte = "/tmp/nosqlite_exec_phase10_large_tail_delete" as *const byte;
 
 var g_exec_result_deallocs: i32 = 0;
 
@@ -925,6 +926,48 @@ fn run_update_delete_cover_more_than_64_rows() i32 {
     };
     if empty_after_reopen.row_count != 0u32 {
         return 514;
+    }
+
+    var tail_delete_db: DbHandle = DbHandle{};
+    _ = prepare_bulk_users_db(&tail_delete_db, TEST_STEM_LARGE_TAIL_DELETE, 96u64) catch {
+        return 515;
+    };
+    const warmed_tail: QueryResult = db_query(&tail_delete_db, "SELECT _id, $.name FROM users LIMIT 96;") catch {
+        return 516;
+    };
+    if warmed_tail.row_count != 96u32 {
+        return 517;
+    }
+    _ = db_exec(&tail_delete_db, "DELETE FROM users WHERE _id >= 65 AND _id < 97;") catch {
+        return 518;
+    };
+    const kept_tail_prefix: QueryResult = db_query(&tail_delete_db, "SELECT _id FROM users WHERE _id = 64 LIMIT 1;") catch {
+        return 519;
+    };
+    if kept_tail_prefix.row_count != 1u32 {
+        return 520;
+    }
+    const deleted_tail_start: QueryResult = db_query(&tail_delete_db, "SELECT _id FROM users WHERE _id = 65 LIMIT 1;") catch {
+        return 521;
+    };
+    if deleted_tail_start.row_count != 0u32 {
+        return 522;
+    }
+    var reopened_tail_delete_db: DbHandle = DbHandle{};
+    _ = db_test_open_at_stem(&reopened_tail_delete_db, TEST_STEM_LARGE_TAIL_DELETE) catch {
+        return 523;
+    };
+    const reopened_kept_tail_prefix: QueryResult = db_query(&reopened_tail_delete_db, "SELECT _id FROM users WHERE _id = 64 LIMIT 1;") catch {
+        return 524;
+    };
+    if reopened_kept_tail_prefix.row_count != 1u32 {
+        return 525;
+    }
+    const reopened_deleted_tail_end: QueryResult = db_query(&reopened_tail_delete_db, "SELECT _id FROM users WHERE _id = 96 LIMIT 1;") catch {
+        return 526;
+    };
+    if reopened_deleted_tail_end.row_count != 0u32 {
+        return 527;
     }
 
     var reused_update_db: DbHandle = DbHandle{};

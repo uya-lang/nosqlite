@@ -17,11 +17,14 @@ use lib.api.db.cursor_row;
 use lib.api.db.db_query_cursor;
 use lib.api.db.db_test_create_at_stem;
 use lib.api.db.db_test_create_collection;
+use lib.api.db.db_test_refresh_pager_session;
+use lib.api.db.db_test_release_loaded_blobs;
 use lib.api.db.db_test_txn_insert_json;
 use lib.api.db.txn_begin;
 use lib.api.db.txn_exec;
 use lib.api.db.txn_commit;
 use lib.api.db.txn_rollback;
+use lib.storage.pager.pager_checkpoint_at_stem;
 use lib.storage.pager.catalog_cleanup_stem;
 
 const TEST_STEM_BENCH: *const byte = "/tmp/nosqlite_million_bench" as *const byte;
@@ -442,6 +445,12 @@ fn verify_bulk_delete(db: &DbHandle) !void {
     }
 }
 
+fn checkpoint_preloaded_delete_db(db: &DbHandle) !void {
+    _ = try pager_checkpoint_at_stem(TEST_STEM_BENCH);
+    try db_test_release_loaded_blobs(db);
+    try db_test_refresh_pager_session(db);
+}
+
 
 fn main() i32 {
     set_process_stack_limit_bytes(256u64 * 1024u64 * 1024u64);
@@ -513,6 +522,10 @@ fn main() i32 {
         printf("BENCH_ERROR stage=prepare_delete error_id=%u\n" as *byte, delete_prepare_u.error_id);
         return 11;
     }
+    _ = checkpoint_preloaded_delete_db(&db) catch {
+        printf("BENCH_ERROR stage=checkpoint_logical_delete error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
+        return 111;
+    };
     const logical_delete_u: !u64 = run_logical_delete(&db, docs, batch_rows, emit_progress);
     if logical_delete_u.error_id != 0u32 {
         printf("BENCH_ERROR stage=logical_delete error_id=%u\n" as *byte, logical_delete_u.error_id);
@@ -534,6 +547,10 @@ fn main() i32 {
         printf("BENCH_ERROR stage=prepare_physical_delete error_id=%u\n" as *byte, physical_delete_prepare_u.error_id);
         return 15;
     }
+    _ = checkpoint_preloaded_delete_db(&db) catch {
+        printf("BENCH_ERROR stage=checkpoint_physical_delete error_id=%u\n" as *byte, (@error_id(error.BenchUnexpectedResult)));
+        return 151;
+    };
     const physical_delete_u: !u64 = run_physical_delete(&db, docs, batch_rows, emit_progress);
     if physical_delete_u.error_id != 0u32 {
         printf("BENCH_ERROR stage=physical_delete error_id=%u\n" as *byte, physical_delete_u.error_id);
