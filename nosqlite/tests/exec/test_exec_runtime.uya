@@ -46,6 +46,7 @@ use lib.api.result.owned_row_cell_text;
 
 const TEST_STEM_EXEC: *const byte = "/tmp/nosqlite_exec_phase8" as *const byte;
 const TEST_STEM_WRITE: *const byte = "/tmp/nosqlite_exec_phase10" as *const byte;
+const TEST_STEM_LAZY_LIMIT: *const byte = "/tmp/nosqlite_exec_phase10_lazy_limit" as *const byte;
 
 var g_exec_result_deallocs: i32 = 0;
 
@@ -93,6 +94,17 @@ fn prepare_db(db: &DbHandle) !void {
 fn prepare_empty_users_db(db: &DbHandle, stem: &const byte) !void {
     try db_test_create_at_stem(db, stem);
     try db_test_create_collection(db, "users");
+}
+
+fn prepare_multi_page_users_db(db: &DbHandle, stem: &const byte) !void {
+    try prepare_empty_users_db(db, stem);
+    _ = try db_test_insert_json(db, "users", "{\"name\":\"ann\",\"age\":25,\"active\":true}");
+    _ = try db_test_insert_json(db, "users", "{\"name\":\"bob\",\"age\":17,\"active\":false}");
+    _ = try db_test_insert_json(db, "users", "{\"name\":\"cara\",\"age\":31,\"active\":true}");
+    _ = try db_test_insert_json(db, "users", "{\"name\":\"dina\",\"age\":29,\"active\":true}");
+    _ = try db_test_insert_json(db, "users", "{\"name\":\"erin\",\"age\":22,\"active\":true}");
+    _ = try db_test_insert_json(db, "users", "{\"name\":\"faye\",\"age\":24,\"active\":false}");
+    _ = try db_test_insert_json(db, "users", "{\"name\":\"gail\",\"age\":26,\"active\":true}");
 }
 
 fn run_cursor_seqscan_filter_limit() i32 {
@@ -683,6 +695,103 @@ fn run_insert_persists_after_reopen() i32 {
     return 0;
 }
 
+fn run_delete_then_insert_reuses_tombstone_slot() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_db(&db) catch {
+        return 205;
+    };
+    _ = db_exec(&db, "DELETE FROM users WHERE _id = 2;") catch {
+        return 206;
+    };
+    _ = db_exec(&db, "INSERT INTO users JSON '{\"name\":\"eve\",\"age\":20,\"active\":true}';") catch {
+        return 207;
+    };
+    const result: QueryResult = db_query(&db, "SELECT _id, $.name FROM users LIMIT 10;") catch {
+        return 208;
+    };
+    if result.row_count != 3u32 {
+        return 209;
+    }
+    const row0: &OwnedRow = query_result_row(&result, 0u32) catch {
+        return 210;
+    };
+    const row1: &OwnedRow = query_result_row(&result, 1u32) catch {
+        return 211;
+    };
+    const row2: &OwnedRow = query_result_row(&result, 2u32) catch {
+        return 212;
+    };
+    if (owned_row_cell_u64(row0, 0u16) catch {
+        return 213;
+    }) != 1u64 {
+        return 214;
+    }
+    if (owned_row_cell_u64(row1, 0u16) catch {
+        return 215;
+    }) != 4u64 {
+        return 216;
+    }
+    if !byte_slices_equal((owned_row_cell_text(row1, 1u16) catch {
+        return 217;
+    }), "eve") {
+        return 218;
+    }
+    if (owned_row_cell_u64(row2, 0u16) catch {
+        return 219;
+    }) != 3u64 {
+        return 220;
+    }
+    return 0;
+}
+
+fn run_limit_warmup_keeps_followup_scan_complete() i32 {
+    var db: DbHandle = DbHandle{};
+    _ = prepare_multi_page_users_db(&db, TEST_STEM_LAZY_LIMIT) catch {
+        return 191;
+    };
+
+    var reopened: DbHandle = DbHandle{};
+    _ = db_test_open_at_stem(&reopened, TEST_STEM_LAZY_LIMIT) catch {
+        return 192;
+    };
+
+    var cursor: QueryCursor = db_query_cursor(&reopened, "SELECT _id FROM users LIMIT 1;") catch {
+        return 193;
+    };
+    if !(cursor_next(&cursor) catch {
+        return 194;
+    }) {
+        return 195;
+    }
+    const warm_row: RowRef = cursor_row(&cursor) catch {
+        return 196;
+    };
+    if warm_row.doc_id != 1u64 {
+        return 197;
+    }
+
+    const after: QueryResult = db_query(&reopened, "SELECT _id, $.name FROM users LIMIT 10;") catch {
+        return 198;
+    };
+    if after.row_count != 7u32 {
+        return 199;
+    }
+    const last_row: &OwnedRow = query_result_row(&after, 6u32) catch {
+        return 200;
+    };
+    if (owned_row_cell_u64(last_row, 0u16) catch {
+        return 201;
+    }) != 7u64 {
+        return 202;
+    }
+    if !byte_slices_equal((owned_row_cell_text(last_row, 1u16) catch {
+        return 203;
+    }), "gail") {
+        return 204;
+    }
+    return 0;
+}
+
 fn main() i32 {
     set_process_stack_limit_bytes(64u64 * 1024u64 * 1024u64);
 
@@ -734,9 +843,17 @@ fn main() i32 {
     if k != 0 {
         return k;
     }
-    const l: i32 = run_insert_persists_after_reopen();
+    const l: i32 = run_delete_then_insert_reuses_tombstone_slot();
     if l != 0 {
         return l;
+    }
+    const m: i32 = run_insert_persists_after_reopen();
+    if m != 0 {
+        return m;
+    }
+    const n: i32 = run_limit_warmup_keeps_followup_scan_complete();
+    if n != 0 {
+        return n;
     }
     return 0;
 }
