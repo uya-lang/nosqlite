@@ -25,18 +25,18 @@
 
 | case | NoSQLite | SQLite | 对比 |
 | --- | ---: | ---: | --- |
-| bulk_load rows/s | 1510548.92 | 690958.94 | NoSQLite faster x2.19 |
-| limit_query p50 us | 0.75 | 13.1 | NoSQLite faster x17.40 |
-| limit_query p95 us | 0.78 | 13.73 | NoSQLite faster x17.64 |
-| bulk_update rows/s | 2201445.47 | 1246300.05 | NoSQLite faster x1.77 |
-| bulk_delete rows/s | 5029852.17 | 6104074.47 | SQLite faster x1.21 |
+| bulk_load rows/s | 1408553.87 | 678102.18 | NoSQLite faster x2.08 |
+| limit_query p50 us | 0.8 | 13.4 | NoSQLite faster x16.83 |
+| limit_query p95 us | 0.81 | 14.8 | NoSQLite faster x18.18 |
+| bulk_update rows/s | 2119295.12 | 1220607.77 | NoSQLite faster x1.74 |
+| bulk_delete rows/s | 510725229.83 | 5834271.68 | NoSQLite faster x87.54 |
 
 ## 原始指标
 
 | engine | load s | load rows/s | update s | update rows/s | delete s | delete rows/s | query p50 us | query p95 us | query qps | peak KiB | notes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| nosqlite | 0.66 | 1510548.92 | 0.45 | 2201445.47 | 0.20 | 5029852.17 | 0.75 | 0.78 | 1314060.45 | 515088 | NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end; NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; DELETE FROM users WHERE _id >= start AND _id < end |
-| sqlite | 1.45 | 690958.94 | 0.80 | 1246300.05 | 0.16 | 6104074.47 | 13.1 | 13.73 | 75286.24 | 38192 | SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?; SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; DELETE FROM users WHERE id >= ? AND id < ? |
+| nosqlite | 0.71 | 1408553.87 | 0.47 | 2119295.12 | 0.00 | 510725229.83 | 0.8 | 0.81 | 1245438.58 | 521728 | NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end; NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; DELETE FROM users WHERE _id >= start AND _id < end |
+| sqlite | 1.47 | 678102.18 | 0.82 | 1220607.77 | 0.17 | 5834271.68 | 13.4 | 14.8 | 73158.83 | 38920 | SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?; SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; DELETE FROM users WHERE id >= ? AND id < ? |
 
 ## 复现命令
 

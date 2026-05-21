@@ -388,9 +388,7 @@ fn verify_bulk_update(db: &DbHandle) !void {
 }
 
 fn verify_bulk_delete(db: &DbHandle) !void {
-    var sql_buf: [byte: SQL_BUF_CAP] = [];
-    const sql_len: usize = try build_id_lookup_sql(1u64, sql_buf[0: SQL_BUF_CAP]);
-    if try query_returns_any(db, sql_buf[0: sql_len]) {
+    if try query_returns_any(db, "SELECT _id FROM users LIMIT 1;"[0: 29]) {
         return error.BenchUnexpectedResult;
     }
 }

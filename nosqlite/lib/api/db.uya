@@ -262,6 +262,7 @@ struct DbCollection {
     blob_chunks: [DbBlobArenaChunk: DB_BLOB_ARENA_MAX_CHUNKS],
     row_count: u32,
     row_capacity: u32,
+    rows_refcount: &u32,
     dirty_page_word_capacity: u32,
     tombstone_patch_pages_valid: bool,
     tombstone_patch_page_start: u32,
@@ -834,6 +835,45 @@ fn db_rows_alloc_size(capacity: u32) usize {
     return (capacity as usize) * (@size_of(DbStoredRow) as usize);
 }
 
+fn db_collection_ensure_rows_refcount(collection: &DbCollection) !void {
+    if collection == null || collection.rows == null || collection.rows_refcount != null {
+        return;
+    }
+    const allocator: &HeapAllocator = get_heap_allocator();
+    const ref_mem: &byte = try allocator.alloc(4usize);
+    collection.rows_refcount = ref_mem as &u32;
+    collection.rows_refcount[0] = 1u32;
+}
+
+fn db_collection_rows_shared(collection: &DbCollection) bool {
+    return collection != null &&
+        collection.rows != null &&
+        collection.rows_refcount != null &&
+        collection.rows_refcount[0] > 1u32;
+}
+
+fn db_collection_release_row_storage_ref(collection: &DbCollection) void {
+    if collection == null {
+        return;
+    }
+    const allocator: &HeapAllocator = get_heap_allocator();
+    if collection.rows_refcount != null {
+        if collection.rows_refcount[0] > 1u32 {
+            collection.rows_refcount[0] = collection.rows_refcount[0] - 1u32;
+        } else {
+            if collection.rows != null {
+                allocator.dealloc(collection.rows as &byte);
+            }
+            allocator.dealloc(collection.rows_refcount as &byte);
+        }
+    } else if collection.rows != null {
+        allocator.dealloc(collection.rows as &byte);
+    }
+    collection.rows = null;
+    collection.rows_refcount = null;
+    collection.row_capacity = 0u32;
+}
+
 fn db_secondary_index_slots_alloc_size(capacity: u32) usize {
     return (capacity as usize) * 4usize;
 }
@@ -989,7 +1029,9 @@ fn db_collection_ensure_row_capacity_impl(collection: &DbCollection, needed: u32
     if needed as usize > DB_MAX_ROWS_PER_COLLECTION {
         return error.DbRowFull;
     }
-    if collection.rows != null && collection.row_capacity >= needed {
+    const shared_rows: bool = db_collection_rows_shared(collection);
+    if collection.rows != null && collection.row_capacity >= needed && !shared_rows {
+        try db_collection_ensure_rows_refcount(collection);
         return;
     }
     const new_capacity: u32 = try db_collection_next_capacity(needed);
@@ -1003,7 +1045,10 @@ fn db_collection_ensure_row_capacity_impl(collection: &DbCollection, needed: u32
         if zero_init {
             _ = mem_set(mem, 0, new_bytes);
         }
-    } else {
+        const ref_mem: &byte = try allocator.alloc(4usize);
+        collection.rows_refcount = ref_mem as &u32;
+        collection.rows_refcount[0] = 1u32;
+    } else if !shared_rows {
         mem = try allocator.realloc(collection.rows as &byte, new_bytes);
         if zero_init && new_bytes > old_bytes {
             if mem == null {
@@ -1011,6 +1056,22 @@ fn db_collection_ensure_row_capacity_impl(collection: &DbCollection, needed: u32
             }
             _ = mem_set(&mem[old_bytes], 0, new_bytes - old_bytes);
         }
+        try db_collection_ensure_rows_refcount(collection);
+        collection.rows_refcount[0] = 1u32;
+    } else {
+        mem = try allocator.alloc(new_bytes);
+        if mem == null {
+            return error.DbRowFull;
+        }
+        _ = mem_copy(mem, collection.rows as &const byte, old_bytes);
+        if zero_init && new_bytes > old_bytes {
+            _ = mem_set(&mem[old_bytes], 0, new_bytes - old_bytes);
+        }
+        const ref_mem: &byte = try allocator.alloc(4usize);
+        const previous_refcount: &u32 = collection.rows_refcount;
+        previous_refcount[0] = previous_refcount[0] - 1u32;
+        collection.rows_refcount = ref_mem as &u32;
+        collection.rows_refcount[0] = 1u32;
     }
     collection.rows = mem as &DbStoredRow;
     collection.row_capacity = new_capacity;
@@ -1031,16 +1092,26 @@ fn db_collection_release_rows(collection: &DbCollection) void {
     }
     db_collection_release_blob_chunks(collection);
     const allocator: &HeapAllocator = get_heap_allocator();
-    if collection.rows != null {
-        allocator.dealloc(collection.rows as &byte);
-        collection.rows = null;
-    }
+    db_collection_release_row_storage_ref(collection);
     if collection.dirty_page_bits != null {
         allocator.dealloc(collection.dirty_page_bits as &byte);
         collection.dirty_page_bits = null;
     }
-    collection.row_capacity = 0u32;
     collection.dirty_page_word_capacity = 0u32;
+}
+
+fn db_collection_prepare_row_writes(collection: &DbCollection) !void {
+    if collection == null || !db_collection_rows_shared(collection) {
+        return;
+    }
+    var needed: u32 = collection.row_capacity;
+    if needed == 0u32 {
+        needed = collection.row_count;
+    }
+    if needed == 0u32 {
+        needed = 1u32;
+    }
+    try db_collection_ensure_row_capacity_impl(collection, needed, false);
 }
 
 fn db_collection_clear_dirty_pages(collection: &DbCollection) void {
@@ -1069,6 +1140,16 @@ fn db_collection_mark_row_dirty(collection: &DbCollection, row_idx: u32) !void {
     const word_idx: usize = (page_idx / 64u32) as usize;
     const bit_idx: i32 = (page_idx % 64u32) as i32;
     collection.dirty_page_bits[word_idx] = collection.dirty_page_bits[word_idx] | (1u64 << bit_idx);
+}
+
+fn db_row_effective_tombstone(collection: &DbCollection, row: &DbStoredRow) bool {
+    return row != null &&
+        row.present &&
+        (row.tombstone || (collection != null && row.doc_id > 0u64 && row.doc_id <= collection.deleted_through_doc_id));
+}
+
+fn db_row_visible(collection: &DbCollection, row: &DbStoredRow) bool {
+    return row != null && row.present && !db_row_effective_tombstone(collection, row);
 }
 
 fn db_collection_page_dirty(collection: &DbCollection, page_offset: u32) bool {
@@ -1137,7 +1218,7 @@ fn db_collection_reset(collection: &DbCollection) void {
         return;
     }
     db_collection_release_blob_chunks(collection);
-    if collection.row_capacity > DB_COLLECTION_ROW_REUSE_MAX {
+    if db_collection_rows_shared(collection) || collection.row_capacity > DB_COLLECTION_ROW_REUSE_MAX {
         db_collection_release_rows(collection);
     } else if collection.rows != null {
         _ = mem_set(collection.rows as &byte, 0 as byte, db_rows_alloc_size(collection.row_capacity));
@@ -1217,6 +1298,7 @@ fn db_copy_collection_used(target: &DbCollection, source: &DbCollection) !void {
     target.blob_chunk_count = 0u16;
     target.row_count = source.row_count;
     target.rows_loaded = source.rows_loaded;
+    target.rows_refcount = null;
     if source.name_len > 0u16 {
         _ = mem_copy(&target.name[0], &source.name[0], source.name_len as usize);
     }
@@ -1228,9 +1310,16 @@ fn db_copy_collection_used(target: &DbCollection, source: &DbCollection) !void {
     if source.row_count == 0u32 || source.rows == null {
         return;
     }
-    try db_collection_ensure_row_capacity_uninit(target, source.row_count);
-    const row_bytes: usize = db_rows_alloc_size(source.row_count);
-    _ = mem_copy(target.rows as &byte, source.rows as &const byte, row_bytes);
+    if target.rows != null && target.rows != source.rows {
+        db_collection_release_row_storage_ref(target);
+    }
+    try db_collection_ensure_rows_refcount(source);
+    target.rows = source.rows;
+    target.row_capacity = source.row_capacity;
+    target.rows_refcount = source.rows_refcount;
+    if target.rows_refcount != null {
+        target.rows_refcount[0] = target.rows_refcount[0] + 1u32;
+    }
 }
 
 fn db_transfer_collection_blob_ownership(previous: &DbCollection, staged: &DbCollection) void {
@@ -2152,7 +2241,7 @@ fn db_ensure_row_blob_loaded(db: &DbHandle, collection: &DbCollection, row: &DbS
     };
     try db_record_cell_decode(collection, cell.ptr[0: cell.len], row);
     row.record_ptr = record_pointer_make(page_id, slot_id);
-    row.tombstone = slot_is_tombstone(cell.flags);
+    row.tombstone = slot_is_tombstone(cell.flags) || row.doc_id <= collection.deleted_through_doc_id;
 }
 
 fn db_ensure_collection_blobs_loaded(db: &DbHandle, collection: &DbCollection) !void {
@@ -2294,7 +2383,7 @@ fn db_materialize_matched_rows_for_cursor(db: &DbHandle, view_slot: u16, collect
             return error.DbCollectionNotFound;
         }
         const row: &DbStoredRow = &collection.rows[row_idx];
-        if row.present && !row.tombstone && !row.blob_loaded {
+        if db_row_visible(collection, row) && !row.blob_loaded {
             const page_offset: u32 = row_slot / (db_collection_rows_per_page(collection) as u32);
             try db_ensure_collection_page_blobs_loaded(db, collection, page_offset);
         }
@@ -2330,7 +2419,7 @@ fn db_rebuild_primary_index(db: &DbHandle, collection_slot: u16) !void {
     var row_idx: u32 = 0u32;
     while row_idx < collection.row_count {
         const row: &DbStoredRow = &collection.rows[row_idx as usize];
-        if row.present && !row.tombstone {
+        if db_row_visible(collection, row) {
             try primary_btree_insert(&db.primary_indexes[slot_idx], row.doc_id, &row.record_ptr);
         }
         row_idx = row_idx + 1u32;
@@ -2372,11 +2461,11 @@ fn db_try_apply_primary_index_delta(db: &DbHandle, collection_slot: u16, previou
         var staged_row: &DbStoredRow = null;
         if row_idx < previous.row_count {
             prev_row = &previous.rows[row_idx as usize];
-            prev_visible = prev_row.present && !prev_row.tombstone;
+            prev_visible = db_row_visible(previous, prev_row);
         }
         if row_idx < staged.row_count {
             staged_row = &staged.rows[row_idx as usize];
-            staged_visible = staged_row.present && !staged_row.tombstone;
+            staged_visible = db_row_visible(staged, staged_row);
         }
         if prev_visible {
             if !staged_visible {
@@ -2484,7 +2573,7 @@ fn db_rebuild_secondary_index(db: &DbHandle, collection_slot: u16, index_slot: u
     var row_idx: u32 = 0u32;
     while row_idx < collection.row_count {
         const row: &DbStoredRow = &collection.rows[row_idx as usize];
-        if row.present && !row.tombstone {
+        if db_row_visible(collection, row) {
             const node_union: !&[byte] = path_program_eval(&index_state.path_program, try db_row_blob(row));
             if node_union.error_id == 0u32 {
                 const node: &[byte] = node_union.value;
@@ -2662,7 +2751,7 @@ fn db_check_validate_collection_rows(collection: &DbCollection, expected_next_do
         if row.doc_id > max_doc_id {
             max_doc_id = row.doc_id;
         }
-        if !row.tombstone {
+        if db_row_visible(collection, row) {
             _ = primary_btree_insert(&tree, row.doc_id, &row.record_ptr) catch {
                 return error.DbPageCorrupt;
             };
@@ -2709,6 +2798,7 @@ fn db_check_collection_at_stem(stem: &const byte, page_size: u32, entry: &Catalo
         blob_chunks: [],
         row_count: 0u32,
         row_capacity: 0u32,
+        rows_refcount: null,
         dirty_page_word_capacity: 0u32,
         tombstone_patch_pages_valid: false,
         tombstone_patch_page_start: 0u32,
@@ -2831,16 +2921,11 @@ fn db_compute_view_retained_bytes(state: &CommitViewState) u64 {
         const collection: &DbCollection = &state.collections[i as usize];
         if collection.present {
             total = total + DB_COLLECTION_RETAINED_BYTES;
-            var row_idx: u32 = 0u32;
-            while row_idx < collection.row_count {
-                const row: &DbStoredRow = &collection.rows[row_idx as usize];
-                if row.present {
-                    total = total + DB_ROW_RETAINED_BYTES;
-                    if row.blob_loaded {
-                        total = total + row.doc_len as u64;
-                    }
-                }
-                row_idx = row_idx + 1u32;
+            total = total + (collection.row_count as u64) * DB_ROW_RETAINED_BYTES;
+            var chunk_idx: u16 = 0u16;
+            while chunk_idx < collection.blob_chunk_count {
+                total = total + collection.blob_chunks[chunk_idx as usize].used as u64;
+                chunk_idx = chunk_idx + 1u16;
             }
         }
         i = i + 1u16;
@@ -3070,7 +3155,7 @@ fn db_collection_row_ref(db: &DbHandle, view_slot: u16, collection_slot: u16, ro
         return error.DbCollectionNotFound;
     }
     const row: &DbStoredRow = &collection.rows[row_idx];
-    if row.tombstone {
+    if db_row_effective_tombstone(collection, row) {
         return error.DbCollectionNotFound;
     }
     if !row.blob_loaded && state.retired {
@@ -4342,7 +4427,7 @@ fn db_plan_primary_lookup_row_slot(db: &DbHandle, view_slot: u16, collection_slo
             const direct_idx: u32 = direct_idx_u64 as u32;
             if direct_idx < collection.row_count && direct_idx < collection.row_capacity {
                 const direct_row: &DbStoredRow = &collection.rows[direct_idx as usize];
-                if direct_row.present && !direct_row.tombstone && direct_row.doc_id == lookup_doc_id {
+                if db_row_visible(collection, direct_row) && direct_row.doc_id == lookup_doc_id {
                     found_out[0] = true;
                     row_slot_out[0] = direct_idx;
                     return;
@@ -4364,8 +4449,7 @@ fn db_plan_primary_lookup_row_slot(db: &DbHandle, view_slot: u16, collection_slo
     }
     if direct_idx < collection.row_count && direct_idx < collection.row_capacity {
         const row: &DbStoredRow = &collection.rows[direct_idx as usize];
-        if row.present &&
-            !row.tombstone &&
+        if db_row_visible(collection, row) &&
             row.doc_id == lookup_doc_id &&
             row.record_ptr.page_id == ptr.page_id &&
             row.record_ptr.slot_id == ptr.slot_id {
@@ -4377,8 +4461,7 @@ fn db_plan_primary_lookup_row_slot(db: &DbHandle, view_slot: u16, collection_slo
     var i: u32 = 0u32;
     while i < collection.row_count {
         const row: &DbStoredRow = &collection.rows[i as usize];
-        if row.present &&
-            !row.tombstone &&
+        if db_row_visible(collection, row) &&
             row.doc_id == lookup_doc_id &&
             row.record_ptr.page_id == ptr.page_id &&
             row.record_ptr.slot_id == ptr.slot_id {
@@ -4404,8 +4487,9 @@ fn db_txn_apply_update_row_in_collection_impl(txn: &Txn, plan: &QueryPlan, colle
     if txn == null || txn.db == null || collection == null {
         return error.DbHandleInvalid;
     }
+    try db_collection_prepare_row_writes(collection);
     const row: &DbStoredRow = try db_row_at(collection, row_slot);
-    if !row.present || row.tombstone {
+    if !db_row_visible(collection, row) {
         return false;
     }
     if !row.blob_loaded {
@@ -4446,8 +4530,9 @@ fn db_txn_apply_delete_row_in_collection(collection: &DbCollection, row_slot: u3
     if collection == null {
         return error.DbHandleInvalid;
     }
+    try db_collection_prepare_row_writes(collection);
     const row: &DbStoredRow = try db_row_at(collection, row_slot);
-    if !row.present || row.tombstone {
+    if !db_row_visible(collection, row) {
         return false;
     }
     collection.prefix_delete_only = false;
@@ -4491,6 +4576,7 @@ fn db_txn_try_apply_doc_id_range_update(txn: &Txn, plan: &QueryPlan, collection_
         return;
     }
     matched_out[0] = true;
+    try db_collection_prepare_row_writes(collection);
     var replacement_buf: [byte: DB_DOC_BLOB_MAX] = [];
     var replacement_len: usize = 0usize;
     var literal_fast_path: bool = false;
@@ -4504,7 +4590,7 @@ fn db_txn_try_apply_doc_id_range_update(txn: &Txn, plan: &QueryPlan, collection_
         var updated: bool = false;
         if literal_fast_path {
             const row: &DbStoredRow = &collection.rows[row_slot as usize];
-            if row.present && !row.tombstone {
+            if db_row_visible(collection, row) {
                 if !row.blob_loaded {
                     try db_ensure_row_blob_loaded(txn.db, collection, row);
                 }
@@ -4557,18 +4643,11 @@ fn db_txn_try_apply_doc_id_range_delete(txn: &Txn, plan: &QueryPlan, collection_
             collection.deleted_through_doc_id = end_doc_id_exclusive - 1u64;
             collection.may_have_tombstones = true;
             collection.primary_index_ready = false;
-            var prefix_row_slot: u32 = start_slot;
-            while prefix_row_slot < end_slot_exclusive {
-                const row: &DbStoredRow = &collection.rows[prefix_row_slot as usize];
-                if row.present && !row.tombstone {
-                    row.tombstone = true;
-                    changed_out[0] = changed_out[0] + 1u32;
-                }
-                prefix_row_slot = prefix_row_slot + 1u32;
-            }
+            changed_out[0] = end_slot_exclusive - start_slot;
             return;
         }
     }
+    try db_collection_prepare_row_writes(collection);
     collection.prefix_delete_only = false;
     collection.may_have_tombstones = true;
     collection.primary_index_ready = false;
@@ -4577,7 +4656,7 @@ fn db_txn_try_apply_doc_id_range_delete(txn: &Txn, plan: &QueryPlan, collection_
     const rows_per_page_u32: u32 = db_collection_rows_per_page(collection) as u32;
     while row_slot < end_slot_exclusive {
         const row: &DbStoredRow = &collection.rows[row_slot as usize];
-        if row.present && !row.tombstone {
+        if db_row_visible(collection, row) {
             row.tombstone = true;
             const page_offset: u32 = row_slot / rows_per_page_u32;
             if page_offset != last_dirty_page {
@@ -4605,7 +4684,7 @@ fn db_txn_stage_update_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_s
         var row_slot: u32 = 0u32;
         while row_slot < collection.row_count {
             const row: &DbStoredRow = &collection.rows[row_slot as usize];
-            if row.present && !row.tombstone {
+            if db_row_visible(collection, row) {
                 if try db_txn_apply_update_row_in_collection(txn, plan, collection, row_slot, program, value_expr) {
                     changed = changed + 1u32;
                 }
@@ -4652,7 +4731,7 @@ fn db_txn_stage_update_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_s
             var row_slot: u32 = 0u32;
             while row_slot < collection.row_count {
                 const row: &DbStoredRow = &collection.rows[row_slot as usize];
-                if row.present && !row.tombstone {
+                if db_row_visible(collection, row) {
                     if try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr) {
                         if try db_txn_apply_update_row_in_collection(txn, plan, collection, row_slot, program, value_expr) {
                             changed = changed + 1u32;
@@ -4711,7 +4790,7 @@ fn db_txn_stage_delete_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_s
         var row_slot: u32 = 0u32;
         while row_slot < collection.row_count {
             const row: &DbStoredRow = &collection.rows[row_slot as usize];
-            if row.present && !row.tombstone {
+            if db_row_visible(collection, row) {
                 if try db_txn_apply_delete_row_in_collection(collection, row_slot) {
                     changed = changed + 1u32;
                 }
@@ -4758,7 +4837,7 @@ fn db_txn_stage_delete_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_s
             var row_slot: u32 = 0u32;
             while row_slot < collection.row_count {
                 const row: &DbStoredRow = &collection.rows[row_slot as usize];
-                if row.present && !row.tombstone {
+                if db_row_visible(collection, row) {
                     if try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr) {
                         if try db_txn_apply_delete_row_in_collection(collection, row_slot) {
                             changed = changed + 1u32;
@@ -5335,7 +5414,7 @@ fn db_plan_collect_limit_lazy_seq_scan(
         }
         while row_idx < row_end && matched < limit_u16 {
             const row: &DbStoredRow = &collection.rows[row_idx as usize];
-            if row.present && !row.tombstone {
+            if db_row_visible(collection, row) {
                 var include_row: bool = true;
                 if filter_expr >= 0i16 {
                     const rowref: RowRef = try db_collection_row_ref(db, view_slot, collection_slot, row_idx);
@@ -5406,7 +5485,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
         var i: u32 = 0u32;
         while i < collection.row_count {
             const row: &DbStoredRow = &collection.rows[i as usize];
-            if row.present && !row.tombstone {
+            if db_row_visible(collection, row) {
                 if out_count as usize >= out_rows.len {
                     return error.DbRowFull;
                 }
@@ -5432,8 +5511,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
         }
         if direct_idx < collection.row_count && direct_idx < collection.row_capacity {
             const row: &DbStoredRow = &collection.rows[direct_idx as usize];
-            if row.present &&
-                !row.tombstone &&
+            if db_row_visible(collection, row) &&
                 row.doc_id == node.lookup_doc_id &&
                 row.record_ptr.page_id == ptr.page_id &&
                 row.record_ptr.slot_id == ptr.slot_id {
@@ -5445,7 +5523,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
         var i: u32 = 0u32;
         while i < collection.row_count {
             const row: &DbStoredRow = &collection.rows[i as usize];
-            if row.present && !row.tombstone && row.record_ptr.page_id == ptr.page_id && row.record_ptr.slot_id == ptr.slot_id {
+            if db_row_visible(collection, row) && row.record_ptr.page_id == ptr.page_id && row.record_ptr.slot_id == ptr.slot_id {
                 out_rows.ptr[0usize] = i;
                 count_out[0] = 1u16;
                 return;
@@ -5492,7 +5570,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
                     break;
                 }
                 const row: &DbStoredRow = &collection.rows[row_idx as usize];
-                if row.present && !row.tombstone {
+                if db_row_visible(collection, row) {
                     out_rows.ptr[limited_count as usize] = row_idx;
                     limited_count = limited_count + 1u16;
                 }
@@ -5511,7 +5589,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
                         break;
                     }
                     const row: &DbStoredRow = &collection.rows[row_idx as usize];
-                    if row.present && !row.tombstone {
+                    if db_row_visible(collection, row) {
                         const rowref: RowRef = try db_collection_row_ref(db, view_slot, collection_slot, row_idx);
                         if try db_eval_predicate(db, &plan.bound, &rowref, child_node.filter_expr) {
                             out_rows.ptr[limited_count as usize] = row_idx;
@@ -5574,7 +5652,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
             var row_idx: u32 = 0u32;
             while row_idx < collection.row_count {
                 const row: &DbStoredRow = &collection.rows[row_idx as usize];
-                if row.present && !row.tombstone {
+                if db_row_visible(collection, row) {
                     const rowref: RowRef = try db_collection_row_ref(db, view_slot, collection_slot, row_idx);
                     if try db_eval_predicate(db, &plan.bound, &rowref, node.filter_expr) {
                         if out_count as usize >= out_rows.len {

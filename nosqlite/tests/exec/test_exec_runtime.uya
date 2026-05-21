@@ -49,6 +49,7 @@ const TEST_STEM_WRITE: *const byte = "/tmp/nosqlite_exec_phase10" as *const byte
 const TEST_STEM_LAZY_LIMIT: *const byte = "/tmp/nosqlite_exec_phase10_lazy_limit" as *const byte;
 const TEST_STEM_LARGE_WRITE: *const byte = "/tmp/nosqlite_exec_phase10_large_write" as *const byte;
 const TEST_STEM_LARGE_DELETE: *const byte = "/tmp/nosqlite_exec_phase10_large_delete" as *const byte;
+const TEST_STEM_LARGE_DELETE_ALL: *const byte = "/tmp/nosqlite_exec_phase10_large_delete_all" as *const byte;
 
 var g_exec_result_deallocs: i32 = 0;
 
@@ -900,6 +901,30 @@ fn run_update_delete_cover_more_than_64_rows() i32 {
         return 506;
     }) != 81u64 {
         return 507;
+    }
+
+    var delete_all_db: DbHandle = DbHandle{};
+    _ = prepare_bulk_users_db(&delete_all_db, TEST_STEM_LARGE_DELETE_ALL, 96u64) catch {
+        return 508;
+    };
+    _ = db_exec(&delete_all_db, "DELETE FROM users WHERE _id >= 1 AND _id < 97;") catch {
+        return 509;
+    };
+    const empty_now: QueryResult = db_query(&delete_all_db, "SELECT _id FROM users LIMIT 1;") catch {
+        return 510;
+    };
+    if empty_now.row_count != 0u32 {
+        return 511;
+    }
+    var reopened_delete_all_db: DbHandle = DbHandle{};
+    _ = db_test_open_at_stem(&reopened_delete_all_db, TEST_STEM_LARGE_DELETE_ALL) catch {
+        return 512;
+    };
+    const empty_after_reopen: QueryResult = db_query(&reopened_delete_all_db, "SELECT _id FROM users LIMIT 1;") catch {
+        return 513;
+    };
+    if empty_after_reopen.row_count != 0u32 {
+        return 514;
     }
 
     var reused_update_db: DbHandle = DbHandle{};
