@@ -3150,12 +3150,257 @@ fn exec_compare_doc_id_literal(doc_id: u64, literal: &BoundLiteral) !i32 {
     return error.DbInvalidExpr;
 }
 
+struct DbDocIdRangeMatch {
+    matched: bool,
+    unsat: bool,
+    has_lower: bool,
+    lower_doc_id: u64,
+    has_upper: bool,
+    upper_doc_id: u64,
+}
+
+fn db_doc_id_range_no_match() DbDocIdRangeMatch {
+    return DbDocIdRangeMatch{
+        matched: false,
+        unsat: false,
+        has_lower: false,
+        lower_doc_id: 0u64,
+        has_upper: false,
+        upper_doc_id: 0u64,
+    };
+}
+
+fn db_doc_id_range_update_lower(range: &DbDocIdRangeMatch, lower_doc_id: u64) void {
+    if range == null {
+        return;
+    }
+    if !range.has_lower || lower_doc_id > range.lower_doc_id {
+        range.has_lower = true;
+        range.lower_doc_id = lower_doc_id;
+    }
+    if range.has_upper && range.lower_doc_id > range.upper_doc_id {
+        range.unsat = true;
+    }
+}
+
+fn db_doc_id_range_update_upper(range: &DbDocIdRangeMatch, upper_doc_id: u64) void {
+    if range == null {
+        return;
+    }
+    if !range.has_upper || upper_doc_id < range.upper_doc_id {
+        range.has_upper = true;
+        range.upper_doc_id = upper_doc_id;
+    }
+    if range.has_lower && range.lower_doc_id > range.upper_doc_id {
+        range.unsat = true;
+    }
+}
+
+fn db_doc_id_literal_bound(literal: &BoundLiteral, negative_out: &bool, value_out: &u64) bool {
+    if literal == null || negative_out == null || value_out == null {
+        return false;
+    }
+    negative_out[0] = false;
+    value_out[0] = 0u64;
+    if literal.kind == BoundLiteralKind.UINT64 {
+        value_out[0] = literal.u64_value;
+        return true;
+    }
+    if literal.kind == BoundLiteralKind.INT64 {
+        if literal.i64_value < 0i64 {
+            negative_out[0] = true;
+            return true;
+        }
+        value_out[0] = (literal.i64_value as! u64).value;
+        return true;
+    }
+    return false;
+}
+
+fn db_doc_id_range_apply_comparison(range: &DbDocIdRangeMatch, op: SqlBinaryOp, literal: &BoundLiteral) bool {
+    if range == null || literal == null {
+        return false;
+    }
+    var negative: bool = false;
+    var value: u64 = 0u64;
+    if !db_doc_id_literal_bound(literal, &negative, &value) {
+        return false;
+    }
+    if negative {
+        if op == SqlBinaryOp.EQ || op == SqlBinaryOp.LT || op == SqlBinaryOp.LE {
+            range.unsat = true;
+            return true;
+        }
+        if op == SqlBinaryOp.GT || op == SqlBinaryOp.GE {
+            return true;
+        }
+        return false;
+    }
+    if op == SqlBinaryOp.EQ {
+        if value == 0u64 {
+            range.unsat = true;
+            return true;
+        }
+        db_doc_id_range_update_lower(range, value);
+        db_doc_id_range_update_upper(range, value);
+        return true;
+    }
+    if op == SqlBinaryOp.GE {
+        if value <= 1u64 {
+            db_doc_id_range_update_lower(range, 1u64);
+        } else {
+            db_doc_id_range_update_lower(range, value);
+        }
+        return true;
+    }
+    if op == SqlBinaryOp.GT {
+        if value == 18446744073709551615u64 {
+            range.unsat = true;
+            return true;
+        }
+        if value == 0u64 {
+            db_doc_id_range_update_lower(range, 1u64);
+        } else {
+            db_doc_id_range_update_lower(range, value + 1u64);
+        }
+        return true;
+    }
+    if op == SqlBinaryOp.LE {
+        if value == 0u64 {
+            range.unsat = true;
+            return true;
+        }
+        db_doc_id_range_update_upper(range, value);
+        return true;
+    }
+    if op == SqlBinaryOp.LT {
+        if value <= 1u64 {
+            range.unsat = true;
+            return true;
+        }
+        db_doc_id_range_update_upper(range, value - 1u64);
+        return true;
+    }
+    return false;
+}
+
+fn db_doc_id_range_accumulate_expr(bound: &BoundSelect, expr_index: i16, range: &DbDocIdRangeMatch) !bool {
+    if bound == null || range == null || expr_index < 0i16 {
+        return false;
+    }
+    const expr: &BoundExprNode = try bound_expr_node(bound, expr_index);
+    if expr.kind != BoundExprKind.BINARY {
+        return false;
+    }
+    if expr.binary_op == SqlBinaryOp.AND {
+        const left_ok: bool = try db_doc_id_range_accumulate_expr(bound, expr.left, range);
+        if !left_ok {
+            return false;
+        }
+        return try db_doc_id_range_accumulate_expr(bound, expr.right, range);
+    }
+    const left: &BoundExprNode = try bound_expr_node(bound, expr.left);
+    const right: &BoundExprNode = try bound_expr_node(bound, expr.right);
+    if left.kind == BoundExprKind.SYSTEM_ID && right.kind == BoundExprKind.LITERAL {
+        return db_doc_id_range_apply_comparison(range, expr.binary_op, &right.literal);
+    }
+    if right.kind == BoundExprKind.SYSTEM_ID && left.kind == BoundExprKind.LITERAL {
+        if expr.binary_op == SqlBinaryOp.LT {
+            return db_doc_id_range_apply_comparison(range, SqlBinaryOp.GT, &left.literal);
+        }
+        if expr.binary_op == SqlBinaryOp.LE {
+            return db_doc_id_range_apply_comparison(range, SqlBinaryOp.GE, &left.literal);
+        }
+        if expr.binary_op == SqlBinaryOp.GT {
+            return db_doc_id_range_apply_comparison(range, SqlBinaryOp.LT, &left.literal);
+        }
+        if expr.binary_op == SqlBinaryOp.GE {
+            return db_doc_id_range_apply_comparison(range, SqlBinaryOp.LE, &left.literal);
+        }
+        return db_doc_id_range_apply_comparison(range, expr.binary_op, &left.literal);
+    }
+    return false;
+}
+
+fn db_doc_id_range_extract(bound: &BoundSelect, expr_index: i16) !DbDocIdRangeMatch {
+    if bound == null || expr_index < 0i16 {
+        return db_doc_id_range_no_match();
+    }
+    var range: DbDocIdRangeMatch = db_doc_id_range_no_match();
+    if !(try db_doc_id_range_accumulate_expr(bound, expr_index, &range)) {
+        return db_doc_id_range_no_match();
+    }
+    range.matched = true;
+    if !range.has_lower {
+        db_doc_id_range_update_lower(&range, 1u64);
+    }
+    return range;
+}
+
+fn db_collection_has_dense_doc_id_slots(collection: &DbCollection) bool {
+    if collection == null {
+        return false;
+    }
+    return collection.next_doc_id == collection.row_count as u64 + 1u64;
+}
+
+fn db_doc_id_range_dense_slot_window(collection: &DbCollection, range: &DbDocIdRangeMatch, matched_out: &bool, start_slot_out: &u32, end_slot_exclusive_out: &u32) !void {
+    if matched_out != null {
+        matched_out[0] = false;
+    }
+    if start_slot_out != null {
+        start_slot_out[0] = 0u32;
+    }
+    if end_slot_exclusive_out != null {
+        end_slot_exclusive_out[0] = 0u32;
+    }
+    if collection == null || range == null || matched_out == null || start_slot_out == null || end_slot_exclusive_out == null {
+        return;
+    }
+    if !range.matched || !db_collection_has_dense_doc_id_slots(collection) {
+        return;
+    }
+    matched_out[0] = true;
+    if range.unsat || collection.next_doc_id <= 1u64 {
+        return;
+    }
+    var start_doc_id: u64 = 1u64;
+    if range.has_lower && range.lower_doc_id > start_doc_id {
+        start_doc_id = range.lower_doc_id;
+    }
+    var end_doc_id_exclusive: u64 = collection.next_doc_id;
+    if range.has_upper && range.upper_doc_id != 18446744073709551615u64 {
+        const candidate_end: u64 = range.upper_doc_id + 1u64;
+        if candidate_end < end_doc_id_exclusive {
+            end_doc_id_exclusive = candidate_end;
+        }
+    }
+    if start_doc_id >= end_doc_id_exclusive {
+        return;
+    }
+    start_slot_out[0] = ((start_doc_id - 1u64) as! u32).value;
+    end_slot_exclusive_out[0] = ((end_doc_id_exclusive - 1u64) as! u32).value;
+}
+
 fn exec_compare_values(left: &ExecValue, right: &ExecValue) !i32 {
     var left_buf: [byte: 4096] = [];
     var right_buf: [byte: 4096] = [];
     const left_len: usize = try exec_value_encode_doc(left, left_buf[0: 4096]);
     const right_len: usize = try exec_value_encode_doc(right, right_buf[0: 4096]);
     return try doc_compare_scalar_nodes(left_buf[0: left_len], right_buf[0: right_len]);
+}
+
+fn db_bound_literal_encode_doc(bound: &BoundSelect, expr_index: i16, out: &[byte], len_out: &usize) !bool {
+    if bound == null || out.ptr == null || len_out == null || expr_index < 0i16 {
+        return false;
+    }
+    const expr: &BoundExprNode = try bound_expr_node(bound, expr_index);
+    if expr.kind != BoundExprKind.LITERAL {
+        return false;
+    }
+    const value: ExecValue = try exec_value_from_literal(&expr.literal);
+    len_out[0] = try exec_value_encode_doc(&value, out);
+    return true;
 }
 
 fn db_eval_value(db: &DbHandle, bound: &BoundSelect, row: &RowRef, expr_index: i16) !ExecValue {
@@ -3727,6 +3972,61 @@ fn db_json_copy_field_name(arena: &Arena, field: &[const byte]) !JsonStrView {
     return try db_arena_copy_bytes(arena, field);
 }
 
+fn db_bytes_equal(a: &[byte], b: &[const byte]) bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0usize;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+fn db_try_update_row_top_level_field_encoded(collection: &DbCollection, row: &DbStoredRow, field: &[const byte], replacement_blob: &[const byte]) !bool {
+    if collection == null || row == null || field.ptr == null || replacement_blob.ptr == null {
+        return false;
+    }
+    const doc_blob: &[byte] = try db_row_blob(row);
+    if (try doc_node_tag(doc_blob)) != DocNodeTag.OBJECT {
+        return false;
+    }
+    const count: u32 = try doc_object_count(doc_blob);
+    var i: u32 = 0u32;
+    while i < count {
+        const key: &[byte] = try doc_object_key_at(doc_blob, i);
+        if db_bytes_equal(key, field) {
+            const old_value: &[byte] = try doc_object_value_at(doc_blob, i);
+            if old_value.len != replacement_blob.len {
+                return false;
+            }
+            if db_bytes_equal(old_value, replacement_blob) {
+                return false;
+            }
+            const blob_len: usize = doc_blob.len;
+            const new_blob: &byte = try db_collection_blob_alloc(collection, blob_len);
+            _ = mem_copy(new_blob, doc_blob.ptr, blob_len);
+            const root_addr: usize = @usize_from_ptr(doc_blob.ptr as &void);
+            const value_addr: usize = @usize_from_ptr(old_value.ptr as &void);
+            if value_addr < root_addr {
+                return error.DbRowTooLarge;
+            }
+            const value_off: usize = value_addr - root_addr;
+            _ = mem_copy(&new_blob[value_off], replacement_blob.ptr, replacement_blob.len);
+            row.doc_blob = new_blob;
+            row.doc_len = (blob_len as! u16).value;
+            row.blob_loaded = true;
+            row.doc_blob_owned = false;
+            return true;
+        }
+        i = i + 1u32;
+    }
+    return false;
+}
+
 fn db_json_set_path(arena: &Arena, value: &JsonValue, program: &PathProgram, step_index: usize, replacement: &JsonValue) !JsonValue {
     if step_index >= program.step_count as usize {
         return replacement[0];
@@ -3824,16 +4124,41 @@ fn db_json_set_path(arena: &Arena, value: &JsonValue, program: &PathProgram, ste
     }
 }
 
-fn db_update_row_doc_at_path(collection: &DbCollection, row: &DbStoredRow, program: &PathProgram, replacement: &ExecValue) !void {
+fn db_try_update_row_doc_at_path_fast(collection: &DbCollection, row: &DbStoredRow, program: &PathProgram, replacement: &ExecValue) !bool {
+    if collection == null || row == null || program == null || replacement == null {
+        return false;
+    }
+    if program.step_count != 1u16 {
+        return false;
+    }
+    const step: PathStep = program.steps[0usize];
+    if step.kind != PathStepKind.FIELD {
+        return false;
+    }
+    var replacement_buf: [byte: DB_DOC_BLOB_MAX] = [];
+    const replacement_len: usize = try exec_value_encode_doc(replacement, replacement_buf[0: DB_DOC_BLOB_MAX]);
+    return try db_try_update_row_top_level_field_encoded(collection, row, step.field[0: step.field_len as usize], replacement_buf[0: replacement_len]);
+}
+
+fn db_update_row_doc_at_path(collection: &DbCollection, row: &DbStoredRow, program: &PathProgram, replacement: &ExecValue) !bool {
+    const fast_updated: bool = try db_try_update_row_doc_at_path_fast(collection, row, program, replacement);
+    if fast_updated {
+        return true;
+    }
     var scratch: [byte: DB_TXN_DOC_SCRATCH_MAX] = [];
     var arena: Arena = Arena{ buffer: null, size: 0, used: 0 };
     arena_init(&arena, &scratch[0], DB_TXN_DOC_SCRATCH_MAX);
+    const old_blob: &[byte] = try db_row_blob(row);
     const root_json: JsonValue = try db_doc_node_to_json_value(&arena, try db_row_blob(row));
     const replacement_json: JsonValue = try db_exec_value_to_json_value(&arena, replacement);
     const updated_json: JsonValue = try db_json_set_path(&arena, &root_json, program, 0usize, &replacement_json);
     var encoded_buf: [byte: DB_DOC_BLOB_MAX] = [];
     const encoded_len: usize = try doc_encode_json_value(&updated_json, encoded_buf[0: DB_DOC_BLOB_MAX]);
+    if db_bytes_equal(old_blob, encoded_buf[0: encoded_len]) {
+        return false;
+    }
     try db_collection_row_set_blob_copy(collection, row, encoded_buf[0: encoded_len]);
+    return true;
 }
 
 fn db_plan_primary_lookup_row_slot(db: &DbHandle, view_slot: u16, collection_slot: u16, lookup_doc_id: u64, found_out: &bool, row_slot_out: &u32) !void {
@@ -3890,7 +4215,11 @@ fn db_plan_primary_lookup_row_slot(db: &DbHandle, view_slot: u16, collection_slo
     var i: u32 = 0u32;
     while i < collection.row_count {
         const row: &DbStoredRow = &collection.rows[i as usize];
-        if row.present && !row.tombstone && row.record_ptr.page_id == ptr.page_id && row.record_ptr.slot_id == ptr.slot_id {
+        if row.present &&
+            !row.tombstone &&
+            row.doc_id == lookup_doc_id &&
+            row.record_ptr.page_id == ptr.page_id &&
+            row.record_ptr.slot_id == ptr.slot_id {
             found_out[0] = true;
             row_slot_out[0] = i;
             return;
@@ -3909,22 +4238,59 @@ fn db_row_matches_filter_expr(db: &DbHandle, plan: &QueryPlan, view_slot: u16, c
     return try db_eval_predicate(db, &plan.bound, &rowref, filter_expr);
 }
 
-fn db_txn_apply_update_row(txn: &Txn, plan: &QueryPlan, collection_slot: u16, row_slot: u32, program: &PathProgram, value_expr: i16) !bool {
-    if txn == null || txn.db == null {
+fn db_txn_apply_update_row_in_collection_impl(txn: &Txn, plan: &QueryPlan, collection: &DbCollection, row_slot: u32, program: &PathProgram, value_expr: i16, mark_dirty: bool) !bool {
+    if txn == null || txn.db == null || collection == null {
         return error.DbHandleInvalid;
     }
-    const rowref: RowRef = try db_collection_row_ref(txn.db, txn.view_slot, collection_slot, row_slot);
-    const new_value: ExecValue = try db_eval_value(txn.db, &plan.bound, &rowref, value_expr);
-    const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
-    const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
     const row: &DbStoredRow = try db_row_at(collection, row_slot);
     if !row.present || row.tombstone {
         return false;
     }
-    try db_update_row_doc_at_path(collection, row, program, &new_value);
+    if !row.blob_loaded {
+        try db_ensure_row_blob_loaded(txn.db, collection, row);
+    }
+    const rowref: RowRef = RowRef{
+        doc_id: row.doc_id,
+        record_ptr: row.record_ptr,
+        doc_blob: try db_row_blob(row),
+    };
+    const new_value: ExecValue = try db_eval_value(txn.db, &plan.bound, &rowref, value_expr);
+    if !(try db_update_row_doc_at_path(collection, row, program, &new_value)) {
+        return false;
+    }
     if db_collection_update_max_doc_len(collection, row.doc_len) {
         try db_collection_refresh_packed_layout(collection, db_effective_page_size(txn.db));
     }
+    if mark_dirty {
+        try db_collection_mark_row_dirty(collection, row_slot);
+    }
+    return true;
+}
+
+fn db_txn_apply_update_row_in_collection(txn: &Txn, plan: &QueryPlan, collection: &DbCollection, row_slot: u32, program: &PathProgram, value_expr: i16) !bool {
+    return try db_txn_apply_update_row_in_collection_impl(txn, plan, collection, row_slot, program, value_expr, true);
+}
+
+fn db_txn_apply_update_row(txn: &Txn, plan: &QueryPlan, collection_slot: u16, row_slot: u32, program: &PathProgram, value_expr: i16) !bool {
+    if txn == null || txn.db == null {
+        return error.DbHandleInvalid;
+    }
+    const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+    const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
+    return try db_txn_apply_update_row_in_collection(txn, plan, collection, row_slot, program, value_expr);
+}
+
+fn db_txn_apply_delete_row_in_collection(collection: &DbCollection, row_slot: u32) !bool {
+    if collection == null {
+        return error.DbHandleInvalid;
+    }
+    const row: &DbStoredRow = try db_row_at(collection, row_slot);
+    if !row.present || row.tombstone {
+        return false;
+    }
+    row.tombstone = true;
+    collection.may_have_tombstones = true;
+    collection.primary_index_ready = false;
     try db_collection_mark_row_dirty(collection, row_slot);
     return true;
 }
@@ -3935,14 +4301,109 @@ fn db_txn_apply_delete_row(txn: &Txn, collection_slot: u16, row_slot: u32) !bool
     }
     const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
     const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
-    const row: &DbStoredRow = try db_row_at(collection, row_slot);
-    if !row.present || row.tombstone {
-        return false;
+    return try db_txn_apply_delete_row_in_collection(collection, row_slot);
+}
+
+fn db_txn_try_apply_doc_id_range_update(txn: &Txn, plan: &QueryPlan, collection_slot: u16, program: &PathProgram, value_expr: i16, matched_out: &bool, changed_out: &u32) !void {
+    if matched_out != null {
+        matched_out[0] = false;
     }
-    row.tombstone = true;
+    if changed_out != null {
+        changed_out[0] = 0u32;
+    }
+    if txn == null || txn.db == null || plan == null || matched_out == null || changed_out == null {
+        return error.DbHandleInvalid;
+    }
+    const range: DbDocIdRangeMatch = try db_doc_id_range_extract(&plan.bound, plan.bound.where_expr);
+    if !range.matched {
+        return;
+    }
+    const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+    const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
+    var slot_matched: bool = false;
+    var start_slot: u32 = 0u32;
+    var end_slot_exclusive: u32 = 0u32;
+    try db_doc_id_range_dense_slot_window(collection, &range, &slot_matched, &start_slot, &end_slot_exclusive);
+    if !slot_matched {
+        return;
+    }
+    matched_out[0] = true;
+    var replacement_buf: [byte: DB_DOC_BLOB_MAX] = [];
+    var replacement_len: usize = 0usize;
+    var literal_fast_path: bool = false;
+    if program.step_count == 1u16 && program.steps[0usize].kind == PathStepKind.FIELD {
+        literal_fast_path = try db_bound_literal_encode_doc(&plan.bound, value_expr, replacement_buf[0: DB_DOC_BLOB_MAX], &replacement_len);
+    }
+    const field: &[byte] = program.steps[0usize].field[0: program.steps[0usize].field_len as usize];
+    var last_dirty_page: u32 = 4294967295u32;
+    var row_slot: u32 = start_slot;
+    while row_slot < end_slot_exclusive {
+        var updated: bool = false;
+        if literal_fast_path {
+            const row: &DbStoredRow = &collection.rows[row_slot as usize];
+            if row.present && !row.tombstone {
+                if !row.blob_loaded {
+                    try db_ensure_row_blob_loaded(txn.db, collection, row);
+                }
+                updated = try db_try_update_row_top_level_field_encoded(collection, row, field, replacement_buf[0: replacement_len]);
+            }
+        }
+        if !updated {
+            updated = try db_txn_apply_update_row_in_collection_impl(txn, plan, collection, row_slot, program, value_expr, false);
+        }
+        if updated {
+            const page_offset: u32 = row_slot / (db_collection_rows_per_page(collection) as u32);
+            if page_offset != last_dirty_page {
+                try db_collection_mark_page_dirty(collection, page_offset);
+                last_dirty_page = page_offset;
+            }
+            changed_out[0] = changed_out[0] + 1u32;
+        }
+        row_slot = row_slot + 1u32;
+    }
+}
+
+fn db_txn_try_apply_doc_id_range_delete(txn: &Txn, plan: &QueryPlan, collection_slot: u16, matched_out: &bool, changed_out: &u32) !void {
+    if matched_out != null {
+        matched_out[0] = false;
+    }
+    if changed_out != null {
+        changed_out[0] = 0u32;
+    }
+    if txn == null || txn.db == null || plan == null || matched_out == null || changed_out == null {
+        return error.DbHandleInvalid;
+    }
+    const range: DbDocIdRangeMatch = try db_doc_id_range_extract(&plan.bound, plan.bound.where_expr);
+    if !range.matched {
+        return;
+    }
+    const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+    const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
+    var slot_matched: bool = false;
+    var start_slot: u32 = 0u32;
+    var end_slot_exclusive: u32 = 0u32;
+    try db_doc_id_range_dense_slot_window(collection, &range, &slot_matched, &start_slot, &end_slot_exclusive);
+    if !slot_matched {
+        return;
+    }
+    matched_out[0] = true;
     collection.may_have_tombstones = true;
-    try db_collection_mark_row_dirty(collection, row_slot);
-    return true;
+    collection.primary_index_ready = false;
+    var last_dirty_page: u32 = 4294967295u32;
+    var row_slot: u32 = start_slot;
+    while row_slot < end_slot_exclusive {
+        const row: &DbStoredRow = &collection.rows[row_slot as usize];
+        if row.present && !row.tombstone {
+            row.tombstone = true;
+            const page_offset: u32 = row_slot / (db_collection_rows_per_page(collection) as u32);
+            if page_offset != last_dirty_page {
+                try db_collection_mark_page_dirty(collection, page_offset);
+                last_dirty_page = page_offset;
+            }
+            changed_out[0] = changed_out[0] + 1u32;
+        }
+        row_slot = row_slot + 1u32;
+    }
 }
 
 fn db_txn_stage_update_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_slot: u16, program: &PathProgram, value_expr: i16) !u32 {
@@ -3956,7 +4417,7 @@ fn db_txn_stage_update_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_s
         while row_slot < collection.row_count {
             const row: &DbStoredRow = &collection.rows[row_slot as usize];
             if row.present && !row.tombstone {
-                if try db_txn_apply_update_row(txn, plan, collection_slot, row_slot, program, value_expr) {
+                if try db_txn_apply_update_row_in_collection(txn, plan, collection, row_slot, program, value_expr) {
                     changed = changed + 1u32;
                 }
             }
@@ -4004,7 +4465,7 @@ fn db_txn_stage_update_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_s
                 const row: &DbStoredRow = &collection.rows[row_slot as usize];
                 if row.present && !row.tombstone {
                     if try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr) {
-                        if try db_txn_apply_update_row(txn, plan, collection_slot, row_slot, program, value_expr) {
+                        if try db_txn_apply_update_row_in_collection(txn, plan, collection, row_slot, program, value_expr) {
                             changed = changed + 1u32;
                         }
                     }
@@ -4062,7 +4523,7 @@ fn db_txn_stage_delete_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_s
         while row_slot < collection.row_count {
             const row: &DbStoredRow = &collection.rows[row_slot as usize];
             if row.present && !row.tombstone {
-                if try db_txn_apply_delete_row(txn, collection_slot, row_slot) {
+                if try db_txn_apply_delete_row_in_collection(collection, row_slot) {
                     changed = changed + 1u32;
                 }
             }
@@ -4110,7 +4571,7 @@ fn db_txn_stage_delete_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_s
                 const row: &DbStoredRow = &collection.rows[row_slot as usize];
                 if row.present && !row.tombstone {
                     if try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr) {
-                        if try db_txn_apply_delete_row(txn, collection_slot, row_slot) {
+                        if try db_txn_apply_delete_row_in_collection(collection, row_slot) {
                             changed = changed + 1u32;
                         }
                     }
@@ -4158,6 +4619,7 @@ fn db_txn_stage_delete_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_s
 }
 
 fn db_txn_stage_update_stmt(txn: &Txn, stmt: &SqlStmt) !void {
+    const collection_name: &[const byte] = try db_identifier_bytes(&stmt.update_stmt.collection_name);
     const query_stmt: SqlStmt = db_make_select_stmt_from_stmt(
         stmt,
         &stmt.update_stmt.collection_name,
@@ -4166,18 +4628,30 @@ fn db_txn_stage_update_stmt(txn: &Txn, stmt: &SqlStmt) !void {
         stmt.update_stmt.value_expr,
         1u16,
     );
+    const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(txn.db, txn.view_slot, collection_name);
+    const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+    const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
     var plan: QueryPlan = QueryPlan{};
-    try bind_select_at_stem_into(db_stem_ptr(txn.db), &query_stmt, &plan.bound);
+    if collection.secondary_index_count == 0u16 {
+        try bind_select_with_collection_metadata_into(&query_stmt, collection.collection_id, collection.primary_root_page, &plan.bound);
+    } else {
+        try bind_select_at_stem_into(db_stem_ptr(txn.db), &query_stmt, &plan.bound);
+    }
     try plan_select_into(&plan.bound, &plan);
-    const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(txn.db, txn.view_slot, try db_identifier_bytes(&stmt.update_stmt.collection_name));
     const program: PathProgram = try path_program_compile(sql_path_slice(&stmt.update_stmt.target_path));
-    const changed: u32 = try db_txn_stage_update_stmt_apply_root(txn, &plan, collection_slot, &program, plan.bound.projection_exprs[0]);
+    var fast_matched: bool = false;
+    var changed: u32 = 0u32;
+    try db_txn_try_apply_doc_id_range_update(txn, &plan, collection_slot, &program, plan.bound.projection_exprs[0], &fast_matched, &changed);
+    if !fast_matched {
+        changed = try db_txn_stage_update_stmt_apply_root(txn, &plan, collection_slot, &program, plan.bound.projection_exprs[0]);
+    }
     if changed > 0u32 {
         txn.has_writes = true;
     }
 }
 
 fn db_txn_stage_delete_stmt(txn: &Txn, stmt: &SqlStmt) !void {
+    const collection_name: &[const byte] = try db_identifier_bytes(&stmt.delete_stmt.collection_name);
     const query_stmt: SqlStmt = db_make_select_stmt_from_stmt(
         stmt,
         &stmt.delete_stmt.collection_name,
@@ -4186,11 +4660,22 @@ fn db_txn_stage_delete_stmt(txn: &Txn, stmt: &SqlStmt) !void {
         -1,
         0u16,
     );
+    const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(txn.db, txn.view_slot, collection_name);
+    const state: &CommitViewState = try db_commit_view_state(txn.db, txn.view_slot);
+    const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
     var plan: QueryPlan = QueryPlan{};
-    try bind_select_at_stem_into(db_stem_ptr(txn.db), &query_stmt, &plan.bound);
+    if collection.secondary_index_count == 0u16 {
+        try bind_select_with_collection_metadata_into(&query_stmt, collection.collection_id, collection.primary_root_page, &plan.bound);
+    } else {
+        try bind_select_at_stem_into(db_stem_ptr(txn.db), &query_stmt, &plan.bound);
+    }
     try plan_select_into(&plan.bound, &plan);
-    const collection_slot: u16 = try db_find_collection_slot_by_name_in_view(txn.db, txn.view_slot, try db_identifier_bytes(&stmt.delete_stmt.collection_name));
-    const changed: u32 = try db_txn_stage_delete_stmt_apply_root(txn, &plan, collection_slot);
+    var fast_matched: bool = false;
+    var changed: u32 = 0u32;
+    try db_txn_try_apply_doc_id_range_delete(txn, &plan, collection_slot, &fast_matched, &changed);
+    if !fast_matched {
+        changed = try db_txn_stage_delete_stmt_apply_root(txn, &plan, collection_slot);
+    }
     if changed > 0u32 {
         txn.has_writes = true;
     }

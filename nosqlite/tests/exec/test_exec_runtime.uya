@@ -877,6 +877,92 @@ fn run_update_delete_cover_more_than_64_rows() i32 {
     }) != 81u64 {
         return 245;
     }
+
+    var reused_update_db: DbHandle = DbHandle{};
+    _ = prepare_db(&reused_update_db) catch {
+        return 246;
+    };
+    _ = db_exec(&reused_update_db, "DELETE FROM users WHERE _id = 2;") catch {
+        return 247;
+    };
+    _ = db_exec(&reused_update_db, "INSERT INTO users JSON '{\"name\":\"eve\",\"age\":20,\"active\":true}';") catch {
+        return 248;
+    };
+    _ = db_exec(&reused_update_db, "UPDATE users SET $.active = FALSE WHERE _id >= 4 AND _id < 5;") catch {
+        return 249;
+    };
+    const updated_reused: QueryResult = db_query(&reused_update_db, "SELECT _id, $.active FROM users WHERE _id = 4 LIMIT 1;") catch {
+        return 250;
+    };
+    if updated_reused.row_count != 1u32 {
+        return 251;
+    }
+    const updated_reused_row: &OwnedRow = query_result_row(&updated_reused, 0u32) catch {
+        return 252;
+    };
+    if (owned_row_cell_u64(updated_reused_row, 0u16) catch {
+        return 253;
+    }) != 4u64 {
+        return 254;
+    }
+    if (owned_row_cell_bool(updated_reused_row, 1u16) catch {
+        return 255;
+    }) {
+        return 256;
+    }
+    const untouched_reused: QueryResult = db_query(&reused_update_db, "SELECT _id, $.active FROM users WHERE _id = 3 LIMIT 1;") catch {
+        return 257;
+    };
+    if untouched_reused.row_count != 1u32 {
+        return 258;
+    }
+    const untouched_reused_row: &OwnedRow = query_result_row(&untouched_reused, 0u32) catch {
+        return 259;
+    };
+    if (owned_row_cell_u64(untouched_reused_row, 0u16) catch {
+        return 260;
+    }) != 3u64 {
+        return 261;
+    }
+    if !(owned_row_cell_bool(untouched_reused_row, 1u16) catch {
+        return 262;
+    }) {
+        return 263;
+    }
+
+    var reused_delete_db: DbHandle = DbHandle{};
+    _ = prepare_db(&reused_delete_db) catch {
+        return 264;
+    };
+    _ = db_exec(&reused_delete_db, "DELETE FROM users WHERE _id = 2;") catch {
+        return 265;
+    };
+    _ = db_exec(&reused_delete_db, "INSERT INTO users JSON '{\"name\":\"eve\",\"age\":20,\"active\":true}';") catch {
+        return 266;
+    };
+    _ = db_exec(&reused_delete_db, "DELETE FROM users WHERE _id >= 4 AND _id < 5;") catch {
+        return 267;
+    };
+    const deleted_reused: QueryResult = db_query(&reused_delete_db, "SELECT _id FROM users WHERE _id = 4 LIMIT 1;") catch {
+        return 268;
+    };
+    if deleted_reused.row_count != 0u32 {
+        return 269;
+    }
+    const survivor_reused: QueryResult = db_query(&reused_delete_db, "SELECT _id FROM users WHERE _id = 3 LIMIT 1;") catch {
+        return 270;
+    };
+    if survivor_reused.row_count != 1u32 {
+        return 271;
+    }
+    const survivor_reused_row: &OwnedRow = query_result_row(&survivor_reused, 0u32) catch {
+        return 272;
+    };
+    if (owned_row_cell_u64(survivor_reused_row, 0u16) catch {
+        return 273;
+    }) != 3u64 {
+        return 274;
+    }
     return 0;
 }
 
