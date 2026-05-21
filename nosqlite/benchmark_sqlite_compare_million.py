@@ -39,17 +39,25 @@ def elapsed_us(start_ns: int) -> int:
     return max(1, (time.perf_counter_ns() - start_ns) // 1000)
 
 
-def aggregate_query_samples(samples: list[int]) -> dict:
-    total_us = sum(samples)
-    total_s = total_us / 1_000_000 if total_us else 0.0
-    qps = len(samples) / total_s if total_s else 0.0
+def aggregate_query_samples(samples_ns: list[int]) -> dict:
+    total_ns = sum(samples_ns)
+    total_s = total_ns / 1_000_000_000 if total_ns else 0.0
+    qps = len(samples_ns) / total_s if total_s else 0.0
     return {
-        "samples": len(samples),
-        "p50_us": percentile(samples, 50),
-        "p95_us": percentile(samples, 95),
-        "p99_us": percentile(samples, 99),
+        "samples": len(samples_ns),
+        "p50_ns": percentile(samples_ns, 50),
+        "p95_ns": percentile(samples_ns, 95),
+        "p99_ns": percentile(samples_ns, 99),
+        "p50_us": percentile(samples_ns, 50) / 1000.0,
+        "p95_us": percentile(samples_ns, 95) / 1000.0,
+        "p99_us": percentile(samples_ns, 99) / 1000.0,
         "qps": qps,
     }
+
+
+def format_us(value: float) -> str:
+    text = f"{value:.2f}"
+    return text.rstrip("0").rstrip(".")
 
 
 def sqlite_json1_available() -> bool:
@@ -141,14 +149,14 @@ def run_sqlite_case_inline(docs: int, batch_rows: int, query_iters: int) -> dict
         if not warm_rows:
             raise RuntimeError("sqlite limit query warmup returned no rows")
 
-        query_samples: list[int] = []
+        query_samples_ns: list[int] = []
         for _ in range(query_iters):
             start_ns = time.perf_counter_ns()
             rows = conn.execute("SELECT id FROM users LIMIT 64").fetchall()
-            us = elapsed_us(start_ns)
+            ns = max(1, time.perf_counter_ns() - start_ns)
             if not rows:
                 raise RuntimeError("sqlite limit query returned no rows")
-            query_samples.append(us)
+            query_samples_ns.append(ns)
 
         return {
             "engine": "sqlite",
@@ -159,8 +167,8 @@ def run_sqlite_case_inline(docs: int, batch_rows: int, query_iters: int) -> dict
                 "load_us": load_us,
                 "rows_per_s": docs / (load_us / 1_000_000),
             },
-            "limit_query": aggregate_query_samples(query_samples),
-            "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64",
+            "limit_query": aggregate_query_samples(query_samples_ns),
+            "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64; full fetch timed",
         }
     finally:
         conn.close()
@@ -175,7 +183,7 @@ def run_sqlite_child(docs: int, batch_rows: int, query_iters: int) -> int:
 
 def parse_nosqlite_output(stdout: str, docs: int) -> dict:
     load_us = 0
-    query_samples: list[int] = []
+    query_samples_ns: list[int] = []
     info = {}
     for line in stdout.splitlines():
         if line.startswith("BENCH_INFO "):
@@ -195,11 +203,14 @@ def parse_nosqlite_output(stdout: str, docs: int) -> dict:
                 key, value = token.split("=", 1)
                 payload[key] = value
             if payload.get("case") == "limit_query":
-                query_samples.append(int(payload["us"]))
+                if "ns" in payload:
+                    query_samples_ns.append(int(payload["ns"]))
+                elif "us" in payload:
+                    query_samples_ns.append(int(payload["us"]) * 1000)
         elif line.startswith("BENCH_ERROR "):
             raise RuntimeError(line)
 
-    if load_us <= 0 or not query_samples:
+    if load_us <= 0 or not query_samples_ns:
         raise RuntimeError(f"nosqlite million benchmark output incomplete:\n{stdout}")
 
     return {
@@ -211,8 +222,8 @@ def parse_nosqlite_output(stdout: str, docs: int) -> dict:
             "load_us": load_us,
             "rows_per_s": docs / (load_us / 1_000_000),
         },
-        "limit_query": aggregate_query_samples(query_samples),
-        "notes": "NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64",
+        "limit_query": aggregate_query_samples(query_samples_ns),
+        "notes": "NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64; full fetch timed",
     }
 
 
@@ -310,6 +321,7 @@ def write_markdown(path: Path, docs: int, batch_rows: int, query_iters: int, ns:
         f"- Kernel：`{kernel_version()}`",
         "- 数据文档：`{\"n\": <id>, \"bucket\": <id % 100>, \"active\": <bool>}`",
         "- 查询口径：`SELECT _id FROM users LIMIT 64` / `SELECT id FROM users LIMIT 64`",
+        "- limit_query 计时范围：从开始执行查询到完整取回 64 行结果，两侧统一口径。",
         "- NoSQLite 这里先比较“批量写入后同进程 warm query”，不包含 recovery/open 延迟。",
         "",
         "## 摘要",
@@ -317,15 +329,15 @@ def write_markdown(path: Path, docs: int, batch_rows: int, query_iters: int, ns:
         "| case | NoSQLite | SQLite | 对比 |",
         "| --- | ---: | ---: | --- |",
         f"| bulk_load rows/s | {ns['load']['rows_per_s']:.2f} | {sq['load']['rows_per_s']:.2f} | {ratio_text(ns['load']['rows_per_s'], sq['load']['rows_per_s'], False)} |",
-        f"| limit_query p50 us | {ns['limit_query']['p50_us']} | {sq['limit_query']['p50_us']} | {ratio_text(ns['limit_query']['p50_us'], sq['limit_query']['p50_us'], True)} |",
-        f"| limit_query p95 us | {ns['limit_query']['p95_us']} | {sq['limit_query']['p95_us']} | {ratio_text(ns['limit_query']['p95_us'], sq['limit_query']['p95_us'], True)} |",
+        f"| limit_query p50 us | {format_us(ns['limit_query']['p50_us'])} | {format_us(sq['limit_query']['p50_us'])} | {ratio_text(ns['limit_query']['p50_ns'], sq['limit_query']['p50_ns'], True)} |",
+        f"| limit_query p95 us | {format_us(ns['limit_query']['p95_us'])} | {format_us(sq['limit_query']['p95_us'])} | {ratio_text(ns['limit_query']['p95_ns'], sq['limit_query']['p95_ns'], True)} |",
         "",
         "## 原始指标",
         "",
         "| engine | load s | load rows/s | query p50 us | query p95 us | query qps | peak KiB | notes |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
-        f"| nosqlite | {ns['load']['load_us'] / 1_000_000:.2f} | {ns['load']['rows_per_s']:.2f} | {ns['limit_query']['p50_us']} | {ns['limit_query']['p95_us']} | {ns['limit_query']['qps']:.2f} | {ns['peak_memory_kib']} | {ns['notes']} |",
-        f"| sqlite | {sq['load']['load_us'] / 1_000_000:.2f} | {sq['load']['rows_per_s']:.2f} | {sq['limit_query']['p50_us']} | {sq['limit_query']['p95_us']} | {sq['limit_query']['qps']:.2f} | {sq['peak_memory_kib']} | {sq['notes']} |",
+        f"| nosqlite | {ns['load']['load_us'] / 1_000_000:.2f} | {ns['load']['rows_per_s']:.2f} | {format_us(ns['limit_query']['p50_us'])} | {format_us(ns['limit_query']['p95_us'])} | {ns['limit_query']['qps']:.2f} | {ns['peak_memory_kib']} | {ns['notes']} |",
+        f"| sqlite | {sq['load']['load_us'] / 1_000_000:.2f} | {sq['load']['rows_per_s']:.2f} | {format_us(sq['limit_query']['p50_us'])} | {format_us(sq['limit_query']['p95_us'])} | {sq['limit_query']['qps']:.2f} | {sq['peak_memory_kib']} | {sq['notes']} |",
         "",
         "## 复现命令",
         "",

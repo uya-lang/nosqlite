@@ -5,8 +5,9 @@ use libc.atoll;
 use libc.printf;
 use libc.snprintf;
 
-use osal.TimeVal;
-use osal.os_gettimeofday;
+use osal.CLOCK_MONOTONIC;
+use syscall.TimeSpec;
+use syscall.sys_clock_gettime;
 
 use lib.api.db.DbHandle;
 use lib.api.db.QueryCursor;
@@ -48,20 +49,28 @@ fn env_u64(name: &const byte, fallback: u64) u64 {
     return parsed as u64;
 }
 
-fn now_usec() u64 {
-    var tv: TimeVal = TimeVal{ tv_sec: 0i64, tv_usec: 0i64 };
-    _ = os_gettimeofday(&tv, null) catch {
+fn now_nsec() u64 {
+    var ts: TimeSpec = TimeSpec{ tv_sec: 0i64, tv_nsec: 0i64 };
+    _ = sys_clock_gettime(CLOCK_MONOTONIC, &ts) catch {
         return 0u64;
     };
-    return (tv.tv_sec as u64) * 1000000u64 + (tv.tv_usec as u64);
+    return (ts.tv_sec as u64) * 1000000000u64 + (ts.tv_nsec as u64);
 }
 
-fn elapsed_bench_usec(start_us: u64) u64 {
-    const elapsed_us: u64 = now_usec() - start_us;
+fn elapsed_bench_usec(start_ns: u64) u64 {
+    const elapsed_us: u64 = elapsed_bench_nsec(start_ns) / 1000u64;
     if elapsed_us == 0u64 {
         return 1u64;
     }
     return elapsed_us;
+}
+
+fn elapsed_bench_nsec(start_ns: u64) u64 {
+    const elapsed_ns: u64 = now_nsec() - start_ns;
+    if elapsed_ns == 0u64 {
+        return 1u64;
+    }
+    return elapsed_ns;
 }
 
 fn build_json(doc_id: u64, out: &[byte]) !usize {
@@ -95,7 +104,7 @@ fn build_json(doc_id: u64, out: &[byte]) !usize {
 
 fn run_load(db: &DbHandle, docs: u64, batch_rows: u64) !u64 {
     var inserted_total: u64 = 0u64;
-    const start_us: u64 = now_usec();
+    const start_ns: u64 = now_nsec();
     while inserted_total < docs {
         var txn: Txn = try txn_begin(db);
         var txn_ok: bool = false;
@@ -128,7 +137,7 @@ fn run_load(db: &DbHandle, docs: u64, batch_rows: u64) !u64 {
         inserted_total = batch_end;
         printf("PROGRESS inserted=%lu\n" as *byte, inserted_total);
     }
-    return elapsed_bench_usec(start_us);
+    return elapsed_bench_usec(start_ns);
 }
 
 
@@ -179,24 +188,29 @@ fn main() i32 {
 fn run_limit_query_samples(db: &DbHandle, iterations: u64) !void {
     const sql: &[const byte] = "SELECT _id FROM users LIMIT 64;"[0: 30];
     var warm_cursor: QueryCursor = try db_query_cursor(db, sql);
-    if !(try cursor_next(&warm_cursor)) {
+    if (try drain_cursor(&warm_cursor)) == 0u32 {
         return error.BenchUnexpectedResult;
     }
 
     var i: u64 = 0u64;
     while i < iterations {
-        const start_us: u64 = now_usec();
+        const start_ns: u64 = now_nsec();
         var cursor: QueryCursor = try db_query_cursor(db, sql);
-        const elapsed_us: u64 = elapsed_bench_usec(start_us);
-        var docs_returned: u32 = 0u32;
-        while try cursor_next(&cursor) {
-            _ = try cursor_row(&cursor);
-            docs_returned = docs_returned + 1u32;
-        }
+        const docs_returned: u32 = try drain_cursor(&cursor);
+        const elapsed_ns: u64 = elapsed_bench_nsec(start_ns);
         if docs_returned == 0u32 {
             return error.BenchUnexpectedResult;
         }
-        printf("SAMPLE case=limit_query us=%lu docs=%u\n" as *byte, elapsed_us, docs_returned);
+        printf("SAMPLE case=limit_query ns=%lu docs=%u\n" as *byte, elapsed_ns, docs_returned);
         i = i + 1u64;
     }
+}
+
+fn drain_cursor(cursor: &QueryCursor) !u32 {
+    var docs_returned: u32 = 0u32;
+    while try cursor_next(cursor) {
+        _ = try cursor_row(cursor);
+        docs_returned = docs_returned + 1u32;
+    }
+    return docs_returned;
 }
