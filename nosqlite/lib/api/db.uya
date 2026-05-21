@@ -66,6 +66,7 @@ use lib.catalog.schema.CatalogView;
 use lib.catalog.schema.CatalogCollectionView;
 use lib.catalog.schema.CatalogIndexView;
 use lib.catalog.schema.CatalogScratchCollection;
+use lib.catalog.schema.COLLECTION_FLAG_PACKED_LAYOUT;
 use lib.catalog.schema.catalog_view_from_page;
 use lib.catalog.schema.catalog_collection_at;
 use lib.catalog.schema.catalog_page_allocate_next_doc_id;
@@ -183,7 +184,7 @@ export error DbVacuumUnsupported;
 export const DB_MAX_COLLECTIONS: usize = 4;
 export const DB_MAX_ROWS_PER_COLLECTION: usize = 3221225469usize;
 export const DB_MAX_CURSOR_ROWS: usize = 64;
-const DB_ROWS_PER_DATA_PAGE: u16 = 7;
+const DB_ROWS_PER_DATA_PAGE_LEGACY: u16 = 7;
 const DB_COLLECTION_ROW_REUSE_MAX: u16 = 256u16;
 const DB_MAX_SECONDARY_INDEXES_PER_COLLECTION: usize = 8;
 const DB_MAX_COMMIT_VIEWS: usize = 8;
@@ -232,6 +233,9 @@ struct DbCollection {
     collection_id: u32,
     name_len: u16,
     name: [byte: 64],
+    layout_flags: u16,
+    rows_per_page: u16,
+    max_doc_len_seen: u16,
     next_doc_id: u64,
     primary_root_page: u32,
     primary_index_ready: bool,
@@ -525,6 +529,52 @@ fn db_copy_path(path: &[const byte], out: &[byte], len_out: &u16) !void {
     }
 }
 
+fn db_effective_page_size(db: &DbHandle) u32 {
+    if db != null && db.pager_session.active {
+        return db.pager_session.info.meta.page_size;
+    }
+    return NOSQLITE_PAGE_SIZE_DEFAULT;
+}
+
+fn db_collection_uses_packed_layout(collection: &DbCollection) bool {
+    return collection != null && (collection.layout_flags & COLLECTION_FLAG_PACKED_LAYOUT) != 0u16;
+}
+
+fn db_collection_rows_per_page(collection: &DbCollection) u16 {
+    if db_collection_uses_packed_layout(collection) && collection.rows_per_page != 0u16 {
+        return collection.rows_per_page;
+    }
+    return DB_ROWS_PER_DATA_PAGE_LEGACY;
+}
+
+fn db_collection_update_max_doc_len(collection: &DbCollection, doc_len: u16) void {
+    if collection == null || doc_len <= collection.max_doc_len_seen {
+        return;
+    }
+    collection.max_doc_len_seen = doc_len;
+}
+
+fn db_collection_compute_packed_rows_per_page(page_size: u32, max_doc_len: u16) u16 {
+    if page_size as usize <= page_header_size() {
+        return 1u16;
+    }
+    const usable_bytes: usize = (page_size as usize) - page_header_size();
+    const bytes_per_row: usize = slot_size() + RECORD_CELL_HEADER_SIZE + (max_doc_len as usize);
+    if bytes_per_row == 0usize {
+        return 1u16;
+    }
+    var rows_per_page: usize = usable_bytes / bytes_per_row;
+    if rows_per_page == 0usize {
+        rows_per_page = 1usize;
+    }
+    if rows_per_page > 65535usize {
+        rows_per_page = 65535usize;
+    }
+    return (rows_per_page as! u16) catch {
+        return 1u16;
+    };
+}
+
 fn db_collection_index_reset(index_meta: &DbCollectionIndexMeta) void {
     if index_meta == null {
         return;
@@ -717,8 +767,8 @@ fn db_collection_next_capacity(needed: u32) !u32 {
     return capacity;
 }
 
-fn db_collection_dirty_word_capacity(rows: u32) u32 {
-    const page_count: u32 = db_collection_page_count_for_rows(rows);
+fn db_collection_dirty_word_capacity(collection: &DbCollection, rows: u32) u32 {
+    const page_count: u32 = db_collection_page_count_for_rows(collection, rows);
     if page_count == 0u32 {
         return 0u32;
     }
@@ -729,7 +779,7 @@ fn db_collection_ensure_dirty_page_capacity(collection: &DbCollection, rows: u32
     if collection == null {
         return error.DbCollectionNotFound;
     }
-    const needed_words: u32 = db_collection_dirty_word_capacity(rows);
+    const needed_words: u32 = db_collection_dirty_word_capacity(collection, rows);
     if needed_words == 0u32 {
         return;
     }
@@ -830,7 +880,7 @@ fn db_collection_mark_row_dirty(collection: &DbCollection, row_idx: u32) !void {
         return error.DbCollectionNotFound;
     }
     try db_collection_ensure_dirty_page_capacity(collection, row_idx + 1u32);
-    const page_idx: u32 = row_idx / (DB_ROWS_PER_DATA_PAGE as u32);
+    const page_idx: u32 = row_idx / (db_collection_rows_per_page(collection) as u32);
     if page_idx / 64u32 >= collection.dirty_page_word_capacity {
         return error.DbRowFull;
     }
@@ -917,6 +967,9 @@ fn db_collection_reset(collection: &DbCollection) void {
     collection.present = false;
     collection.collection_id = 0u32;
     collection.name_len = 0u16;
+    collection.layout_flags = 0u16;
+    collection.rows_per_page = 0u16;
+    collection.max_doc_len_seen = 0u16;
     collection.next_doc_id = 0u64;
     collection.primary_root_page = 0u32;
     collection.primary_index_ready = false;
@@ -972,6 +1025,9 @@ fn db_copy_collection_used(target: &DbCollection, source: &DbCollection) !void {
     target.present = source.present;
     target.collection_id = source.collection_id;
     target.name_len = source.name_len;
+    target.layout_flags = source.layout_flags;
+    target.rows_per_page = source.rows_per_page;
+    target.max_doc_len_seen = source.max_doc_len_seen;
     target.next_doc_id = source.next_doc_id;
     target.primary_root_page = source.primary_root_page;
     target.primary_index_ready = source.primary_index_ready;
@@ -1595,23 +1651,86 @@ fn db_collection_data_page_id(collection: &DbCollection) u32 {
     return nosqlite_collection_primary_root_page(collection.collection_id);
 }
 
-fn db_collection_page_count_for_rows(row_count: u32) u32 {
-    if row_count == 0u32 {
+fn db_collection_page_count_for_rows(collection: &DbCollection, row_count: u32) u32 {
+    const rows_per_page: u16 = db_collection_rows_per_page(collection);
+    if row_count == 0u32 || rows_per_page == 0u16 {
         return 0u32;
     }
-    return ((row_count - 1u32) / (DB_ROWS_PER_DATA_PAGE as u32)) + 1u32;
+    return ((row_count - 1u32) / (rows_per_page as u32)) + 1u32;
 }
 
 fn db_collection_page_id_for_index(collection: &DbCollection, row_idx: u32) u32 {
-    return db_collection_data_page_id(collection) + (row_idx / (DB_ROWS_PER_DATA_PAGE as u32));
+    return db_collection_data_page_id(collection) + (row_idx / (db_collection_rows_per_page(collection) as u32));
 }
 
-fn db_collection_local_slot_for_index(row_idx: u32) u16 {
-    return (row_idx % (DB_ROWS_PER_DATA_PAGE as u32)) as u16;
+fn db_collection_local_slot_for_index(collection: &DbCollection, row_idx: u32) u16 {
+    return (row_idx % (db_collection_rows_per_page(collection) as u32)) as u16;
 }
 
-fn db_collection_first_row_for_page_offset(page_offset: u32) u32 {
-    return page_offset * (DB_ROWS_PER_DATA_PAGE as u32);
+fn db_collection_first_row_for_page_offset(collection: &DbCollection, page_offset: u32) u32 {
+    return page_offset * (db_collection_rows_per_page(collection) as u32);
+}
+
+fn db_collection_mark_page_dirty(collection: &DbCollection, page_offset: u32) !void {
+    if collection == null {
+        return error.DbCollectionNotFound;
+    }
+    try db_collection_ensure_dirty_page_capacity(collection, db_collection_first_row_for_page_offset(collection, page_offset) + 1u32);
+    if page_offset / 64u32 >= collection.dirty_page_word_capacity {
+        return error.DbRowFull;
+    }
+    const word_idx: usize = (page_offset / 64u32) as usize;
+    const bit_idx: i32 = (page_offset % 64u32) as i32;
+    collection.dirty_page_bits[word_idx] = collection.dirty_page_bits[word_idx] | (1u64 << bit_idx);
+}
+
+fn db_collection_mark_all_pages_dirty(collection: &DbCollection) !void {
+    if collection == null {
+        return error.DbCollectionNotFound;
+    }
+    const page_count: u32 = db_collection_page_count_for_rows(collection, collection.row_count);
+    db_collection_clear_dirty_pages(collection);
+    var page_offset: u32 = 0u32;
+    while page_offset < page_count {
+        try db_collection_mark_page_dirty(collection, page_offset);
+        page_offset = page_offset + 1u32;
+    }
+}
+
+fn db_collection_recompute_record_pointers(collection: &DbCollection) void {
+    if collection == null || collection.rows == null {
+        return;
+    }
+    var row_idx: u32 = 0u32;
+    while row_idx < collection.row_count {
+        const row: &DbStoredRow = &collection.rows[row_idx as usize];
+        if row.present {
+            row.record_ptr = record_pointer_make(
+                db_collection_page_id_for_index(collection, row_idx),
+                db_collection_local_slot_for_index(collection, row_idx),
+            );
+        }
+        row_idx = row_idx + 1u32;
+    }
+}
+
+fn db_collection_refresh_packed_layout(collection: &DbCollection, page_size: u32) !void {
+    if !db_collection_uses_packed_layout(collection) {
+        return;
+    }
+    const desired_rows_per_page: u16 = db_collection_compute_packed_rows_per_page(page_size, collection.max_doc_len_seen);
+    if collection.rows_per_page == 0u16 {
+        collection.rows_per_page = desired_rows_per_page;
+        db_collection_recompute_record_pointers(collection);
+        return;
+    }
+    if desired_rows_per_page >= collection.rows_per_page {
+        return;
+    }
+    collection.rows_per_page = desired_rows_per_page;
+    db_collection_recompute_record_pointers(collection);
+    try db_collection_mark_all_pages_dirty(collection);
+    collection.primary_index_ready = false;
 }
 
 fn db_record_cell_encode(row: &DbStoredRow, now_ms: u64, out: &[byte]) !usize {
@@ -1671,8 +1790,9 @@ fn db_collection_encode_page_range(collection: &DbCollection, page_size: u32, no
         return error.DbCollectionPageMissing;
     }
     try slotted_page_init(out, PageType.DATA);
+    const rows_per_page: u16 = db_collection_rows_per_page(collection);
     var local_slot: u16 = 0u16;
-    while local_slot < DB_ROWS_PER_DATA_PAGE {
+    while local_slot < rows_per_page {
         const row_idx: u32 = first_row + (local_slot as u32);
         if row_idx >= collection.row_count {
             break;
@@ -1701,10 +1821,10 @@ fn db_collection_load_page_range(collection: &DbCollection, page_id: u32, page_o
         return error.DbPageCorrupt;
     }
     const slot_count: u16 = slotted_page_slot_count(page_buf);
-    if slot_count > DB_ROWS_PER_DATA_PAGE {
+    if slot_count > db_collection_rows_per_page(collection) {
         return error.DbPageCorrupt;
     }
-    const first_row: u32 = db_collection_first_row_for_page_offset(page_offset);
+    const first_row: u32 = db_collection_first_row_for_page_offset(collection, page_offset);
     const loaded_row_count: u32 = first_row + (slot_count as u32);
     try db_collection_ensure_row_capacity(collection, loaded_row_count);
     if loaded_row_count > collection.row_count {
@@ -1725,6 +1845,7 @@ fn db_collection_load_page_range(collection: &DbCollection, page_id: u32, page_o
             } else {
                 try db_record_cell_decode_header(cell.ptr[0: cell.len], row);
             }
+            db_collection_update_max_doc_len(collection, row.doc_len);
             row.record_ptr = record_pointer_make(page_id, slot_idx);
             row.tombstone = slot_is_tombstone(cell.flags);
             if row.tombstone {
@@ -1772,10 +1893,10 @@ fn db_ensure_collection_rows_loaded_in_view(db: &DbHandle, view_slot: u16, colle
     try db_collection_ensure_row_capacity(collection, expected_rows);
     collection.row_count = 0u32;
     collection.may_have_tombstones = false;
-    const page_count: u32 = db_collection_page_count_for_rows(expected_rows);
+    const page_count: u32 = db_collection_page_count_for_rows(collection, expected_rows);
     var page_offset: u32 = 0u32;
     while page_offset < page_count {
-        const first_row: u32 = db_collection_first_row_for_page_offset(page_offset);
+        const first_row: u32 = db_collection_first_row_for_page_offset(collection, page_offset);
         const page_id: u32 = db_collection_data_page_id(collection) + page_offset;
         if page_id < 2u32 || page_id >= db.pager_session.info.meta.page_count {
             return error.DbCollectionPageMissing;
@@ -1827,6 +1948,7 @@ fn db_collection_load_page_header_only(db: &DbHandle, collection: &DbCollection,
                 cell_header[0: RECORD_CELL_HEADER_SIZE],
             );
             try db_record_cell_decode_header(cell_header[0: RECORD_CELL_HEADER_SIZE], row);
+            db_collection_update_max_doc_len(collection, row.doc_len);
             row.record_ptr = record_pointer_make(page_id, slot_idx);
             row.tombstone = slot_is_tombstone(slot.flags);
             if row.tombstone {
@@ -1884,8 +2006,8 @@ fn db_ensure_collection_page_blobs_loaded(db: &DbHandle, collection: &DbCollecti
     if db == null || collection == null || collection.rows == null {
         return error.DbHandleInvalid;
     }
-    var row_idx: u32 = db_collection_first_row_for_page_offset(page_offset);
-    var end_idx: u32 = row_idx + (DB_ROWS_PER_DATA_PAGE as u32);
+    var row_idx: u32 = db_collection_first_row_for_page_offset(collection, page_offset);
+    var end_idx: u32 = row_idx + (db_collection_rows_per_page(collection) as u32);
     if end_idx > collection.row_count {
         end_idx = collection.row_count;
     }
@@ -1931,7 +2053,7 @@ fn db_materialize_matched_rows_for_cursor(db: &DbHandle, view_slot: u16, collect
         }
         const row: &DbStoredRow = &collection.rows[row_idx];
         if row.present && !row.tombstone && !row.blob_loaded {
-            const page_offset: u32 = row_slot / (DB_ROWS_PER_DATA_PAGE as u32);
+            const page_offset: u32 = row_slot / (db_collection_rows_per_page(collection) as u32);
             try db_ensure_collection_page_blobs_loaded(db, collection, page_offset);
         }
         i = i + 1u16;
@@ -2227,6 +2349,8 @@ fn db_reload_from_disk(db: &DbHandle) !void {
         db_collection_reset(&current.collections[slot]);
         current.collections[slot].present = true;
         current.collections[slot].collection_id = entry.meta.collection_id;
+        current.collections[slot].layout_flags = entry.meta.flags;
+        current.collections[slot].rows_per_page = entry.meta.rsv;
         current.collections[slot].next_doc_id = entry.meta.next_doc_id;
         current.collections[slot].primary_root_page = entry.meta.primary_root_page;
         current.collections[slot].secondary_index_count = entry.meta.secondary_index_count;
@@ -2283,7 +2407,7 @@ fn db_check_validate_collection_rows(collection: &DbCollection, expected_next_do
         const row: &DbStoredRow = &collection.rows[row_idx as usize];
         if !row.present ||
             row.record_ptr.page_id != db_collection_page_id_for_index(collection, row_idx) ||
-            row.record_ptr.slot_id != db_collection_local_slot_for_index(row_idx) {
+            row.record_ptr.slot_id != db_collection_local_slot_for_index(collection, row_idx) {
             return error.DbPageCorrupt;
         }
         const blob: &[byte] = db_row_blob(row) catch {
@@ -2326,6 +2450,9 @@ fn db_check_collection_at_stem(stem: &const byte, page_size: u32, entry: &Catalo
         collection_id: entry.meta.collection_id,
         name_len: 0u16,
         name: [],
+        layout_flags: entry.meta.flags,
+        rows_per_page: entry.meta.rsv,
+        max_doc_len_seen: 0u16,
         next_doc_id: entry.meta.next_doc_id,
         primary_root_page: entry.meta.primary_root_page,
         primary_index_ready: false,
@@ -2349,7 +2476,7 @@ fn db_check_collection_at_stem(stem: &const byte, page_size: u32, entry: &Catalo
             return error.DbRowFull;
         };
         try db_collection_ensure_row_capacity(&collection, expected_rows);
-        const page_count: u32 = db_collection_page_count_for_rows(expected_rows);
+        const page_count: u32 = db_collection_page_count_for_rows(&collection, expected_rows);
         var page_offset: u32 = 0u32;
         while page_offset < page_count {
             const page_id: u32 = entry.meta.primary_root_page + page_offset;
@@ -3650,6 +3777,8 @@ fn db_txn_stage_update_stmt(txn: &Txn, stmt: &SqlStmt) !void {
         const collection: &DbCollection = try db_collection_at_in_state(state, collection_slot);
         const row: &DbStoredRow = try db_row_at(collection, row_slot);
         try db_update_row_doc_at_path(row, &program, &new_value);
+        db_collection_update_max_doc_len(collection, row.doc_len);
+        try db_collection_refresh_packed_layout(collection, db_effective_page_size(txn.db));
         try db_collection_mark_row_dirty(collection, row_slot);
         changed = true;
         i = i + 1u16;
@@ -3798,16 +3927,18 @@ fn db_txn_stage_insert(txn: &Txn, collection_name: &[const byte], json_text: &[c
         state.collections[collection_idx].primary_root_page = db_collection_data_page_id(&state.collections[collection_idx]);
     }
     state.collections[collection_idx].next_doc_id = state.collections[collection_idx].next_doc_id + 1u64;
-    row.record_ptr = record_pointer_make(
-        db_collection_page_id_for_index(&state.collections[collection_idx], row_slot),
-        db_collection_local_slot_for_index(row_slot),
-    );
-    try db_collection_mark_row_dirty(&state.collections[collection_idx], row_slot);
     if row_slot == state.collections[collection_idx].row_count {
         state.collections[collection_idx].row_count = state.collections[collection_idx].row_count + 1u32;
     } else {
         state.collections[collection_idx].may_have_tombstones = true;
     }
+    db_collection_update_max_doc_len(&state.collections[collection_idx], row.doc_len);
+    try db_collection_refresh_packed_layout(&state.collections[collection_idx], db_effective_page_size(txn.db));
+    row.record_ptr = record_pointer_make(
+        db_collection_page_id_for_index(&state.collections[collection_idx], row_slot),
+        db_collection_local_slot_for_index(&state.collections[collection_idx], row_slot),
+    );
+    try db_collection_mark_row_dirty(&state.collections[collection_idx], row_slot);
     txn.has_writes = true;
     return doc_id;
 }
@@ -3839,11 +3970,11 @@ fn db_catalog_scratch_from_view(state: &CommitViewState, out: &[CatalogScratchCo
         out.ptr[i].meta = CollectionMeta{
             collection_id: collection.collection_id,
             name_len: collection.name_len,
-            flags: 0u16,
+            flags: collection.layout_flags,
             next_doc_id: collection.next_doc_id,
             primary_root_page: collection.primary_root_page,
             secondary_index_count: collection.secondary_index_count,
-            rsv: 0u16,
+            rsv: collection.rows_per_page,
             name_off: 0u32,
             indexes_off: 0u32,
         };
@@ -3920,6 +4051,8 @@ fn db_collection_catalog_equal(left: &DbCollection, right: &DbCollection) bool {
     if left.present != right.present ||
         left.collection_id != right.collection_id ||
         left.name_len != right.name_len ||
+        left.layout_flags != right.layout_flags ||
+        left.rows_per_page != right.rows_per_page ||
         left.next_doc_id != right.next_doc_id ||
         left.primary_root_page != right.primary_root_page ||
         left.secondary_index_count != right.secondary_index_count {
@@ -3973,7 +4106,7 @@ fn db_txn_estimate_wal_batch_bytes(state: &CommitViewState, page_size: u32, cata
     while collection_idx < state.collection_count {
         const collection: &DbCollection = &state.collections[collection_idx as usize];
         if collection.present {
-            const collection_page_count: u32 = db_collection_page_count_for_rows(collection.row_count);
+            const collection_page_count: u32 = db_collection_page_count_for_rows(collection, collection.row_count);
             var page_offset: u32 = 0u32;
             while page_offset < collection_page_count {
                 if db_collection_page_dirty(collection, page_offset) {
@@ -3998,18 +4131,26 @@ fn db_txn_commit_persist(txn: &Txn) !WalCommit {
     const info: PagerOpenInfo = txn.db.pager_session.info;
     const next_lsn: u64 = info.meta.commit_lsn + 1u64;
     var max_page_count: u32 = info.meta.page_count;
-    const catalog_changed: bool = try db_txn_catalog_changed(txn.db, state);
-    const batch: &WalBatch = txn.db.wal_batch;
-    wal_batch_reset(batch, next_lsn, next_lsn);
-    try wal_batch_reserve_bytes(batch, try db_txn_estimate_wal_batch_bytes(state, info.meta.page_size, catalog_changed));
-    try wal_batch_append_begin(batch);
     var collection_idx: u16 = 0u16;
     while collection_idx < state.collection_count {
         try db_ensure_collection_rows_loaded_in_view(txn.db, txn.view_slot, collection_idx);
         const collection: &DbCollection = &state.collections[collection_idx as usize];
         if collection.present {
+            try db_collection_refresh_packed_layout(collection, info.meta.page_size);
+        }
+        collection_idx = collection_idx + 1u16;
+    }
+    const catalog_changed: bool = try db_txn_catalog_changed(txn.db, state);
+    const batch: &WalBatch = txn.db.wal_batch;
+    wal_batch_reset(batch, next_lsn, next_lsn);
+    try wal_batch_reserve_bytes(batch, try db_txn_estimate_wal_batch_bytes(state, info.meta.page_size, catalog_changed));
+    try wal_batch_append_begin(batch);
+    collection_idx = 0u16;
+    while collection_idx < state.collection_count {
+        const collection: &DbCollection = &state.collections[collection_idx as usize];
+        if collection.present {
             const base_page_id: u32 = db_collection_data_page_id(collection);
-            const collection_page_count: u32 = db_collection_page_count_for_rows(collection.row_count);
+            const collection_page_count: u32 = db_collection_page_count_for_rows(collection, collection.row_count);
             if base_page_id >= 2u32 && collection_page_count > 0u32 {
                 if base_page_id + collection_page_count > max_page_count {
                     max_page_count = base_page_id + collection_page_count;
@@ -4021,7 +4162,7 @@ fn db_txn_commit_persist(txn: &Txn) !WalCommit {
                         continue;
                     }
                     try db_ensure_collection_page_blobs_loaded(txn.db, collection, page_offset);
-                    const first_row: u32 = db_collection_first_row_for_page_offset(page_offset);
+                    const first_row: u32 = db_collection_first_row_for_page_offset(collection, page_offset);
                     const page_id: u32 = base_page_id + page_offset;
                     var raw_page: [byte: 8192] = [];
                     const page_buf: &[byte] = raw_page[0: info.meta.page_size as usize];
@@ -4112,11 +4253,11 @@ fn db_plan_collect_limit_lazy_seq_scan(
     const expected_rows: u32 = (expected_rows_u64 as! u32) catch {
         return error.DbRowFull;
     };
-    const page_count: u32 = db_collection_page_count_for_rows(expected_rows);
+    const page_count: u32 = db_collection_page_count_for_rows(collection, expected_rows);
     var matched: u16 = 0u16;
     var page_offset: u32 = 0u32;
     while page_offset < page_count && matched < limit_u16 {
-        const first_row: u32 = db_collection_first_row_for_page_offset(page_offset);
+        const first_row: u32 = db_collection_first_row_for_page_offset(collection, page_offset);
         if first_row >= collection.row_count {
             const page_id: u32 = db_collection_data_page_id(collection) + page_offset;
             if page_id < 2u32 || page_id >= db.pager_session.info.meta.page_count {
@@ -4129,7 +4270,7 @@ fn db_plan_collect_limit_lazy_seq_scan(
             try db_collection_load_page_range(collection, page_id, page_offset, page_buf, filter_expr >= 0i16);
         }
         var row_idx: u32 = first_row;
-        var row_end: u32 = first_row + (DB_ROWS_PER_DATA_PAGE as u32);
+        var row_end: u32 = first_row + (db_collection_rows_per_page(collection) as u32);
         if row_end > collection.row_count {
             row_end = collection.row_count;
         }
@@ -4228,7 +4369,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
         var direct_idx: u32 = NOSQLITE_COLLECTION_MAX_ROWS_PER_COLLECTION;
         if ptr.page_id >= base_page_id {
             const page_offset: u32 = ptr.page_id - base_page_id;
-            direct_idx = db_collection_first_row_for_page_offset(page_offset) + (ptr.slot_id as u32);
+            direct_idx = db_collection_first_row_for_page_offset(collection, page_offset) + (ptr.slot_id as u32);
         }
         if direct_idx < collection.row_count && direct_idx < collection.row_capacity {
             const row: &DbStoredRow = &collection.rows[direct_idx as usize];
@@ -4518,7 +4659,10 @@ export fn db_check_at_stem(stem: &const byte) !DbCheckReport {
         try db_check_collection_at_stem(stem, info.meta.page_size, &entry, &report.row_count);
         if entry.meta.next_doc_id > 1u64 {
             const expected_rows: u32 = (entry.meta.next_doc_id - 1u64) as u32;
-            report.checked_pages = report.checked_pages + db_collection_page_count_for_rows(expected_rows);
+            var collection: DbCollection = DbCollection{};
+            collection.layout_flags = entry.meta.flags;
+            collection.rows_per_page = entry.meta.rsv;
+            report.checked_pages = report.checked_pages + db_collection_page_count_for_rows(&collection, expected_rows);
         }
         collection_idx = collection_idx + 1u32;
     }
@@ -4680,6 +4824,8 @@ export fn db_test_create_collection(db: &DbHandle, name: &[const byte]) !void {
     db_collection_reset(&state.collections[slot]);
     state.collections[slot].present = true;
     state.collections[slot].collection_id = created.collection_id;
+    state.collections[slot].layout_flags = created.flags;
+    state.collections[slot].rows_per_page = created.rsv;
     state.collections[slot].next_doc_id = created.next_doc_id;
     state.collections[slot].primary_root_page = created.primary_root_page;
     try db_copy_name(name, state.collections[slot].name[0: 64], &state.collections[slot].name_len);

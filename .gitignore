@@ -1,2 +1,4 @@
 .uyacache/
 nosqlite/__pycache__/
+.uyacache-million-probe/
+a.out

@@ -24,6 +24,7 @@ export error CatalogDocIdExhausted;
 export const CATALOG_ROOT_ENCODED_SIZE: usize = 16;
 export const COLLECTION_META_ENCODED_SIZE: usize = 32;
 export const INDEX_META_ENCODED_SIZE: usize = 20;
+export const COLLECTION_FLAG_PACKED_LAYOUT: u16 = 1u16;
 const CATALOG_MAX_INDEXES_PER_COLLECTION: usize = 8;
 const CATALOG_MAX_INLINE_NAME: usize = 64;
 const CATALOG_MAX_INLINE_PATH: usize = 128;
@@ -813,7 +814,7 @@ export fn catalog_page_append_collection(page_buf: &[byte], name: &[byte]) !Coll
     scratch_entries[collection_count as usize].meta = CollectionMeta{
         collection_id: next_collection_id,
         name_len: 0u16,
-        flags: 0u16,
+        flags: COLLECTION_FLAG_PACKED_LAYOUT,
         next_doc_id: 1u64,
         primary_root_page: nosqlite_collection_primary_root_page(next_collection_id),
         secondary_index_count: 0u16,
