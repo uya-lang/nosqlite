@@ -1,6 +1,6 @@
 # NoSQLite vs SQLite 百万条性能对比
 
-日期：2026-05-21
+日期：2026-05-22
 
 本报告聚焦百万条记录量级下的装载、查询、批量更新，以及区分 logical delete / physical delete 后的删除性能对比。
 
@@ -26,32 +26,32 @@
 
 | case | NoSQLite | SQLite | 对比 |
 | --- | ---: | ---: | --- |
-| bulk_load rows/s | 1511905.50 | 689114.81 | NoSQLite faster x2.19 |
-| limit_query p50 us | 0.79 | 13.27 | NoSQLite faster x16.82 |
-| limit_query p95 us | 0.8 | 14.03 | NoSQLite faster x17.47 |
-| bulk_update rows/s | 2509202.50 | 1237138.40 | NoSQLite faster x2.03 |
-| physical_delete rows/s | 2139897.97 | 6594914.00 | SQLite faster x3.08 |
+| bulk_load rows/s | 1397881.93 | 688008.70 | NoSQLite faster x2.03 |
+| limit_query p50 us | 0.88 | 13.12 | NoSQLite faster x14.89 |
+| limit_query p95 us | 0.91 | 13.5 | NoSQLite faster x14.91 |
+| bulk_update rows/s | 2334419.62 | 1258561.36 | NoSQLite faster x1.85 |
+| physical_delete rows/s | 5279134.22 | 6685162.28 | SQLite faster x1.27 |
 
 ## Delete 语义拆分
 
 | case | NoSQLite | SQLite | 说明 |
 | --- | ---: | ---: | --- |
-| logical_delete rows/s | 548245614.04 | 6040982.02 | 非同口径。NoSQLite 为 durable logical prefix delete，SQLite 仍是 physical DELETE，仅作参考。 |
-| physical_delete rows/s | 2139897.97 | 6594914.00 | 公平主口径。两侧都按尾到头分段删除，显式避开 NoSQLite prefix logical delete 快路径。 |
+| logical_delete rows/s | 534188034.19 | 6366709.75 | 非同口径。NoSQLite 为 durable logical prefix delete，SQLite 仍是 physical DELETE，仅作参考。 |
+| physical_delete rows/s | 5279134.22 | 6685162.28 | 公平主口径。两侧都按尾到头分段删除，显式避开 NoSQLite prefix logical delete 快路径。 |
 
 ## 原始指标
 
 | engine | load s | load rows/s | update s | update rows/s | physical_delete s | physical_delete rows/s | query p50 us | query p95 us | query qps | peak KiB | notes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| nosqlite | 0.66 | 1511905.50 | 0.40 | 2509202.50 | 0.47 | 2139897.97 | 0.79 | 0.8 | 1256881.43 | 1617384 | NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end; NoSQLite million-row benchmark; fresh preloaded and checkpointed dataset; durable tail-to-head range delete; prefix logical delete fast path intentionally bypassed to force physical page updates |
-| sqlite | 1.45 | 689114.81 | 0.81 | 1237138.40 | 0.15 | 6594914.00 | 13.27 | 14.03 | 73818.99 | 38876 | SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?; SQLite JSON1; fresh preloaded and checkpointed million-row dataset; durable tail-to-head range DELETE; physical row delete semantics |
+| nosqlite | 0.72 | 1397881.93 | 0.43 | 2334419.62 | 0.19 | 5279134.22 | 0.88 | 0.91 | 1125416.40 | 1617344 | NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end; NoSQLite million-row benchmark; fresh preloaded and checkpointed dataset; durable tail-to-head range delete; prefix logical delete fast path intentionally bypassed to force physical page updates |
+| sqlite | 1.45 | 688008.70 | 0.79 | 1258561.36 | 0.15 | 6685162.28 | 13.12 | 13.5 | 75742.08 | 38252 | SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?; SQLite JSON1; fresh preloaded and checkpointed million-row dataset; durable tail-to-head range DELETE; physical row delete semantics |
 
 ## Delete 明细
 
 | engine | logical_delete s | logical_delete rows/s | physical_delete s | physical_delete rows/s | notes |
 | --- | ---: | ---: | ---: | ---: | --- |
-| nosqlite | 0.00 | 548245614.04 | 0.47 | 2139897.97 | NoSQLite million-row benchmark; fresh preloaded and checkpointed dataset; durable head-to-tail prefix delete; commits deleted-through metadata boundary; logical delete semantics; NoSQLite million-row benchmark; fresh preloaded and checkpointed dataset; durable tail-to-head range delete; prefix logical delete fast path intentionally bypassed to force physical page updates |
-| sqlite | 0.17 | 6040982.02 | 0.15 | 6594914.00 | SQLite JSON1 reference; fresh preloaded and checkpointed million-row dataset; durable head-to-tail range DELETE; physical row delete semantics; SQLite JSON1; fresh preloaded and checkpointed million-row dataset; durable tail-to-head range DELETE; physical row delete semantics |
+| nosqlite | 0.00 | 534188034.19 | 0.19 | 5279134.22 | NoSQLite million-row benchmark; fresh preloaded and checkpointed dataset; durable head-to-tail prefix delete; commits deleted-through metadata boundary; logical delete semantics; NoSQLite million-row benchmark; fresh preloaded and checkpointed dataset; durable tail-to-head range delete; prefix logical delete fast path intentionally bypassed to force physical page updates |
+| sqlite | 0.16 | 6366709.75 | 0.15 | 6685162.28 | SQLite JSON1 reference; fresh preloaded and checkpointed million-row dataset; durable head-to-tail range DELETE; physical row delete semantics; SQLite JSON1; fresh preloaded and checkpointed million-row dataset; durable tail-to-head range DELETE; physical row delete semantics |
 
 ## 复现命令
 

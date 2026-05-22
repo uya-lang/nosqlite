@@ -263,6 +263,10 @@ struct DbCollection {
     row_count: u32,
     row_capacity: u32,
     rows_refcount: &u32,
+    delete_overlay_suffix_valid: bool,
+    delete_overlay_suffix_start: u32,
+    delete_overlay_word_capacity: u32,
+    delete_overlay_bits: &u64,
     dirty_page_word_capacity: u32,
     tombstone_patch_pages_valid: bool,
     tombstone_patch_page_start: u32,
@@ -1093,11 +1097,157 @@ fn db_collection_release_rows(collection: &DbCollection) void {
     db_collection_release_blob_chunks(collection);
     const allocator: &HeapAllocator = get_heap_allocator();
     db_collection_release_row_storage_ref(collection);
+    if collection.delete_overlay_bits != null {
+        allocator.dealloc(collection.delete_overlay_bits as &byte);
+        collection.delete_overlay_bits = null;
+    }
+    collection.delete_overlay_word_capacity = 0u32;
     if collection.dirty_page_bits != null {
         allocator.dealloc(collection.dirty_page_bits as &byte);
         collection.dirty_page_bits = null;
     }
     collection.dirty_page_word_capacity = 0u32;
+}
+
+fn db_collection_delete_overlay_word_capacity(rows: u32) u32 {
+    if rows == 0u32 {
+        return 0u32;
+    }
+    return ((rows - 1u32) / 64u32) + 1u32;
+}
+
+fn db_collection_clear_delete_overlay(collection: &DbCollection) void {
+    if collection == null || collection.delete_overlay_bits == null {
+        if collection != null {
+            collection.delete_overlay_suffix_valid = true;
+            collection.delete_overlay_suffix_start = collection.row_count;
+        }
+        return;
+    }
+    _ = mem_set(
+        collection.delete_overlay_bits as &byte,
+        0 as byte,
+        (collection.delete_overlay_word_capacity as usize) * 8usize,
+    );
+    collection.delete_overlay_suffix_valid = true;
+    collection.delete_overlay_suffix_start = collection.row_count;
+}
+
+fn db_collection_has_delete_overlay_tombstones(collection: &DbCollection) bool {
+    if collection != null &&
+        collection.delete_overlay_bits != null &&
+        collection.delete_overlay_suffix_valid &&
+        collection.delete_overlay_suffix_start < collection.row_count {
+        return true;
+    }
+    if collection == null || collection.delete_overlay_bits == null {
+        return false;
+    }
+    var word_idx: usize = 0usize;
+    while word_idx < collection.delete_overlay_word_capacity as usize {
+        if collection.delete_overlay_bits[word_idx] != 0u64 {
+            return true;
+        }
+        word_idx = word_idx + 1usize;
+    }
+    return false;
+}
+
+fn db_collection_delete_overlay_tombstone(collection: &DbCollection, row_idx: u32) bool {
+    if collection != null &&
+        collection.delete_overlay_bits != null &&
+        collection.delete_overlay_suffix_valid &&
+        row_idx >= collection.delete_overlay_suffix_start &&
+        row_idx < collection.row_count {
+        return true;
+    }
+    if collection == null || collection.delete_overlay_bits == null {
+        return false;
+    }
+    const word_idx_u32: u32 = row_idx / 64u32;
+    if word_idx_u32 >= collection.delete_overlay_word_capacity {
+        return false;
+    }
+    const word_idx: usize = word_idx_u32 as usize;
+    const bit_idx: i32 = (row_idx % 64u32) as i32;
+    return (collection.delete_overlay_bits[word_idx] & (1u64 << bit_idx)) != 0u64;
+}
+
+fn db_collection_ensure_delete_overlay_capacity(collection: &DbCollection, rows: u32) !void {
+    if collection == null {
+        return error.DbCollectionNotFound;
+    }
+    const needed_words: u32 = db_collection_delete_overlay_word_capacity(rows);
+    if needed_words == 0u32 {
+        return;
+    }
+    if collection.delete_overlay_bits != null && collection.delete_overlay_word_capacity >= needed_words {
+        return;
+    }
+    const new_bytes: usize = (needed_words as usize) * 8usize;
+    const old_bytes: usize = (collection.delete_overlay_word_capacity as usize) * 8usize;
+    const allocator: &HeapAllocator = get_heap_allocator();
+    var mem: &byte = null;
+    if collection.delete_overlay_bits == null || collection.delete_overlay_word_capacity == 0u32 {
+        mem = try allocator.alloc(new_bytes);
+        _ = mem_set(mem, 0 as byte, new_bytes);
+    } else {
+        mem = try allocator.realloc(collection.delete_overlay_bits as &byte, new_bytes);
+        if new_bytes > old_bytes {
+            if mem == null {
+                return error.DbRowFull;
+            }
+            _ = mem_set(&mem[old_bytes], 0 as byte, new_bytes - old_bytes);
+        }
+    }
+    collection.delete_overlay_bits = mem as &u64;
+    collection.delete_overlay_word_capacity = needed_words;
+}
+
+fn db_collection_set_delete_overlay_tombstone(collection: &DbCollection, row_idx: u32, tombstone: bool) !void {
+    if collection == null {
+        return error.DbCollectionNotFound;
+    }
+    if tombstone {
+        try db_collection_ensure_delete_overlay_capacity(collection, row_idx + 1u32);
+    } else if collection.delete_overlay_bits == null {
+        return;
+    }
+    const word_idx_u32: u32 = row_idx / 64u32;
+    if word_idx_u32 >= collection.delete_overlay_word_capacity {
+        return;
+    }
+    const word_idx: usize = word_idx_u32 as usize;
+    const bit_idx: i32 = (row_idx % 64u32) as i32;
+    const mask: u64 = 1u64 << bit_idx;
+    if tombstone {
+        collection.delete_overlay_bits[word_idx] = collection.delete_overlay_bits[word_idx] | mask;
+    } else {
+        collection.delete_overlay_bits[word_idx] = collection.delete_overlay_bits[word_idx] & (~mask);
+    }
+}
+
+fn db_collection_fill_delete_overlay_range(collection: &DbCollection, start_row_idx: u32, end_row_idx_exclusive: u32) !void {
+    if collection == null || start_row_idx >= end_row_idx_exclusive {
+        return;
+    }
+    try db_collection_ensure_delete_overlay_capacity(collection, end_row_idx_exclusive);
+    var current: u32 = start_row_idx;
+    while current < end_row_idx_exclusive {
+        const word_idx: usize = (current / 64u32) as usize;
+        const bit_idx: u32 = current % 64u32;
+        const remaining_in_word: u32 = 64u32 - bit_idx;
+        var fill_count: u32 = end_row_idx_exclusive - current;
+        if fill_count > remaining_in_word {
+            fill_count = remaining_in_word;
+        }
+        var mask: u64 = 18446744073709551615u64;
+        if fill_count < 64u32 {
+            mask = (1u64 << (fill_count as i32)) - 1u64;
+        }
+        collection.delete_overlay_bits[word_idx] = collection.delete_overlay_bits[word_idx] | (mask << (bit_idx as i32));
+        current = current + fill_count;
+    }
 }
 
 fn db_collection_prepare_row_writes(collection: &DbCollection) !void {
@@ -1150,6 +1300,20 @@ fn db_row_effective_tombstone(collection: &DbCollection, row: &DbStoredRow) bool
 
 fn db_row_visible(collection: &DbCollection, row: &DbStoredRow) bool {
     return row != null && row.present && !db_row_effective_tombstone(collection, row);
+}
+
+fn db_row_effective_tombstone_at_slot(collection: &DbCollection, row: &DbStoredRow, row_slot: u32) bool {
+    return row != null &&
+        row.present &&
+        (
+            row.tombstone ||
+            db_collection_delete_overlay_tombstone(collection, row_slot) ||
+            (collection != null && row.doc_id > 0u64 && row.doc_id <= collection.deleted_through_doc_id)
+        );
+}
+
+fn db_row_visible_at_slot(collection: &DbCollection, row: &DbStoredRow, row_slot: u32) bool {
+    return row != null && row.present && !db_row_effective_tombstone_at_slot(collection, row, row_slot);
 }
 
 fn db_collection_page_dirty(collection: &DbCollection, page_offset: u32) bool {
@@ -1237,6 +1401,7 @@ fn db_collection_reset(collection: &DbCollection) void {
     } else if collection.rows != null {
         _ = mem_set(collection.rows as &byte, 0 as byte, db_rows_alloc_size(collection.row_capacity));
         db_collection_clear_dirty_pages(collection);
+        db_collection_clear_delete_overlay(collection);
     }
     collection.present = false;
     collection.collection_id = 0u32;
@@ -1251,6 +1416,8 @@ fn db_collection_reset(collection: &DbCollection) void {
     collection.rows_loaded = false;
     collection.may_have_tombstones = false;
     collection.prefix_delete_only = true;
+    collection.delete_overlay_suffix_valid = true;
+    collection.delete_overlay_suffix_start = 0u32;
     db_collection_clear_tombstone_patch_pages(collection);
     collection.secondary_index_count = 0u16;
     collection.blob_chunk_count = 0u16;
@@ -1308,6 +1475,8 @@ fn db_copy_collection_used(target: &DbCollection, source: &DbCollection) !void {
     target.rows_loaded = source.rows_loaded;
     target.may_have_tombstones = source.may_have_tombstones;
     target.prefix_delete_only = source.prefix_delete_only;
+    target.delete_overlay_suffix_valid = source.delete_overlay_suffix_valid;
+    target.delete_overlay_suffix_start = source.delete_overlay_suffix_start;
     target.secondary_index_count = source.secondary_index_count;
     target.blob_chunk_count = 0u16;
     target.row_count = source.row_count;
@@ -1322,6 +1491,7 @@ fn db_copy_collection_used(target: &DbCollection, source: &DbCollection) !void {
         index_idx = index_idx + 1usize;
     }
     if source.row_count == 0u32 || source.rows == null {
+        db_collection_clear_delete_overlay(target);
         return;
     }
     if target.rows != null && target.rows != source.rows {
@@ -1333,6 +1503,16 @@ fn db_copy_collection_used(target: &DbCollection, source: &DbCollection) !void {
     target.rows_refcount = source.rows_refcount;
     if target.rows_refcount != null {
         target.rows_refcount[0] = target.rows_refcount[0] + 1u32;
+    }
+    if source.delete_overlay_bits != null && source.delete_overlay_word_capacity > 0u32 {
+        try db_collection_ensure_delete_overlay_capacity(target, source.row_count);
+        _ = mem_copy(
+            target.delete_overlay_bits as &byte,
+            source.delete_overlay_bits as &const byte,
+            (source.delete_overlay_word_capacity as usize) * 8usize,
+        );
+    } else {
+        db_collection_clear_delete_overlay(target);
     }
 }
 
@@ -1942,6 +2122,36 @@ fn db_collection_mark_page_dirty(collection: &DbCollection, page_offset: u32) !v
     collection.dirty_page_bits[word_idx] = collection.dirty_page_bits[word_idx] | (1u64 << bit_idx);
 }
 
+fn db_collection_mark_page_range_dirty(collection: &DbCollection, start_page_offset: u32, end_page_offset_exclusive: u32) !void {
+    if collection == null {
+        return error.DbCollectionNotFound;
+    }
+    if start_page_offset >= end_page_offset_exclusive {
+        return;
+    }
+    db_collection_clear_tombstone_patch_pages(collection);
+    try db_collection_ensure_dirty_page_capacity(
+        collection,
+        db_collection_first_row_for_page_offset(collection, end_page_offset_exclusive - 1u32) + 1u32,
+    );
+    var current: u32 = start_page_offset;
+    while current < end_page_offset_exclusive {
+        const word_idx: usize = (current / 64u32) as usize;
+        const bit_idx: u32 = current % 64u32;
+        const remaining_in_word: u32 = 64u32 - bit_idx;
+        var fill_count: u32 = end_page_offset_exclusive - current;
+        if fill_count > remaining_in_word {
+            fill_count = remaining_in_word;
+        }
+        var mask: u64 = 18446744073709551615u64;
+        if fill_count < 64u32 {
+            mask = (1u64 << (fill_count as i32)) - 1u64;
+        }
+        collection.dirty_page_bits[word_idx] = collection.dirty_page_bits[word_idx] | (mask << (bit_idx as i32));
+        current = current + fill_count;
+    }
+}
+
 fn db_collection_mark_all_pages_dirty(collection: &DbCollection) !void {
     if collection == null {
         return error.DbCollectionNotFound;
@@ -2060,7 +2270,7 @@ fn db_collection_encode_page_range(collection: &DbCollection, page_size: u32, no
             row.record_ptr = record_pointer_make(page_id, local_slot);
             const cell_len: usize = RECORD_CELL_HEADER_SIZE + row.doc_len as usize;
             var flags: u16 = 0u16;
-            if row.tombstone {
+            if db_row_effective_tombstone_at_slot(collection, row, row_idx) {
                 flags = SLOT_FLAG_TOMBSTONE;
             }
             const cell_view: SlottedPageCellView = try slotted_page_insert_reserve_with_flags(out, cell_len, flags);
@@ -2114,6 +2324,7 @@ fn db_collection_load_page_range(collection: &DbCollection, page_id: u32, page_o
             }
             if slot_is_tombstone(cell.flags) && row.doc_id > collection.deleted_through_doc_id {
                 collection.prefix_delete_only = false;
+                collection.delete_overlay_suffix_valid = false;
             }
             if row.doc_id > max_doc_id {
                 max_doc_id = row.doc_id;
@@ -2223,6 +2434,7 @@ fn db_collection_load_page_header_only(db: &DbHandle, collection: &DbCollection,
             }
             if slot_is_tombstone(slot.flags) && row.doc_id > collection.deleted_through_doc_id {
                 collection.prefix_delete_only = false;
+                collection.delete_overlay_suffix_valid = false;
             }
             if row.doc_id > max_doc_id {
                 max_doc_id = row.doc_id;
@@ -2340,9 +2552,9 @@ fn db_collection_try_patch_tombstone_page_from_disk(db: &DbHandle, collection: &
     if page_id < 2u32 || page_id >= db.pager_session.info.meta.page_count {
         return;
     }
-    try pager_read_page_with_file(&db.pager_session.db, &db.pager_session.info, page_id, page_buf);
+    try pager_read_page_bytes_with_file(&db.pager_session.db, &db.pager_session.info, page_id, 0usize, page_buf);
     const header: &PageHeader = page_header_from_buf(page_buf);
-    if header == null || header.page_type != PageType.DATA {
+    if header == null || header.page_type != PageType.DATA || header.lower < page_header_size() as u16 || header.upper < header.lower {
         return error.DbPageCorrupt;
     }
     const slot_count: u16 = slotted_page_slot_count(page_buf);
@@ -2374,8 +2586,9 @@ fn db_collection_try_patch_tombstone_page_from_disk(db: &DbHandle, collection: &
             cell_doc_len != row.doc_len as usize {
             return;
         }
-        if slot_is_tombstone(cell.flags) != row.tombstone {
-            try slotted_page_set_slot_tombstone(page_buf, slot_idx, row.tombstone);
+        const expected_tombstone: bool = db_row_effective_tombstone_at_slot(collection, row, row_idx);
+        if slot_is_tombstone(cell.flags) != expected_tombstone {
+            try slotted_page_set_slot_tombstone(page_buf, slot_idx, expected_tombstone);
         }
         slot_idx = slot_idx + 1u16;
     }
@@ -2401,7 +2614,7 @@ fn db_materialize_matched_rows_for_cursor(db: &DbHandle, view_slot: u16, collect
             return error.DbCollectionNotFound;
         }
         const row: &DbStoredRow = &collection.rows[row_idx];
-        if db_row_visible(collection, row) && !row.blob_loaded {
+        if db_row_visible_at_slot(collection, row, row_slot) && !row.blob_loaded {
             const page_offset: u32 = row_slot / (db_collection_rows_per_page(collection) as u32);
             try db_ensure_collection_page_blobs_loaded(db, collection, page_offset);
         }
@@ -2437,7 +2650,7 @@ fn db_rebuild_primary_index(db: &DbHandle, collection_slot: u16) !void {
     var row_idx: u32 = 0u32;
     while row_idx < collection.row_count {
         const row: &DbStoredRow = &collection.rows[row_idx as usize];
-        if db_row_visible(collection, row) {
+        if db_row_visible_at_slot(collection, row, row_idx) {
             try primary_btree_insert(&db.primary_indexes[slot_idx], row.doc_id, &row.record_ptr);
         }
         row_idx = row_idx + 1u32;
@@ -2479,11 +2692,11 @@ fn db_try_apply_primary_index_delta(db: &DbHandle, collection_slot: u16, previou
         var staged_row: &DbStoredRow = null;
         if row_idx < previous.row_count {
             prev_row = &previous.rows[row_idx as usize];
-            prev_visible = db_row_visible(previous, prev_row);
+            prev_visible = db_row_visible_at_slot(previous, prev_row, row_idx);
         }
         if row_idx < staged.row_count {
             staged_row = &staged.rows[row_idx as usize];
-            staged_visible = db_row_visible(staged, staged_row);
+            staged_visible = db_row_visible_at_slot(staged, staged_row, row_idx);
         }
         if prev_visible {
             if !staged_visible {
@@ -2591,7 +2804,7 @@ fn db_rebuild_secondary_index(db: &DbHandle, collection_slot: u16, index_slot: u
     var row_idx: u32 = 0u32;
     while row_idx < collection.row_count {
         const row: &DbStoredRow = &collection.rows[row_idx as usize];
-        if db_row_visible(collection, row) {
+        if db_row_visible_at_slot(collection, row, row_idx) {
             const node_union: !&[byte] = path_program_eval(&index_state.path_program, try db_row_blob(row));
             if node_union.error_id == 0u32 {
                 const node: &[byte] = node_union.value;
@@ -2769,7 +2982,7 @@ fn db_check_validate_collection_rows(collection: &DbCollection, expected_next_do
         if row.doc_id > max_doc_id {
             max_doc_id = row.doc_id;
         }
-        if db_row_visible(collection, row) {
+        if db_row_visible_at_slot(collection, row, row_idx) {
             _ = primary_btree_insert(&tree, row.doc_id, &row.record_ptr) catch {
                 return error.DbPageCorrupt;
             };
@@ -2817,6 +3030,10 @@ fn db_check_collection_at_stem(stem: &const byte, page_size: u32, entry: &Catalo
         row_count: 0u32,
         row_capacity: 0u32,
         rows_refcount: null,
+        delete_overlay_suffix_valid: true,
+        delete_overlay_suffix_start: 0u32,
+        delete_overlay_word_capacity: 0u32,
+        delete_overlay_bits: null,
         dirty_page_word_capacity: 0u32,
         tombstone_patch_pages_valid: false,
         tombstone_patch_page_start: 0u32,
@@ -3173,7 +3390,7 @@ fn db_collection_row_ref(db: &DbHandle, view_slot: u16, collection_slot: u16, ro
         return error.DbCollectionNotFound;
     }
     const row: &DbStoredRow = &collection.rows[row_idx];
-    if db_row_effective_tombstone(collection, row) {
+    if db_row_effective_tombstone_at_slot(collection, row, row_slot) {
         return error.DbCollectionNotFound;
     }
     if !row.blob_loaded && state.retired {
@@ -4445,7 +4662,7 @@ fn db_plan_primary_lookup_row_slot(db: &DbHandle, view_slot: u16, collection_slo
             const direct_idx: u32 = direct_idx_u64 as u32;
             if direct_idx < collection.row_count && direct_idx < collection.row_capacity {
                 const direct_row: &DbStoredRow = &collection.rows[direct_idx as usize];
-                if db_row_visible(collection, direct_row) && direct_row.doc_id == lookup_doc_id {
+                if db_row_visible_at_slot(collection, direct_row, direct_idx) && direct_row.doc_id == lookup_doc_id {
                     found_out[0] = true;
                     row_slot_out[0] = direct_idx;
                     return;
@@ -4467,7 +4684,7 @@ fn db_plan_primary_lookup_row_slot(db: &DbHandle, view_slot: u16, collection_slo
     }
     if direct_idx < collection.row_count && direct_idx < collection.row_capacity {
         const row: &DbStoredRow = &collection.rows[direct_idx as usize];
-        if db_row_visible(collection, row) &&
+        if db_row_visible_at_slot(collection, row, direct_idx) &&
             row.doc_id == lookup_doc_id &&
             row.record_ptr.page_id == ptr.page_id &&
             row.record_ptr.slot_id == ptr.slot_id {
@@ -4479,7 +4696,7 @@ fn db_plan_primary_lookup_row_slot(db: &DbHandle, view_slot: u16, collection_slo
     var i: u32 = 0u32;
     while i < collection.row_count {
         const row: &DbStoredRow = &collection.rows[i as usize];
-        if db_row_visible(collection, row) &&
+        if db_row_visible_at_slot(collection, row, i) &&
             row.doc_id == lookup_doc_id &&
             row.record_ptr.page_id == ptr.page_id &&
             row.record_ptr.slot_id == ptr.slot_id {
@@ -4507,7 +4724,7 @@ fn db_txn_apply_update_row_in_collection_impl(txn: &Txn, plan: &QueryPlan, colle
     }
     try db_collection_prepare_row_writes(collection);
     const row: &DbStoredRow = try db_row_at(collection, row_slot);
-    if !db_row_visible(collection, row) {
+    if !db_row_visible_at_slot(collection, row, row_slot) {
         return false;
     }
     if !row.blob_loaded {
@@ -4550,13 +4767,14 @@ fn db_txn_apply_delete_row_in_collection(collection: &DbCollection, row_slot: u3
     }
     try db_collection_prepare_row_writes(collection);
     const row: &DbStoredRow = try db_row_at(collection, row_slot);
-    if !db_row_visible(collection, row) {
+    if !db_row_visible_at_slot(collection, row, row_slot) {
         return false;
     }
     collection.prefix_delete_only = false;
     row.tombstone = true;
     collection.may_have_tombstones = true;
     collection.primary_index_ready = false;
+    collection.delete_overlay_suffix_valid = false;
     try db_collection_mark_row_dirty(collection, row_slot);
     return true;
 }
@@ -4608,7 +4826,7 @@ fn db_txn_try_apply_doc_id_range_update(txn: &Txn, plan: &QueryPlan, collection_
         var updated: bool = false;
         if literal_fast_path {
             const row: &DbStoredRow = &collection.rows[row_slot as usize];
-            if db_row_visible(collection, row) {
+            if db_row_visible_at_slot(collection, row, row_slot) {
                 if !row.blob_loaded {
                     try db_ensure_row_blob_loaded(txn.db, collection, row);
                 }
@@ -4666,17 +4884,34 @@ fn db_txn_try_apply_doc_id_range_delete(txn: &Txn, plan: &QueryPlan, collection_
         }
     }
     const allow_tombstone_patch: bool = !db_collection_has_dirty_pages(collection);
-    try db_collection_prepare_row_writes(collection);
     collection.prefix_delete_only = false;
     collection.may_have_tombstones = true;
     collection.primary_index_ready = false;
+    const rows_per_page_u32: u32 = db_collection_rows_per_page(collection) as u32;
+    const start_doc_id: u64 = start_slot as u64 + 1u64;
+    if collection.delete_overlay_suffix_valid &&
+        start_doc_id > collection.deleted_through_doc_id &&
+        end_slot_exclusive == collection.delete_overlay_suffix_start {
+        try db_collection_fill_delete_overlay_range(collection, start_slot, end_slot_exclusive);
+        collection.delete_overlay_suffix_start = start_slot;
+        if rows_per_page_u32 != 0u32 {
+            const start_page: u32 = start_slot / rows_per_page_u32;
+            const end_page_exclusive: u32 = ((end_slot_exclusive - 1u32) / rows_per_page_u32) + 1u32;
+            try db_collection_mark_page_range_dirty(collection, start_page, end_page_exclusive);
+            if allow_tombstone_patch {
+                db_collection_extend_tombstone_patch_pages(collection, start_page, end_page_exclusive);
+            }
+        }
+        changed_out[0] = end_slot_exclusive - start_slot;
+        return;
+    }
+    collection.delete_overlay_suffix_valid = false;
     var last_dirty_page: u32 = 4294967295u32;
     var row_slot: u32 = start_slot;
-    const rows_per_page_u32: u32 = db_collection_rows_per_page(collection) as u32;
     while row_slot < end_slot_exclusive {
         const row: &DbStoredRow = &collection.rows[row_slot as usize];
-        if db_row_visible(collection, row) {
-            row.tombstone = true;
+        if db_row_visible_at_slot(collection, row, row_slot) {
+            try db_collection_set_delete_overlay_tombstone(collection, row_slot, true);
             const page_offset: u32 = row_slot / rows_per_page_u32;
             if page_offset != last_dirty_page {
                 try db_collection_mark_page_dirty(collection, page_offset);
@@ -4703,7 +4938,7 @@ fn db_txn_stage_update_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_s
         var row_slot: u32 = 0u32;
         while row_slot < collection.row_count {
             const row: &DbStoredRow = &collection.rows[row_slot as usize];
-            if db_row_visible(collection, row) {
+            if db_row_visible_at_slot(collection, row, row_slot) {
                 if try db_txn_apply_update_row_in_collection(txn, plan, collection, row_slot, program, value_expr) {
                     changed = changed + 1u32;
                 }
@@ -4750,7 +4985,7 @@ fn db_txn_stage_update_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_s
             var row_slot: u32 = 0u32;
             while row_slot < collection.row_count {
                 const row: &DbStoredRow = &collection.rows[row_slot as usize];
-                if db_row_visible(collection, row) {
+                if db_row_visible_at_slot(collection, row, row_slot) {
                     if try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr) {
                         if try db_txn_apply_update_row_in_collection(txn, plan, collection, row_slot, program, value_expr) {
                             changed = changed + 1u32;
@@ -4809,7 +5044,7 @@ fn db_txn_stage_delete_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_s
         var row_slot: u32 = 0u32;
         while row_slot < collection.row_count {
             const row: &DbStoredRow = &collection.rows[row_slot as usize];
-            if db_row_visible(collection, row) {
+            if db_row_visible_at_slot(collection, row, row_slot) {
                 if try db_txn_apply_delete_row_in_collection(collection, row_slot) {
                     changed = changed + 1u32;
                 }
@@ -4856,7 +5091,7 @@ fn db_txn_stage_delete_stmt_apply_root(txn: &Txn, plan: &QueryPlan, collection_s
             var row_slot: u32 = 0u32;
             while row_slot < collection.row_count {
                 const row: &DbStoredRow = &collection.rows[row_slot as usize];
-                if db_row_visible(collection, row) {
+                if db_row_visible_at_slot(collection, row, row_slot) {
                     if try db_row_matches_filter_expr(txn.db, plan, txn.view_slot, collection_slot, row_slot, root.filter_expr) {
                         if try db_txn_apply_delete_row_in_collection(collection, row_slot) {
                             changed = changed + 1u32;
@@ -5047,7 +5282,10 @@ fn db_txn_stage_insert(txn: &Txn, collection_name: &[const byte], json_text: &[c
         var scan_slot: usize = 0usize;
         while scan_slot < state.collections[collection_idx].row_count as usize {
             if state.collections[collection_idx].rows[scan_slot].present &&
-                state.collections[collection_idx].rows[scan_slot].tombstone &&
+                (
+                    state.collections[collection_idx].rows[scan_slot].tombstone ||
+                    db_collection_delete_overlay_tombstone(&state.collections[collection_idx], scan_slot as u32)
+                ) &&
                 state.collections[collection_idx].rows[scan_slot].doc_id > state.collections[collection_idx].deleted_through_doc_id {
                 row_slot = scan_slot as u32;
                 break;
@@ -5065,6 +5303,17 @@ fn db_txn_stage_insert(txn: &Txn, collection_name: &[const byte], json_text: &[c
         return error.DbRowFull;
     }
     try db_collection_ensure_row_capacity(&state.collections[collection_idx], row_slot + 1u32);
+    if state.collections[collection_idx].delete_overlay_suffix_valid &&
+        state.collections[collection_idx].delete_overlay_bits != null &&
+        row_slot == state.collections[collection_idx].delete_overlay_suffix_start {
+        state.collections[collection_idx].delete_overlay_suffix_start = row_slot + 1u32;
+    } else if state.collections[collection_idx].delete_overlay_suffix_valid &&
+        state.collections[collection_idx].delete_overlay_bits != null &&
+        row_slot > state.collections[collection_idx].delete_overlay_suffix_start &&
+        row_slot < state.collections[collection_idx].row_count {
+        state.collections[collection_idx].delete_overlay_suffix_valid = false;
+    }
+    try db_collection_set_delete_overlay_tombstone(&state.collections[collection_idx], row_slot, false);
     const row: &DbStoredRow = &state.collections[collection_idx].rows[row_slot as usize];
     db_stored_row_reset(row);
     row.present = true;
@@ -5077,9 +5326,18 @@ fn db_txn_stage_insert(txn: &Txn, collection_name: &[const byte], json_text: &[c
     state.collections[collection_idx].next_doc_id = state.collections[collection_idx].next_doc_id + 1u64;
     if row_slot == state.collections[collection_idx].row_count {
         state.collections[collection_idx].row_count = state.collections[collection_idx].row_count + 1u32;
+        if !db_collection_has_delete_overlay_tombstones(&state.collections[collection_idx]) {
+            state.collections[collection_idx].delete_overlay_suffix_valid = true;
+            state.collections[collection_idx].delete_overlay_suffix_start = state.collections[collection_idx].row_count;
+        }
     } else {
         state.collections[collection_idx].may_have_tombstones = true;
         state.collections[collection_idx].prefix_delete_only = false;
+        if state.collections[collection_idx].delete_overlay_suffix_valid &&
+            state.collections[collection_idx].delete_overlay_suffix_start < state.collections[collection_idx].row_count &&
+            row_slot == state.collections[collection_idx].delete_overlay_suffix_start {
+            state.collections[collection_idx].delete_overlay_suffix_start = row_slot + 1u32;
+        }
     }
     if db_collection_update_max_doc_len(&state.collections[collection_idx], row.doc_len) {
         try db_collection_refresh_packed_layout(&state.collections[collection_idx], db_effective_page_size(txn.db));
@@ -5433,7 +5691,7 @@ fn db_plan_collect_limit_lazy_seq_scan(
         }
         while row_idx < row_end && matched < limit_u16 {
             const row: &DbStoredRow = &collection.rows[row_idx as usize];
-            if db_row_visible(collection, row) {
+            if db_row_visible_at_slot(collection, row, row_idx) {
                 var include_row: bool = true;
                 if filter_expr >= 0i16 {
                     const rowref: RowRef = try db_collection_row_ref(db, view_slot, collection_slot, row_idx);
@@ -5504,7 +5762,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
         var i: u32 = 0u32;
         while i < collection.row_count {
             const row: &DbStoredRow = &collection.rows[i as usize];
-            if db_row_visible(collection, row) {
+            if db_row_visible_at_slot(collection, row, i) {
                 if out_count as usize >= out_rows.len {
                     return error.DbRowFull;
                 }
@@ -5530,7 +5788,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
         }
         if direct_idx < collection.row_count && direct_idx < collection.row_capacity {
             const row: &DbStoredRow = &collection.rows[direct_idx as usize];
-            if db_row_visible(collection, row) &&
+            if db_row_visible_at_slot(collection, row, direct_idx) &&
                 row.doc_id == node.lookup_doc_id &&
                 row.record_ptr.page_id == ptr.page_id &&
                 row.record_ptr.slot_id == ptr.slot_id {
@@ -5542,7 +5800,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
         var i: u32 = 0u32;
         while i < collection.row_count {
             const row: &DbStoredRow = &collection.rows[i as usize];
-            if db_row_visible(collection, row) && row.record_ptr.page_id == ptr.page_id && row.record_ptr.slot_id == ptr.slot_id {
+            if db_row_visible_at_slot(collection, row, i) && row.record_ptr.page_id == ptr.page_id && row.record_ptr.slot_id == ptr.slot_id {
                 out_rows.ptr[0usize] = i;
                 count_out[0] = 1u16;
                 return;
@@ -5589,7 +5847,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
                     break;
                 }
                 const row: &DbStoredRow = &collection.rows[row_idx as usize];
-                if db_row_visible(collection, row) {
+                if db_row_visible_at_slot(collection, row, row_idx) {
                     out_rows.ptr[limited_count as usize] = row_idx;
                     limited_count = limited_count + 1u16;
                 }
@@ -5608,7 +5866,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
                         break;
                     }
                     const row: &DbStoredRow = &collection.rows[row_idx as usize];
-                    if db_row_visible(collection, row) {
+                    if db_row_visible_at_slot(collection, row, row_idx) {
                         const rowref: RowRef = try db_collection_row_ref(db, view_slot, collection_slot, row_idx);
                         if try db_eval_predicate(db, &plan.bound, &rowref, child_node.filter_expr) {
                             out_rows.ptr[limited_count as usize] = row_idx;
@@ -5671,7 +5929,7 @@ fn db_plan_collect(db: &DbHandle, view_slot: u16, plan: &QueryPlan, collection_s
             var row_idx: u32 = 0u32;
             while row_idx < collection.row_count {
                 const row: &DbStoredRow = &collection.rows[row_idx as usize];
-                if db_row_visible(collection, row) {
+                if db_row_visible_at_slot(collection, row, row_idx) {
                     const rowref: RowRef = try db_collection_row_ref(db, view_slot, collection_slot, row_idx);
                     if try db_eval_predicate(db, &plan.bound, &rowref, node.filter_expr) {
                         if out_count as usize >= out_rows.len {

@@ -1,0 +1,225 @@
+use std.runtime.entry.set_process_stack_limit_bytes;
+
+use libc.getenv;
+use libc.atoll;
+use libc.printf;
+use libc.snprintf;
+
+use osal.CLOCK_MONOTONIC;
+use syscall.TimeSpec;
+use syscall.sys_clock_gettime;
+
+use lib.api.db.DbHandle;
+use lib.api.db.Txn;
+use lib.api.db.db_query;
+use lib.api.db.db_test_create_at_stem;
+use lib.api.db.db_test_create_collection;
+use lib.api.db.db_test_refresh_pager_session;
+use lib.api.db.db_test_release_loaded_blobs;
+use lib.api.db.db_test_txn_insert_json;
+use lib.api.db.txn_begin;
+use lib.api.db.txn_commit;
+use lib.api.db.txn_exec;
+use lib.api.db.txn_rollback;
+use lib.api.result.QueryResult;
+use lib.storage.pager.catalog_cleanup_stem;
+use lib.storage.pager.pager_checkpoint_at_stem;
+
+const TEST_STEM_BENCH: *const byte = "/tmp/nosqlite_physical_delete_only" as *const byte;
+const JSON_BUF_CAP: usize = 128;
+const SQL_BUF_CAP: usize = 160;
+
+error BenchBufferTooSmall;
+error BenchUnexpectedResult;
+
+fn cleanup() void {
+    _ = catalog_cleanup_stem(TEST_STEM_BENCH) catch {};
+}
+
+fn env_bytes(name: &const byte) &byte {
+    return getenv(name);
+}
+
+fn env_u64(name: &const byte, fallback: u64) u64 {
+    const raw: &byte = env_bytes(name);
+    if raw == null || raw[0] == 0 as byte {
+        return fallback;
+    }
+    const parsed: i64 = atoll(raw as &const byte);
+    if parsed <= 0i64 {
+        return fallback;
+    }
+    return parsed as u64;
+}
+
+fn now_nsec() u64 {
+    var ts: TimeSpec = TimeSpec{ tv_sec: 0i64, tv_nsec: 0i64 };
+    _ = sys_clock_gettime(CLOCK_MONOTONIC, &ts) catch {
+        return 0u64;
+    };
+    return (ts.tv_sec as u64) * 1000000000u64 + (ts.tv_nsec as u64);
+}
+
+fn elapsed_bench_usec(start_ns: u64) u64 {
+    const elapsed_us: u64 = (now_nsec() - start_ns) / 1000u64;
+    if elapsed_us == 0u64 {
+        return 1u64;
+    }
+    return elapsed_us;
+}
+
+fn build_json(doc_id: u64, out: &[byte]) !usize {
+    if out.ptr == null || out.len < JSON_BUF_CAP {
+        return error.BenchBufferTooSmall;
+    }
+    const bucket: u64 = doc_id % 100u64;
+    const age: u64 = 18u64 + (doc_id % 41u64);
+    var active: &const byte = "false";
+    if doc_id % 2u64 == 0u64 {
+        active = "true";
+    }
+    const len_i32: i32 = snprintf(
+        out.ptr,
+        out.len,
+        "{\"n\":%lu,\"bucket\":%lu,\"age\":%lu,\"active\":%s}\0" as &const byte,
+        doc_id,
+        bucket,
+        age,
+        active,
+    );
+    if len_i32 <= 0 {
+        return error.BenchBufferTooSmall;
+    }
+    const len: usize = (len_i32 as! usize) catch {
+        return error.BenchBufferTooSmall;
+    };
+    if len + 1usize > out.len {
+        return error.BenchBufferTooSmall;
+    }
+    return len;
+}
+
+fn build_bulk_delete_sql(start_id: u64, end_id_exclusive: u64, out: &[byte]) !usize {
+    if out.ptr == null || out.len < SQL_BUF_CAP {
+        return error.BenchBufferTooSmall;
+    }
+    const len_i32: i32 = snprintf(
+        out.ptr,
+        out.len,
+        "DELETE FROM users WHERE _id >= %lu AND _id < %lu;\0" as &const byte,
+        start_id,
+        end_id_exclusive,
+    );
+    if len_i32 <= 0 {
+        return error.BenchBufferTooSmall;
+    }
+    const len: usize = (len_i32 as! usize) catch {
+        return error.BenchBufferTooSmall;
+    };
+    if len + 1usize > out.len {
+        return error.BenchBufferTooSmall;
+    }
+    return len;
+}
+
+fn create_users_db(db: &DbHandle) !void {
+    try db_test_create_at_stem(db, TEST_STEM_BENCH);
+    try db_test_create_collection(db, "users");
+}
+
+fn run_load(db: &DbHandle, docs: u64, batch_rows: u64) !void {
+    var inserted_total: u64 = 0u64;
+    while inserted_total < docs {
+        var txn: Txn = try txn_begin(db);
+        var txn_ok: bool = false;
+        defer {
+            if !txn_ok {
+                _ = txn_rollback(&txn) catch {};
+            }
+        }
+        const remaining: u64 = docs - inserted_total;
+        var current_batch: u64 = batch_rows;
+        if remaining < current_batch {
+            current_batch = remaining;
+        }
+        var doc_id: u64 = inserted_total + 1u64;
+        const batch_end: u64 = inserted_total + current_batch;
+        var json_buf: [byte: JSON_BUF_CAP] = [];
+        while doc_id <= batch_end {
+            const json_len: usize = try build_json(doc_id, json_buf[0: JSON_BUF_CAP]);
+            _ = try db_test_txn_insert_json(&txn, "users", json_buf[0: json_len]);
+            doc_id = doc_id + 1u64;
+        }
+        try txn_commit(&txn);
+        txn_ok = true;
+        inserted_total = batch_end;
+    }
+}
+
+fn run_physical_delete(db: &DbHandle, docs: u64, batch_rows: u64) !u64 {
+    var deleted_total: u64 = 0u64;
+    const start_ns: u64 = now_nsec();
+    while deleted_total < docs {
+        var txn: Txn = try txn_begin(db);
+        var txn_ok: bool = false;
+        defer {
+            if !txn_ok {
+                _ = txn_rollback(&txn) catch {};
+            }
+        }
+        const remaining: u64 = docs - deleted_total;
+        var current_batch: u64 = batch_rows;
+        if remaining < current_batch {
+            current_batch = remaining;
+        }
+        const batch_end_exclusive: u64 = docs - deleted_total + 1u64;
+        const batch_start: u64 = batch_end_exclusive - current_batch;
+        var sql_buf: [byte: SQL_BUF_CAP] = [];
+        const sql_len: usize = try build_bulk_delete_sql(batch_start, batch_end_exclusive, sql_buf[0: SQL_BUF_CAP]);
+        try txn_exec(&txn, sql_buf[0: sql_len]);
+        try txn_commit(&txn);
+        txn_ok = true;
+        deleted_total = deleted_total + current_batch;
+    }
+    return elapsed_bench_usec(start_ns);
+}
+
+fn main() i32 {
+    set_process_stack_limit_bytes(256u64 * 1024u64 * 1024u64);
+    const docs: u64 = env_u64("NOSQLITE_MILLION_BENCH_DOCS" as &const byte, 1000000u64);
+    const batch_rows: u64 = env_u64("NOSQLITE_MILLION_BENCH_BATCH_ROWS" as &const byte, 48000u64);
+
+    cleanup();
+    defer {
+        cleanup();
+    }
+
+    var db: DbHandle = DbHandle{};
+    _ = create_users_db(&db) catch {
+        return 1;
+    };
+    _ = run_load(&db, docs, batch_rows) catch {
+        return 2;
+    };
+    _ = pager_checkpoint_at_stem(TEST_STEM_BENCH) catch {
+        return 3;
+    };
+    _ = db_test_release_loaded_blobs(&db) catch {
+        return 4;
+    };
+    _ = db_test_refresh_pager_session(&db) catch {
+        return 5;
+    };
+
+    const elapsed_us: u64 = run_physical_delete(&db, docs, batch_rows) catch {
+        return 6;
+    };
+    const remaining: QueryResult = db_query(&db, "SELECT _id FROM users LIMIT 1;") catch {
+        return 7;
+    };
+    if remaining.row_count != 0u32 {
+        return 8;
+    }
+    printf("RESULT case=physical_delete_only us=%lu rows=%lu\n" as *byte, elapsed_us, docs);
+    return 0;
+}
