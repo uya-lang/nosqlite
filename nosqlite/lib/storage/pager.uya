@@ -2281,6 +2281,9 @@ export struct WalBatch {
     used_bytes: usize,
     capacity: usize,
     bytes: &byte,
+    pending_record_offset: usize,
+    pending_record_len: usize,
+    pending_record_active: bool,
 }
 
 fn wal_store_u32_le(out: &[byte], off: usize, value: u32) void {
@@ -2505,7 +2508,10 @@ export fn wal_encode_page_write(txn_id: u64, page_id: u32, page_lsn: u64, payloa
     wal_store_u64_le(out, WAL_RECORD_HEADER_SIZE + 12, page_lsn);
     wal_store_u32_le(out, WAL_RECORD_HEADER_SIZE + 20, payload.len as u32);
     wal_store_u32_le(out, WAL_RECORD_HEADER_SIZE + 24, payload_header.checksum);
-    _ = mem_copy(&out.ptr[WAL_RECORD_HEADER_SIZE + WAL_PAGE_WRITE_META_SIZE], payload.ptr, payload.len);
+    const payload_dst: &byte = &out.ptr[WAL_RECORD_HEADER_SIZE + WAL_PAGE_WRITE_META_SIZE];
+    if payload.ptr != payload_dst {
+        _ = mem_copy(payload_dst, payload.ptr, payload.len);
+    }
     return try wal_record_finalize(out, WalRecordType.PAGE_WRITE, total);
 }
 
@@ -2656,6 +2662,9 @@ export fn wal_batch_init(txn_id: u64, commit_lsn: u64) WalBatch {
         used_bytes: 0usize,
         capacity: WAL_BATCH_MAX_BYTES,
         bytes: null,
+        pending_record_offset: 0usize,
+        pending_record_len: 0usize,
+        pending_record_active: false,
     };
 }
 
@@ -2667,6 +2676,9 @@ export fn wal_batch_reset(batch: &WalBatch, txn_id: u64, commit_lsn: u64) void {
     batch.commit_lsn = commit_lsn;
     batch.record_count = 0u16;
     batch.used_bytes = 0usize;
+    batch.pending_record_offset = 0usize;
+    batch.pending_record_len = 0usize;
+    batch.pending_record_active = false;
 }
 
 export fn wal_batch_release_storage(batch: &WalBatch) void {
@@ -2678,6 +2690,9 @@ export fn wal_batch_release_storage(batch: &WalBatch) void {
     batch.bytes = null;
     batch.used_bytes = 0usize;
     batch.record_count = 0u16;
+    batch.pending_record_offset = 0usize;
+    batch.pending_record_len = 0usize;
+    batch.pending_record_active = false;
 }
 
 fn wal_batch_ensure_storage(batch: &WalBatch, required_total: usize) !void {
@@ -2713,7 +2728,7 @@ export fn wal_batch_reserve_bytes(batch: &WalBatch, required_total: usize) !void
 }
 
 fn wal_batch_append_bytes(batch: &WalBatch, data: &[byte]) !void {
-    if batch == null || data.ptr == null {
+    if batch == null || data.ptr == null || batch.pending_record_active {
         return error.WalInvalidBuffer;
     }
     if batch.record_count as usize >= WAL_BATCH_MAX_RECORDS {
@@ -2744,19 +2759,25 @@ export fn wal_batch_record_count(batch: &WalBatch) u16 {
 }
 
 fn wal_batch_reserve_record(batch: &WalBatch, record_len: usize) !usize {
-    if batch == null {
+    if batch == null || batch.pending_record_active {
         return error.WalInvalidBuffer;
     }
     if batch.record_count as usize >= WAL_BATCH_MAX_RECORDS {
         return error.WalBatchFull;
     }
     try wal_batch_ensure_storage(batch, batch.used_bytes + record_len);
-    return batch.used_bytes;
+    batch.pending_record_offset = batch.used_bytes;
+    batch.pending_record_len = record_len;
+    batch.pending_record_active = true;
+    return batch.pending_record_offset;
 }
 
 fn wal_batch_finish_record(batch: &WalBatch, used: usize) void {
     batch.used_bytes = batch.used_bytes + used;
     batch.record_count = batch.record_count + 1u16;
+    batch.pending_record_offset = 0usize;
+    batch.pending_record_len = 0usize;
+    batch.pending_record_active = false;
 }
 
 export fn wal_batch_bytes(batch: &WalBatch) &[byte] {
@@ -2771,6 +2792,40 @@ export fn wal_batch_append_begin(batch: &WalBatch) !void {
     const dst_off: usize = try wal_batch_reserve_record(batch, total);
     const begin: WalBegin = WalBegin{ txn_id: batch.txn_id };
     const used: usize = try wal_encode_begin(&begin, batch.bytes[dst_off: total]);
+    wal_batch_finish_record(batch, used);
+}
+
+export fn wal_batch_prepare_page_write(batch: &WalBatch, page_size: u32) !&[byte] {
+    if batch == null || !page_size_is_supported(page_size) {
+        return error.WalInvalidPageSize;
+    }
+    const total: usize = try wal_page_write_record_size(page_size);
+    const dst_off: usize = try wal_batch_reserve_record(batch, total);
+    return batch.bytes[dst_off + WAL_RECORD_HEADER_SIZE + WAL_PAGE_WRITE_META_SIZE: page_size as usize];
+}
+
+export fn wal_batch_finish_page_write(batch: &WalBatch, page_id: u32, page_lsn: u64, payload: &[byte]) !void {
+    if batch == null || !batch.pending_record_active {
+        return error.WalBatchStateMismatch;
+    }
+    if payload.ptr == null || !page_size_is_supported(payload.len as u32) {
+        return error.WalInvalidPageSize;
+    }
+    const total: usize = try wal_page_write_record_size(payload.len as u32);
+    if total != batch.pending_record_len || batch.bytes == null {
+        return error.WalBatchStateMismatch;
+    }
+    const payload_off: usize = batch.pending_record_offset + WAL_RECORD_HEADER_SIZE + WAL_PAGE_WRITE_META_SIZE;
+    if payload.ptr != &batch.bytes[payload_off] {
+        return error.WalBatchStateMismatch;
+    }
+    const used: usize = try wal_encode_page_write(
+        batch.txn_id,
+        page_id,
+        page_lsn,
+        payload,
+        batch.bytes[batch.pending_record_offset: total],
+    );
     wal_batch_finish_record(batch, used);
 }
 

@@ -368,7 +368,8 @@ test "nosqlite_storage_wal_record_codec_and_batch" {
     try assert_eq_i32(decoded_page.page_id as i32, 2);
     try assert_eq_u64(decoded_page.page_lsn, 11u64);
     try assert_eq_i32(decoded_page.page_size as i32, NOSQLITE_PAGE_SIZE_DEFAULT as i32);
-    try assert_eq_bool(decoded_page.payload_checksum == checksum_bytes(page_buf), true);
+    try assert_eq_bool(decoded_page.payload_checksum == hdr.checksum, true);
+    try assert_eq_bool(page_checksum_valid(decoded_page.payload), true);
     try assert_eq_i32(slotted_page_slot_count(decoded_page.payload) as i32, 1);
 
     const commit: WalCommit = make_commit(7u64, 11u64, 3u32);
@@ -400,6 +401,22 @@ test "nosqlite_storage_wal_record_codec_and_batch" {
     const extracted: WalCommit = try wal_batch_extract_commit(&batch);
     try assert_eq_u64(extracted.commit_lsn, 11u64);
     try assert_eq_i32(extracted.page_count as i32, 3);
+
+    var inplace_batch: WalBatch = wal_batch_init(7u64, 11u64);
+    try wal_batch_append_begin(&inplace_batch);
+    const inplace_payload: &[byte] = try wal_batch_prepare_page_write(&inplace_batch, NOSQLITE_PAGE_SIZE_DEFAULT);
+    try slotted_page_init(inplace_payload, PageType.DATA);
+    _ = try slotted_page_insert_copy(inplace_payload, &"zip"[0: 3]);
+    const inplace_header: &PageHeader = page_header_from_buf(inplace_payload);
+    inplace_header.page_lsn = 11u64;
+    _ = try page_checksum_finalize(inplace_payload);
+    try wal_batch_finish_page_write(&inplace_batch, 2u32, 11u64, inplace_payload);
+    try wal_batch_append_commit(&inplace_batch, &commit);
+    const inplace_page_record: &[byte] = inplace_batch.bytes[wal_begin_record_size(): inplace_batch.used_bytes - wal_begin_record_size()];
+    const decoded_inplace: WalPageWriteView = try wal_decode_page_write(inplace_page_record);
+    try assert_eq_u64(decoded_inplace.page_lsn, 11u64);
+    try assert_eq_bool(byte_slices_equal(decoded_inplace.payload, inplace_payload), true);
+    try assert_eq_i32(slotted_page_slot_count(decoded_inplace.payload) as i32, 1);
 }
 
 test "nosqlite_storage_checkpoint_policy_ratio_and_interval" {

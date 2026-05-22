@@ -11,41 +11,41 @@
     "batch_rows": 48000,
     "load": {
       "rows": 1000000,
-      "load_us": 715368,
-      "rows_per_s": 1397881.9293007236,
+      "load_us": 970384,
+      "rows_per_s": 1030519.8766673811,
       "notes": "NoSQLite million-row benchmark; staged txn batches; direct JSON insert helper; durable commit timed"
     },
     "limit_query": {
       "samples": 100,
-      "p50_ns": 881,
-      "p95_ns": 905,
-      "p99_ns": 957,
-      "p50_us": 0.881,
-      "p95_us": 0.905,
-      "p99_us": 0.957,
-      "qps": 1125416.4040695056,
+      "p50_ns": 888,
+      "p95_ns": 937,
+      "p99_ns": 1161,
+      "p50_us": 0.888,
+      "p95_us": 0.937,
+      "p99_us": 1.161,
+      "qps": 1101345.8446221284,
       "notes": "NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64; full fetch timed"
     },
     "bulk_update": {
       "rows": 1000000,
-      "op_us": 428372,
-      "rows_per_s": 2334419.6165949223,
+      "op_us": 698732,
+      "rows_per_s": 1431163.879713538,
       "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end"
     },
     "logical_delete": {
       "rows": 1000000,
-      "op_us": 1872,
-      "rows_per_s": 534188034.1880342,
+      "op_us": 2412,
+      "rows_per_s": 414593698.1757877,
       "notes": "NoSQLite million-row benchmark; fresh preloaded and checkpointed dataset; durable head-to-tail prefix delete; commits deleted-through metadata boundary; logical delete semantics"
     },
     "physical_delete": {
       "rows": 1000000,
-      "op_us": 189425,
-      "rows_per_s": 5279134.221987594,
+      "op_us": 232921,
+      "rows_per_s": 4293301.162196625,
       "notes": "NoSQLite million-row benchmark; fresh preloaded and checkpointed dataset; durable tail-to-head range delete; prefix logical delete fast path intentionally bypassed to force physical page updates"
     },
     "notes": "NoSQLite million-row benchmark",
-    "peak_memory_kib": 1617344
+    "peak_memory_kib": 1617388
   },
   "sqlite": {
     "engine": "sqlite",
@@ -53,40 +53,40 @@
     "batch_rows": 48000,
     "load": {
       "rows": 1000000,
-      "load_us": 1453470,
-      "rows_per_s": 688008.6964299228,
+      "load_us": 1489154,
+      "rows_per_s": 671522.2199987374,
       "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; full fetch timed"
     },
     "limit_query": {
       "samples": 100,
-      "p50_ns": 13121,
-      "p95_ns": 13498,
-      "p99_ns": 15219,
-      "p50_us": 13.121,
-      "p95_us": 13.498,
-      "p99_us": 15.219,
-      "qps": 75742.08305876829,
+      "p50_ns": 13402,
+      "p95_ns": 14133,
+      "p99_ns": 16638,
+      "p50_us": 13.402,
+      "p95_us": 14.133,
+      "p99_us": 16.638,
+      "qps": 73625.93753428207,
       "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64; full fetch timed"
     },
     "bulk_update": {
       "rows": 1000000,
-      "op_us": 794558,
-      "rows_per_s": 1258561.3636764088,
+      "op_us": 853770,
+      "rows_per_s": 1171275.6362954893,
       "notes": "SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?"
     },
     "logical_delete": {
       "rows": 1000000,
-      "op_us": 157067,
-      "rows_per_s": 6366709.748069295,
+      "op_us": 200516,
+      "rows_per_s": 4987133.1963534085,
       "notes": "SQLite JSON1 reference; fresh preloaded and checkpointed million-row dataset; durable head-to-tail range DELETE; physical row delete semantics"
     },
     "physical_delete": {
       "rows": 1000000,
-      "op_us": 149585,
-      "rows_per_s": 6685162.282314403,
+      "op_us": 180313,
+      "rows_per_s": 5545911.831093709,
       "notes": "SQLite JSON1; fresh preloaded and checkpointed million-row dataset; durable tail-to-head range DELETE; physical row delete semantics"
     },
     "notes": "SQLite JSON1 million-row benchmark",
-    "peak_memory_kib": 38252
+    "peak_memory_kib": 39000
   }
 }

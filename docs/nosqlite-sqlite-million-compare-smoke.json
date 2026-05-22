@@ -11,41 +11,41 @@
     "batch_rows": 250,
     "load": {
       "rows": 1000,
-      "load_us": 834,
-      "rows_per_s": 1199040.7673860912,
+      "load_us": 737,
+      "rows_per_s": 1356852.1031207598,
       "notes": "NoSQLite million-row benchmark; staged txn batches; direct JSON insert helper; durable commit timed"
     },
     "limit_query": {
       "samples": 10,
-      "p50_ns": 944,
-      "p95_ns": 1743,
-      "p99_ns": 1743,
-      "p50_us": 0.944,
-      "p95_us": 1.743,
-      "p99_us": 1.743,
-      "qps": 972668.0284019064,
+      "p50_ns": 954,
+      "p95_ns": 1947,
+      "p99_ns": 1947,
+      "p50_us": 0.954,
+      "p95_us": 1.947,
+      "p99_us": 1.947,
+      "qps": 940556.8096313018,
       "notes": "NoSQLite million-row benchmark; staged txn batches; warm SELECT _id FROM users LIMIT 64; full fetch timed"
     },
     "bulk_update": {
       "rows": 1000,
-      "op_us": 871,
-      "rows_per_s": 1148105.6257175659,
+      "op_us": 967,
+      "rows_per_s": 1034126.1633919339,
       "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable range batches; UPDATE users SET $.age = 30 WHERE _id >= start AND _id < end"
     },
     "logical_delete": {
       "rows": 1000,
-      "op_us": 352,
-      "rows_per_s": 2840909.090909091,
-      "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable head-to-tail prefix delete; commits deleted-through metadata boundary; logical delete semantics"
+      "op_us": 363,
+      "rows_per_s": 2754820.9366391185,
+      "notes": "NoSQLite million-row benchmark; fresh preloaded and checkpointed dataset; durable head-to-tail prefix delete; commits deleted-through metadata boundary; logical delete semantics"
     },
     "physical_delete": {
       "rows": 1000,
-      "op_us": 645,
-      "rows_per_s": 1550387.596899225,
-      "notes": "NoSQLite million-row benchmark; fresh preloaded dataset; durable tail-to-head range delete; prefix logical delete fast path intentionally bypassed to force physical page updates"
+      "op_us": 463,
+      "rows_per_s": 2159827.2138228943,
+      "notes": "NoSQLite million-row benchmark; fresh preloaded and checkpointed dataset; durable tail-to-head range delete; prefix logical delete fast path intentionally bypassed to force physical page updates"
     },
     "notes": "NoSQLite million-row benchmark",
-    "peak_memory_kib": 228
+    "peak_memory_kib": 308
   },
   "sqlite": {
     "engine": "sqlite",
@@ -53,40 +53,40 @@
     "batch_rows": 250,
     "load": {
       "rows": 1000,
-      "load_us": 1513,
-      "rows_per_s": 660938.5327164574,
+      "load_us": 3818,
+      "rows_per_s": 261917.2341540073,
       "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; full fetch timed"
     },
     "limit_query": {
       "samples": 10,
-      "p50_ns": 14075,
-      "p95_ns": 15108,
-      "p99_ns": 15108,
-      "p50_us": 14.075,
-      "p95_us": 15.108,
-      "p99_us": 15.108,
-      "qps": 70124.260189055,
+      "p50_ns": 19527,
+      "p95_ns": 26881,
+      "p99_ns": 26881,
+      "p50_us": 19.527,
+      "p95_us": 26.881,
+      "p99_us": 26.881,
+      "qps": 49003.03328776051,
       "notes": "SQLite JSON1; journal_mode=WAL; synchronous=FULL; warm SELECT id FROM users LIMIT 64; full fetch timed"
     },
     "bulk_update": {
       "rows": 1000,
-      "op_us": 821,
-      "rows_per_s": 1218026.796589525,
+      "op_us": 967,
+      "rows_per_s": 1034126.1633919339,
       "notes": "SQLite JSON1; fresh preloaded million-row dataset; durable BEGIN/COMMIT range batches; UPDATE users SET doc = json_set(doc, '$.age', ?) WHERE id >= ? AND id < ?"
     },
     "logical_delete": {
       "rows": 1000,
-      "op_us": 205,
-      "rows_per_s": 4878048.780487805,
-      "notes": "SQLite JSON1 reference; fresh preloaded million-row dataset; durable head-to-tail range DELETE; physical row delete semantics"
+      "op_us": 318,
+      "rows_per_s": 3144654.0880503147,
+      "notes": "SQLite JSON1 reference; fresh preloaded and checkpointed million-row dataset; durable head-to-tail range DELETE; physical row delete semantics"
     },
     "physical_delete": {
       "rows": 1000,
-      "op_us": 177,
-      "rows_per_s": 5649717.514124294,
-      "notes": "SQLite JSON1; fresh preloaded million-row dataset; durable tail-to-head range DELETE; physical row delete semantics"
+      "op_us": 249,
+      "rows_per_s": 4016064.2570281127,
+      "notes": "SQLite JSON1; fresh preloaded and checkpointed million-row dataset; durable tail-to-head range DELETE; physical row delete semantics"
     },
     "notes": "SQLite JSON1 million-row benchmark",
-    "peak_memory_kib": 18220
+    "peak_memory_kib": 18156
   }
 }

@@ -55,6 +55,8 @@ use lib.storage.pager.wal_batch_reset;
 use lib.storage.pager.wal_batch_reserve_bytes;
 use lib.storage.pager.wal_batch_append_begin;
 use lib.storage.pager.wal_batch_append_page;
+use lib.storage.pager.wal_batch_prepare_page_write;
+use lib.storage.pager.wal_batch_finish_page_write;
 use lib.storage.pager.wal_batch_append_commit;
 use lib.storage.pager.wal_begin_record_size;
 use lib.storage.pager.wal_page_write_record_size;
@@ -186,7 +188,7 @@ export error DbVacuumUnsupported;
 
 export const DB_MAX_COLLECTIONS: usize = 4;
 export const DB_MAX_ROWS_PER_COLLECTION: usize = 3221225469usize;
-export const DB_MAX_CURSOR_ROWS: usize = 64;
+export const DB_MAX_CURSOR_ROWS: usize = QUERY_RESULT_MAX_ROWS;
 const DB_ROWS_PER_DATA_PAGE_LEGACY: u16 = 7;
 const DB_COLLECTION_ROW_REUSE_MAX: u16 = 256u16;
 const DB_MAX_SECONDARY_INDEXES_PER_COLLECTION: usize = 8;
@@ -2222,6 +2224,24 @@ fn db_record_cell_encode(row: &DbStoredRow, now_ms: u64, out: &[byte]) !usize {
     return total_len;
 }
 
+fn db_record_cell_encode_tombstone_stub(row: &DbStoredRow, now_ms: u64, out: &[byte]) !usize {
+    if row == null || out.ptr == null || !row.present || row.doc_len as usize > DB_DOC_BLOB_MAX {
+        return error.DbRowTooLarge;
+    }
+    const total_len: usize = RECORD_CELL_HEADER_SIZE + row.doc_len as usize;
+    if total_len > out.len {
+        return error.DbRowTooLarge;
+    }
+    db_store_u64_le(out, RECORD_CELL_DOC_ID_OFF, row.doc_id);
+    db_store_u64_le(out, RECORD_CELL_CREATED_AT_OFF, now_ms);
+    db_store_u64_le(out, RECORD_CELL_UPDATED_AT_OFF, now_ms);
+    db_store_u32_le(out, RECORD_CELL_DOC_LEN_OFF, row.doc_len as u32);
+    if row.doc_len > 0u16 {
+        _ = mem_set(&out.ptr[RECORD_CELL_HEADER_SIZE], 0 as byte, row.doc_len as usize);
+    }
+    return total_len;
+}
+
 fn db_record_cell_decode(collection: &DbCollection, cell: &[byte], row: &DbStoredRow) !void {
     if collection == null || cell.ptr == null || row == null || cell.len < RECORD_CELL_HEADER_SIZE {
         return error.DbPageCorrupt;
@@ -2593,6 +2613,45 @@ fn db_collection_try_patch_tombstone_page_from_disk(db: &DbHandle, collection: &
         slot_idx = slot_idx + 1u16;
     }
     patched_out[0] = true;
+}
+
+fn db_collection_try_encode_full_tombstone_page(collection: &DbCollection, now_ms: u64, page_id: u32, page_offset: u32, page_buf: &[byte], encoded_out: &bool) !void {
+    if encoded_out != null {
+        encoded_out[0] = false;
+    }
+    if collection == null || page_buf.ptr == null || encoded_out == null {
+        return error.DbHandleInvalid;
+    }
+    const rows_per_page: u16 = db_collection_rows_per_page(collection);
+    const first_row: u32 = db_collection_first_row_for_page_offset(collection, page_offset);
+    var end_row: u32 = first_row + (rows_per_page as u32);
+    if end_row > collection.row_count {
+        end_row = collection.row_count;
+    }
+    if first_row >= end_row {
+        return;
+    }
+    var row_idx: u32 = first_row;
+    while row_idx < end_row {
+        const row: &DbStoredRow = &collection.rows[row_idx as usize];
+        if !row.present || !db_row_effective_tombstone_at_slot(collection, row, row_idx) {
+            return;
+        }
+        row_idx = row_idx + 1u32;
+    }
+    try slotted_page_init(page_buf, PageType.DATA);
+    var local_slot: u16 = 0u16;
+    row_idx = first_row;
+    while row_idx < end_row {
+        const row: &DbStoredRow = &collection.rows[row_idx as usize];
+        row.record_ptr = record_pointer_make(page_id, local_slot);
+        const cell_len: usize = RECORD_CELL_HEADER_SIZE + row.doc_len as usize;
+        const cell_view: SlottedPageCellView = try slotted_page_insert_reserve_with_flags(page_buf, cell_len, SLOT_FLAG_TOMBSTONE);
+        _ = try db_record_cell_encode_tombstone_stub(row, now_ms, cell_view.ptr[0: cell_view.len]);
+        local_slot = local_slot + 1u16;
+        row_idx = row_idx + 1u32;
+    }
+    encoded_out[0] = true;
 }
 
 fn db_materialize_matched_rows_for_cursor(db: &DbHandle, view_slot: u16, collection_slot: u16, match_rows: &[u32], match_count: u16) !void {
@@ -5571,13 +5630,14 @@ fn db_txn_commit_persist(txn: &Txn) !WalCommit {
                         continue;
                     }
                     const page_id: u32 = base_page_id + page_offset;
-                    var raw_page: [byte: 8192] = [];
-                    const page_buf: &[byte] = raw_page[0: info.meta.page_size as usize];
+                    const page_buf: &[byte] = try wal_batch_prepare_page_write(batch, info.meta.page_size);
+                    var encoded_tombstone_only: bool = false;
+                    try db_collection_try_encode_full_tombstone_page(collection, txn.db.now_ms, page_id, page_offset, page_buf, &encoded_tombstone_only);
                     var patched_from_disk: bool = false;
-                    if db_collection_page_in_tombstone_patch_pages(collection, page_offset) {
+                    if !encoded_tombstone_only && db_collection_page_in_tombstone_patch_pages(collection, page_offset) {
                         try db_collection_try_patch_tombstone_page_from_disk(txn.db, collection, page_offset, page_buf, &patched_from_disk);
                     }
-                    if !patched_from_disk {
+                    if !encoded_tombstone_only && !patched_from_disk {
                         try db_ensure_collection_page_blobs_loaded(txn.db, collection, page_offset);
                         const first_row: u32 = db_collection_first_row_for_page_offset(collection, page_offset);
                         try db_collection_encode_page_range(collection, info.meta.page_size, txn.db.now_ms, page_id, first_row, page_buf);
@@ -5589,7 +5649,7 @@ fn db_txn_commit_persist(txn: &Txn) !WalCommit {
                     header.page_lsn = next_lsn;
                     header.checksum = 0u32;
                     _ = try page_checksum_finalize(page_buf);
-                    try wal_batch_append_page(batch, page_id, next_lsn, page_buf);
+                    try wal_batch_finish_page_write(batch, page_id, next_lsn, page_buf);
                     page_offset = page_offset + 1u32;
                 }
             }
@@ -5597,8 +5657,7 @@ fn db_txn_commit_persist(txn: &Txn) !WalCommit {
         collection_idx = collection_idx + 1u16;
     }
     if catalog_changed {
-        var catalog_raw: [byte: 8192] = [];
-        const catalog_page: &[byte] = catalog_raw[0: info.meta.page_size as usize];
+        const catalog_page: &[byte] = try wal_batch_prepare_page_write(batch, info.meta.page_size);
         try catalog_page_init(catalog_page);
         var catalog_entries: [CatalogScratchCollection: DB_MAX_COLLECTIONS] = [];
         var catalog_count: u16 = 0u16;
@@ -5610,7 +5669,7 @@ fn db_txn_commit_persist(txn: &Txn) !WalCommit {
         }
         catalog_header.page_lsn = next_lsn;
         _ = try page_checksum_finalize(catalog_page);
-        try wal_batch_append_page(batch, info.meta.catalog_root, next_lsn, catalog_page);
+        try wal_batch_finish_page_write(batch, info.meta.catalog_root, next_lsn, catalog_page);
     }
     const commit: WalCommit = WalCommit{
         txn_id: next_lsn,

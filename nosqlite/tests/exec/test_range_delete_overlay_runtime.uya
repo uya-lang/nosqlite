@@ -25,26 +25,26 @@ fn main() i32 {
     set_process_stack_limit_bytes(64u64 * 1024u64 * 1024u64);
 
     var db: DbHandle = DbHandle{};
-    _ = prepare_bulk_users_db(&db, 96u64) catch {
+    _ = prepare_bulk_users_db(&db, 256u64) catch {
         return 1;
     };
-    _ = db_exec(&db, "DELETE FROM users WHERE _id >= 65 AND _id < 97;") catch {
+    _ = db_exec(&db, "DELETE FROM users WHERE _id >= 129 AND _id < 257;") catch {
         return 2;
     };
 
-    const kept_prefix: QueryResult = db_query(&db, "SELECT _id FROM users WHERE _id = 64 LIMIT 1;") catch {
+    const kept_prefix: QueryResult = db_query(&db, "SELECT _id FROM users WHERE _id = 128 LIMIT 1;") catch {
         return 3;
     };
     if kept_prefix.row_count != 1u32 {
         return 4;
     }
-    const deleted_tail_start: QueryResult = db_query(&db, "SELECT _id FROM users WHERE _id = 65 LIMIT 1;") catch {
+    const deleted_tail_start: QueryResult = db_query(&db, "SELECT _id FROM users WHERE _id = 129 LIMIT 1;") catch {
         return 5;
     };
     if deleted_tail_start.row_count != 0u32 {
         return 6;
     }
-    const deleted_tail_end: QueryResult = db_query(&db, "SELECT _id FROM users WHERE _id = 96 LIMIT 1;") catch {
+    const deleted_tail_end: QueryResult = db_query(&db, "SELECT _id FROM users WHERE _id = 256 LIMIT 1;") catch {
         return 7;
     };
     if deleted_tail_end.row_count != 0u32 {
@@ -54,13 +54,13 @@ fn main() i32 {
     _ = db_exec(&db, "INSERT INTO users JSON '{\"name\":\"after-delete\",\"age\":21,\"active\":true}';") catch {
         return 9;
     };
-    const inserted_after_delete: QueryResult = db_query(&db, "SELECT _id FROM users WHERE _id = 97 LIMIT 1;") catch {
+    const inserted_after_delete: QueryResult = db_query(&db, "SELECT _id FROM users WHERE _id = 257 LIMIT 1;") catch {
         return 10;
     };
     if inserted_after_delete.row_count != 1u32 {
         return 11;
     }
-    const deleted_tail_end_after_insert: QueryResult = db_query(&db, "SELECT _id FROM users WHERE _id = 96 LIMIT 1;") catch {
+    const deleted_tail_end_after_insert: QueryResult = db_query(&db, "SELECT _id FROM users WHERE _id = 256 LIMIT 1;") catch {
         return 12;
     };
     if deleted_tail_end_after_insert.row_count != 0u32 {
@@ -71,19 +71,19 @@ fn main() i32 {
     _ = db_test_open_at_stem(&reopened, TEST_STEM_RANGE_DELETE_OVERLAY) catch {
         return 14;
     };
-    const reopened_kept_prefix: QueryResult = db_query(&reopened, "SELECT _id FROM users WHERE _id = 64 LIMIT 1;") catch {
+    const reopened_kept_prefix: QueryResult = db_query(&reopened, "SELECT _id FROM users WHERE _id = 128 LIMIT 1;") catch {
         return 15;
     };
     if reopened_kept_prefix.row_count != 1u32 {
         return 16;
     }
-    const reopened_deleted_tail_start: QueryResult = db_query(&reopened, "SELECT _id FROM users WHERE _id = 65 LIMIT 1;") catch {
+    const reopened_deleted_tail_start: QueryResult = db_query(&reopened, "SELECT _id FROM users WHERE _id = 129 LIMIT 1;") catch {
         return 17;
     };
     if reopened_deleted_tail_start.row_count != 0u32 {
         return 18;
     }
-    const reopened_inserted_after_delete: QueryResult = db_query(&reopened, "SELECT _id FROM users WHERE _id = 97 LIMIT 1;") catch {
+    const reopened_inserted_after_delete: QueryResult = db_query(&reopened, "SELECT _id FROM users WHERE _id = 257 LIMIT 1;") catch {
         return 19;
     };
     if reopened_inserted_after_delete.row_count != 1u32 {
